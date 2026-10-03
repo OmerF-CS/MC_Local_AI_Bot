@@ -388,5 +388,47 @@ MINECRAFT_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "destroy_end_crystals",
+            "description": "Scan and destroy End Crystals atop obsidian pillars in the End dimension using ranged weapons (bow/arrows, snowballs) or scaffolding up with a protective shield.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fight_ender_dragon",
+            "description": "Engage the Ender Dragon in combat. Deflect dragon attacks with shield, dodge breath clouds, and perform burst attacks with sword or beds when the dragon perches on the central exit bedrock portal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tactic": {
+                        "type": "string",
+                        "description": "Combat approach: 'melee_sword', 'bed_bomb', or 'ranged_bow'.",
+                        "default": "melee_sword"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "enter_exit_portal",
+            "description": "Approach the central bedrock fountain at (0, 65, 0), collect all dropped Ender Dragon XP orbs, and step into the exit End Portal to complete the game and win.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     }
 ]

@@ -150,11 +150,39 @@ MILESTONES = [
         "target": "ender_dragon",
         "check": lambda inv: False,
         "next_hint": "Toss Eyes of Ender to locate the Stronghold, activate the portal, destroy the End Crystals, and slay the Ender Dragon!"
+    },
+    {
+        "stage": "DESTROY_CRYSTALS",
+        "target": "end_crystal",
+        "check": lambda inv: False,
+        "next_hint": "Destroy all End Crystals atop obsidian pillars using bow/arrows or towering with shields."
+    },
+    {
+        "stage": "SLAY_DRAGON",
+        "target": "fight_ender_dragon",
+        "check": lambda inv: False,
+        "next_hint": "Engage the Ender Dragon with bow or burst attacks when it perches at the central bedrock portal."
+    },
+    {
+        "stage": "GAME_VICTORY",
+        "target": "enter_exit_portal",
+        "check": lambda inv: False,
+        "next_hint": "Collect the fallen Ender Dragon XP drops and leap into the central exit portal to beat the game!"
     }
 ]
 
-def get_current_progression_goal(inventory: Dict[str, int]) -> Dict[str, Any]:
-    """Evaluates inventory and returns the active speedrun progression goal."""
+def get_current_progression_goal(inventory: Dict[str, int], state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Evaluates inventory and world state to return the active speedrun progression goal."""
+    if state:
+        dimension = str(state.get("dimension", "overworld")).lower()
+        if "end" in dimension:
+            if state.get("dragon_defeated", False):
+                return next(m for m in MILESTONES if m["stage"] == "GAME_VICTORY")
+            crystals_count = state.get("end_crystals_count", 0)
+            if crystals_count > 0:
+                return next(m for m in MILESTONES if m["stage"] == "DESTROY_CRYSTALS")
+            return next(m for m in MILESTONES if m["stage"] == "SLAY_DRAGON")
+
     for milestone in MILESTONES:
         if not milestone["check"](inventory):
             return milestone

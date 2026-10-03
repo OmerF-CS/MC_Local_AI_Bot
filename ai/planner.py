@@ -129,8 +129,8 @@ class AutonomousCoopBrain:
         time_str = "Daytime (Safe)" if is_day else "Nighttime (Hostile mobs active!)"
         biome = state.get("biome", "Unknown")
 
-        # Tech tree milestone'u al
-        goal = get_current_progression_goal(inv_dict)
+        # Retrieve active tech tree milestone
+        goal = get_current_progression_goal(inv_dict, state)
         if goal["target"] != self.last_goal_target:
             self.last_goal_target = goal["target"]
             logger.info(f"🏆 [Milestone Checkpoint] Era: {goal['stage']} -> Target: {goal['target']}")
@@ -468,10 +468,19 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                     return {"name": "attack_target", "arguments": {"target_name": "blaze"}}
                 return {"name": "build_nether_portal", "arguments": {}}
 
-        # Phase 3: The End & Ender Dragon Slaying
-        if target == "ender_dragon":
+        # Phase 3 & 4: The End & Ender Dragon Slaying
+        if target in ("ender_dragon", "fight_ender_dragon", "end_crystal", "enter_exit_portal"):
             if "end" in dimension:
-                return {"name": "attack_target", "arguments": {"target_name": "ender_dragon"}}
+                dragon_defeated = state.get("dragon_defeated", False)
+                if dragon_defeated or target == "enter_exit_portal":
+                    return {"name": "enter_exit_portal", "arguments": {}}
+
+                crystals_count = state.get("end_crystals_count", 0)
+                if crystals_count > 0 or target == "end_crystal":
+                    return {"name": "destroy_end_crystals", "arguments": {}}
+
+                return {"name": "fight_ender_dragon", "arguments": {"tactic": "melee_sword"}}
+
             vis_res = state.get("visible_resources", {})
             if vis_res.get("end_portal_frame") or inv.get("eye_of_ender", 0) > 0:
                 return {"name": "activate_end_portal", "arguments": {}}

@@ -44,6 +44,7 @@ class MinecraftAIBot:
         self.bridge.on_chat_callback = self.chat_handler.handle_chat
         self.bridge.on_spawn_callback = self.on_bot_spawn
         self.bridge.on_death_callback = self.on_bot_death
+        self.bridge.on_game_won_callback = self.on_game_won
         
         # Signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -66,6 +67,12 @@ class MinecraftAIBot:
         """Called when the bot dies in-game."""
         logger.warning("💀 Bot has fallen! Waiting for respawn...")
         self._bot_ready.clear()
+
+    async def on_game_won(self, data):
+        """Called when the Ender Dragon is defeated and the exit portal is entered."""
+        logger.info("🎉🏆 [VICTORY EVENT] THE GAME HAS BEEN BEATEN! CONGRATULATIONS! 🏆🎉")
+        if hasattr(self, "db") and self.db:
+            self.db.save_progression("VICTORY_BEATEN_GAME", "game_completed", {})
 
     async def wait_for_bot_ready(self, timeout: float = 30.0) -> bool:
         """Wait for the Mineflayer bot to become online and receive its initial state snapshot."""

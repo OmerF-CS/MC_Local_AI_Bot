@@ -28,6 +28,7 @@ let guardedPlayerName = null;
 let isEating = false;
 let isBusy = false; // Is bot currently busy with an action (prevents collision)
 let currentActionName = 'idle';
+let dragonDefeatedFlag = false;
 
 // Anti-Stuck Tracking Variables
 let lastPosition = null;
@@ -233,6 +234,47 @@ function getBotState() {
         else dimension = 'overworld';
     }
 
+    let endCrystalsCount = 0;
+    let enderDragonInfo = null;
+    let endPortalBlockFound = false;
+
+    if (dimension === 'the_end') {
+        for (const id in bot.entities) {
+            const e = bot.entities[id];
+            if (!e || !e.name) continue;
+            if (e.name === 'end_crystal') {
+                endCrystalsCount++;
+            } else if (e.name === 'ender_dragon') {
+                const dist = Math.round(e.position.distanceTo(bot.entity.position));
+                const hp = (e.metadata && typeof e.metadata[9] === 'number') ? e.metadata[9] : (e.health || 200);
+                enderDragonInfo = {
+                    id: e.id,
+                    health: hp,
+                    distance: dist,
+                    position: {
+                        x: Math.round(e.position.x * 10) / 10,
+                        y: Math.round(e.position.y * 10) / 10,
+                        z: Math.round(e.position.z * 10) / 10
+                    },
+                    is_perching: Math.abs(e.position.x) < 14 && Math.abs(e.position.z) < 14 && e.position.y < 75
+                };
+            }
+        }
+
+        try {
+            const mcData = require('minecraft-data')(bot.version);
+            const portalId = mcData.blocksByName['end_portal']?.id;
+            if (portalId) {
+                const exitPortal = bot.findBlock({ matching: portalId, maxDistance: 32 });
+                if (exitPortal) {
+                    endPortalBlockFound = true;
+                }
+            }
+        } catch (_) {}
+    }
+
+    const dragonDefeated = dragonDefeatedFlag || (dimension === 'the_end' && endPortalBlockFound && !enderDragonInfo);
+
     return {
         health: bot.health || 20,
         food: bot.food || 20,
@@ -261,7 +303,11 @@ function getBotState() {
         current_action: currentActionName,
         is_day: bot.time ? bot.time.isDay : true,
         biome: bot.blockAt(bot.entity.position)?.biome?.name || 'unknown',
-        owner_info: ownerObservation
+        owner_info: ownerObservation,
+        end_crystals_count: endCrystalsCount,
+        ender_dragon: enderDragonInfo,
+        dragon_defeated: dragonDefeated,
+        dragon_health: enderDragonInfo ? enderDragonInfo.health : (dragonDefeated ? 0 : 200)
     };
 }
 
@@ -515,6 +561,15 @@ function createBot() {
     bot.on('chat', (username, message) => {
         if (username === bot.username) return;
         console.log(`[Minecraft Chat] <${username}> ${message}`);
+
+        const cleanMsg = (message || '').trim().toLowerCase();
+        if (cleanMsg === '!dragon' || cleanMsg === '!fight_dragon') {
+            handleAction({ command: 'fight_ender_dragon', args: { tactic: 'melee_sword' } });
+        } else if (cleanMsg === '!crystal' || cleanMsg === '!crystals') {
+            handleAction({ command: 'destroy_end_crystals', args: {} });
+        } else if (cleanMsg === '!win' || cleanMsg === '!victory' || cleanMsg === '!exit_portal') {
+            handleAction({ command: 'enter_exit_portal', args: {} });
+        }
 
         sendToPython({
             type: 'chat_message',
@@ -1210,6 +1265,251 @@ async function handleActivateEndPortal(bot) {
     return true;
 }
 
+// --- PHASE 4: ENDER DRAGON BOSS COMBAT & VICTORY ENGINE ---
+
+async function destroyEndCrystals(bot) {
+    if (!bot || !bot.entity) return false;
+    const { GoalNear } = goals;
+
+    // 1. Gather all End Crystals
+    const crystals = [];
+    for (const id in bot.entities) {
+        const e = bot.entities[id];
+        if (e && e.name === 'end_crystal' && e.isValid) {
+            crystals.push(e);
+        }
+    }
+
+    if (crystals.length === 0) {
+        bot.chat("No End Crystals detected! All pillar crystals appear demolished. 💥");
+        return true;
+    }
+
+    // Sort by distance to bot
+    crystals.sort((a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position));
+    const targetCrystal = crystals[0];
+    const dist = bot.entity.position.distanceTo(targetCrystal.position);
+    console.log(`[EndCombat] Targeting End Crystal at (${targetCrystal.position.x.toFixed(1)}, ${targetCrystal.position.y.toFixed(1)}, ${targetCrystal.position.z.toFixed(1)}), dist: ${dist.toFixed(1)}m`);
+
+    // 2. Check for ranged weapon (bow / crossbow with arrows, or snowballs)
+    const bowItem = bot.inventory.items().find(i => i.name === 'bow' || i.name === 'crossbow');
+    const arrowItem = bot.inventory.items().find(i => i.name === 'arrow' || i.name === 'spectral_arrow');
+    const snowball = bot.inventory.items().find(i => i.name === 'snowball' || i.name === 'egg');
+
+    if (bowItem && arrowItem) {
+        bot.chat(`Sniping End Crystal at ${Math.round(dist)}m with bow! 🏹`);
+        if (dist > 35) {
+            await bot.pathfinder.goto(new GoalNear(targetCrystal.position.x, bot.entity.position.y, targetCrystal.position.z, 28)).catch(() => {});
+        }
+        await bot.equip(bowItem, 'hand');
+        await bot.lookAt(targetCrystal.position.offset(0, 0.5, 0));
+        bot.activateItem();
+        await new Promise(r => setTimeout(r, 1200));
+        bot.deactivateItem();
+        await new Promise(r => setTimeout(r, 800));
+        return true;
+    }
+
+    if (snowball) {
+        bot.chat(`Lobbing projectile at End Crystal! ❄️`);
+        if (dist > 25) {
+            await bot.pathfinder.goto(new GoalNear(targetCrystal.position.x, bot.entity.position.y, targetCrystal.position.z, 18)).catch(() => {});
+        }
+        await bot.equip(snowball, 'hand');
+        await bot.lookAt(targetCrystal.position.offset(0, 0.5, 0));
+        bot.activateItem();
+        await new Promise(r => setTimeout(r, 600));
+        return true;
+    }
+
+    // 3. Melee / Scaffolding climb
+    bot.chat(`Navigating to obsidian pillar to neutralize End Crystal... 🧗`);
+    await bot.pathfinder.goto(new GoalNear(targetCrystal.position.x, bot.entity.position.y, targetCrystal.position.z, 4)).catch(() => {});
+
+    // Check height difference
+    const heightDiff = targetCrystal.position.y - bot.entity.position.y;
+    if (heightDiff > 3) {
+        const scaffoldBlock = bot.inventory.items().find(i => ['cobblestone', 'netherrack', 'dirt', 'deepslate', 'blackstone'].includes(i.name));
+        if (scaffoldBlock) {
+            bot.chat(`Scaffolding up pillar with ${scaffoldBlock.name}... 🧱`);
+            for (let h = 0; h < Math.min(heightDiff - 2, 20); h++) {
+                try {
+                    bot.setControlState('jump', true);
+                    await new Promise(r => setTimeout(r, 250));
+                    bot.setControlState('jump', false);
+                    const belowPos = bot.entity.position.offset(0, -1, 0);
+                    await placeBlockDirect(bot, scaffoldBlock, belowPos);
+                    await new Promise(r => setTimeout(r, 150));
+                } catch (_) {}
+            }
+        }
+    }
+
+    // Equip shield in off-hand for explosion blast protection
+    const shield = bot.inventory.items().find(i => i.name === 'shield');
+    if (shield) {
+        try { await bot.equip(shield, 'off-hand'); } catch (_) {}
+    }
+
+    // Strike crystal safely from max range
+    await bot.lookAt(targetCrystal.position);
+    bot.attack(targetCrystal);
+    bot.chat("Detonated End Crystal atop obsidian pillar! 💥");
+    await new Promise(r => setTimeout(r, 500));
+    return true;
+}
+
+async function fightEnderDragon(bot, tactic = 'melee_sword') {
+    if (!bot || !bot.entity) return false;
+    const { GoalNear } = goals;
+
+    // Locate Ender Dragon entity
+    let dragon = null;
+    for (const id in bot.entities) {
+        const e = bot.entities[id];
+        if (e && e.name === 'ender_dragon' && e.isValid) {
+            dragon = e;
+            break;
+        }
+    }
+
+    // If dragon not currently loaded, move towards center bedrock fountain (0, 65, 0)
+    if (!dragon) {
+        bot.chat("Scanning the End skies for the Ender Dragon... Moving towards central exit fountain (0, 65, 0). 🐉");
+        await bot.pathfinder.goto(new GoalNear(0, 65, 0, 8)).catch(() => {});
+        return true;
+    }
+
+    const dragonPos = dragon.position;
+    const distToDragon = bot.entity.position.distanceTo(dragonPos);
+    const distToCenter = Math.hypot(dragonPos.x, dragonPos.z);
+    const isPerching = distToCenter < 14 && dragonPos.y < 75;
+
+    console.log(`[DragonCombat] Dragon dist: ${distToDragon.toFixed(1)}m, Y: ${dragonPos.y.toFixed(1)}, isPerching: ${isPerching}`);
+
+    // Check for harmful purple dragon breath (area_effect_cloud) nearby
+    for (const id in bot.entities) {
+        const e = bot.entities[id];
+        if (e && e.name === 'area_effect_cloud') {
+            const breathDist = bot.entity.position.distanceTo(e.position);
+            if (breathDist < 4) {
+                bot.chat("⚠️ Evading purple dragon breath cloud! 💨");
+                bot.setControlState('sprint', true);
+                const escapeGoal = bot.entity.position.offset(5, 0, 5);
+                await bot.pathfinder.goto(new GoalNear(escapeGoal.x, escapeGoal.y, escapeGoal.z, 1)).catch(() => {});
+                bot.setControlState('sprint', false);
+                break;
+            }
+        }
+    }
+
+    // Select best weapon
+    const weapon = bot.inventory.items().find(i => ['netherrite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'diamond_axe', 'iron_axe'].includes(i.name));
+    const shield = bot.inventory.items().find(i => i.name === 'shield');
+    if (shield) {
+        try { await bot.equip(shield, 'off-hand'); } catch (_) {}
+    }
+
+    if (isPerching) {
+        bot.chat("🐉 THE DRAGON IS PERCHING ON BEDROCK FOUNTAIN! Charging for critical strikes! ⚔️");
+
+        // BED BOMBING TACTIC (if bed exists)
+        const bedItem = bot.inventory.items().find(i => i.name.endsWith('_bed'));
+        if (tactic === 'bed_bomb' && bedItem) {
+            bot.chat("💥 Executing Bed Bombing blast on perching dragon head! 🛏️🔥");
+            await bot.pathfinder.goto(new GoalNear(0, 65, 0, 4)).catch(() => {});
+            const bedrockTop = bot.blockAt(new Vec3(0, 65, 0)) || bot.blockAt(bot.entity.position.offset(1, 0, 0));
+            if (bedrockTop) {
+                await bot.equip(bedItem, 'hand');
+                await bot.activateBlock(bedrockTop, new Vec3(0, 1, 0)).catch(() => {});
+                await new Promise(r => setTimeout(r, 300));
+            }
+        }
+
+        // SWORD CRITICAL ATTACKS
+        if (weapon) {
+            await bot.equip(weapon, 'hand');
+        }
+        await bot.pathfinder.goto(new GoalNear(dragonPos.x, Math.max(bot.entity.position.y, 65), dragonPos.z, 3.5)).catch(() => {});
+        await bot.lookAt(dragonPos.offset(0, 1, 0));
+
+        // Jump crits: jump and strike while falling
+        for (let i = 0; i < 4; i++) {
+            bot.setControlState('jump', true);
+            await new Promise(r => setTimeout(r, 150));
+            bot.attack(dragon);
+            bot.setControlState('jump', false);
+            await new Promise(r => setTimeout(r, 200));
+        }
+        return true;
+    } else {
+        // Flying phase
+        const bowItem = bot.inventory.items().find(i => i.name === 'bow' || i.name === 'crossbow');
+        const arrowItem = bot.inventory.items().find(i => i.name === 'arrow' || i.name === 'spectral_arrow');
+
+        if (bowItem && arrowItem && distToDragon < 45) {
+            bot.chat("🏹 Leading shot at circling Ender Dragon in flight!");
+            await bot.equip(bowItem, 'hand');
+            await bot.lookAt(dragonPos.offset(0, 1.5, 0));
+            bot.activateItem();
+            await new Promise(r => setTimeout(r, 1000));
+            bot.deactivateItem();
+            await new Promise(r => setTimeout(r, 400));
+            return true;
+        }
+
+        // If dragon is swooping close (< 15m), block dive with shield
+        if (distToDragon < 15 && shield) {
+            bot.chat("🛡️ Raising shield to deflect incoming dragon swoop!");
+            await bot.lookAt(dragonPos);
+            bot.activateItem(true);
+            await new Promise(r => setTimeout(r, 1200));
+            bot.deactivateItem();
+        } else {
+            // Reposition towards fountain edge waiting for perch
+            await bot.pathfinder.goto(new GoalNear(0, 65, 0, 12)).catch(() => {});
+        }
+        return true;
+    }
+}
+
+async function enterExitPortal(bot) {
+    if (!bot || !bot.entity) return false;
+    const { GoalNear } = goals;
+
+    bot.chat("🏆 VICTORY! Slaying completed! Collecting Ender Dragon XP orbs... ✨");
+
+    // 1. Vacuum XP orbs and dragon drops
+    await collectNearbyDrops(bot, 24);
+
+    // 2. Find central exit portal at (0, 65, 0)
+    const mcData = require('minecraft-data')(bot.version);
+    const portalBlockId = mcData.blocksByName['end_portal']?.id;
+    let targetPos = new Vec3(0, 65, 0);
+
+    if (portalBlockId) {
+        const portalBlock = bot.findBlock({ matching: portalBlockId, maxDistance: 32 });
+        if (portalBlock) {
+            targetPos = portalBlock.position;
+        }
+    }
+
+    bot.chat("🌟 Stepping into the End Exit Portal to complete the game and trigger the victory credits! 📜👑");
+    dragonDefeatedFlag = true;
+
+    try {
+        await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 0.5));
+    } catch (_) {}
+
+    sendToPython({
+        type: 'game_won',
+        details: 'Ender Dragon defeated and exit portal entered!'
+    });
+
+    bot.chat("🎉 GG! GAME BEATEN! We conquered vanilla Minecraft from punch to dragon! 🐉🏆");
+    return true;
+}
+
 // --- ACTION EXECUTION ENGINE (TIMEOUT & CONCURRENCY GUARDED) ---
 async function handleAction(action) {
     if (!bot) return;
@@ -1224,9 +1524,9 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal'].includes(command)) {
+    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal'].includes(command)) {
         isBusy = true;
-        currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || ''}`;
+        currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || ''}`;
         sendToPython({
             type: 'action_started',
             command: command,
@@ -1599,6 +1899,40 @@ async function handleAction(action) {
                 if (!ok) {
                     actionSuccess = false;
                     actionError = "Failed to activate End portal";
+                }
+                break;
+            }
+
+            case 'destroy_end_crystals': {
+                isBusy = true;
+                currentActionName = 'destroying_end_crystals';
+                const ok = await destroyEndCrystals(bot);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to destroy End crystals";
+                }
+                break;
+            }
+
+            case 'fight_ender_dragon': {
+                isBusy = true;
+                currentActionName = 'fighting_ender_dragon';
+                const tactic = args.tactic || 'melee_sword';
+                const ok = await fightEnderDragon(bot, tactic);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to engage Ender Dragon";
+                }
+                break;
+            }
+
+            case 'enter_exit_portal': {
+                isBusy = true;
+                currentActionName = 'entering_exit_portal';
+                const ok = await enterExitPortal(bot);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to enter exit portal";
                 }
                 break;
             }

@@ -2,8 +2,8 @@
 
 > **Autonomous Human-Like Minecraft Co-op Companion Powered 100% Locally by Ollama & Mineflayer**
 
-[![Status: Active Development](https://img.shields.io/badge/status-active%20development%20(alpha)-orange.svg)](IMPLEMENTATION_ROADMAP.md)
-[![Progress: 90%](https://img.shields.io/badge/progress-90%25%20(Phase%203%20Complete)-brightgreen.svg)](IMPLEMENTATION_ROADMAP.md)
+[![Status: Production Ready](https://img.shields.io/badge/status-active%20release%20(v0.4.0)-brightgreen.svg)](IMPLEMENTATION_ROADMAP.md)
+[![Progress: 100%](https://img.shields.io/badge/progress-100%25%20(Phase%204%20Complete)-brightgreen.svg)](IMPLEMENTATION_ROADMAP.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Node.js: 18+](https://img.shields.io/badge/node.js-18%2B-green.svg)](https://nodejs.org/)
@@ -11,12 +11,12 @@
 
 ---
 
-> [!IMPORTANT]
-> ### ⚠️ Project Status: Active Development / Alpha (v0.3.0)
-> **MC Local AI Bot is currently in active open-source development.**  
-> - **Phases 1 to 3 are complete and verified:** Core survival, resource gathering, recursive crafting, smelting, combat, dimension safety, autonomous Nether portal construction, Stronghold tracking, and End Portal activation are fully functional.
-> - **Phase 4 is in progress:** Ender Dragon fight tactics and production containerization are actively being developed.  
-> Issues, feature requests, and community pull requests are warmly welcomed!
+> [!NOTE]
+> ### 🏆 Project Status: Feature-Complete (v0.4.0)
+> **MC Local AI Bot has completed all core roadmap phases!**  
+> - **Phases 1-3:** Autonomous survival, mining, recursive crafting, smelting, dimension safety, Nether portal construction, Blaze hunting, Stronghold tracking, and End Portal activation.
+> - **Phase 4:** End Crystal demolition, Ender Dragon perch combat & bed bombing, victory XP harvesting, exit fountain completion, and one-click launch scripts (`run.bat` / `run.sh`).
+> Community contributions, pull requests, and bug reports are warmly welcomed!
 
 ---
 
@@ -86,6 +86,13 @@ The bot uses an asynchronous decoupled architecture separating high-level strate
 - **Blaze Hunting & Stronghold Tracking (`throw_eye_of_ender`)**: Defeats Blazes, crafts blaze powder and Eyes of Ender, throws eyes into the sky, and calculates trajectory angle and coordinates to the Stronghold.
 - **End Portal Activation (`activate_end_portal`)**: Scans for 12 End portal frame blocks, inserts Eyes of Ender into empty sockets, and activates the End Portal.
 
+### 🐉 Boss Combat & Game Completion Engine (Phase 4 Complete)
+- **End Crystal Demolition (`destroy_end_crystals`)**: Scans for `end_crystal` entities atop obsidian towers, snipes them safely with bows/crossbows or scaffolds up with shield deflection.
+- **Ender Dragon Combat (`fight_ender_dragon`)**: 
+  - **Perch Phase**: Rushes to the central bedrock fountain (0, 65, 0) and unloads melee jump criticals or high-explosive **Bed Bombing**.
+  - **Flight Phase**: Evades purple dragon breath clouds (`area_effect_cloud`) and raises shield against diving attacks.
+- **Victory & Exit Fountain (`enter_exit_portal`)**: Saps the 68 levels of fallen dragon XP orbs and enters the central exit portal to beat the game.
+
 ### 🛡️ Dimension Safety & Health Reflexes
 - **Exploding Bed Prevention**: Strictly forbids bed sleeping in `the_nether` and `the_end`, preventing catastrophic explosions.
 - **Emergency Reflexes**: Bypasses LLM cooldown instantly when health drops $\le 6$ HP or hunger drops $\le 4$.
@@ -94,7 +101,7 @@ The bot uses an asynchronous decoupled architecture separating high-level strate
 
 ### 💾 Persistent SQLite World Memory
 - Saves landmark coordinates (`save_current_location`, e.g. base, iron mine, portal).
-- Tracks tech tree milestone progress across sessions.
+- Tracks tech tree milestone progress across sessions (`VICTORY_BEATEN_GAME`).
 - Persists teammate tasks assigned by the player.
 
 ---
@@ -152,6 +159,12 @@ BOT_OWNER=YourMinecraftUsername
 ```
 
 ### 5. Launch the Bot
+
+**One-Click Launchers (Recommended):**
+- **Windows:** Double-click `run.bat` (or run `setup.bat` for first-time automated setup).
+- **Linux/macOS:** Run `./run.sh` (or `./setup.sh` for first-time setup).
+
+**Manual Launch:**
 ```bash
 python main.py
 ```
@@ -172,6 +185,9 @@ You can talk to the bot normally in chat or use **instant shortcut commands** (0
 | `!portal` | Constructs and ignites a Nether Portal frame with obsidian |
 | `!eye` | Throws an Eye of Ender and chats Stronghold coordinates |
 | `!end` | Activates nearby End Portal frames with Eyes of Ender |
+| `!crystal` | Snipes and demolishes End Crystals atop obsidian pillars |
+| `!dragon` | Engages the Ender Dragon in melee perch / bed bombing combat |
+| `!win` | Collects victory dragon XP and steps into the exit fountain |
 | `!follow` / `!come` | Follows the owner |
 | `!guard` | Defends the owner against hostile mobs |
 | `!status` | Reports current HP, hunger, coordinates, and inventory |

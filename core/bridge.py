@@ -23,6 +23,7 @@ class MinecraftBridge:
         self.on_death_callback: Optional[Callable] = None
         self.on_action_completed_callback: Optional[Callable] = None
         self.on_action_started_callback: Optional[Callable] = None
+        self.on_game_won_callback: Optional[Callable] = None
 
         # Action Tracking and Wait Events
         self._pending_action_events: Dict[str, asyncio.Event] = {}
@@ -85,6 +86,11 @@ class MinecraftBridge:
 
         elif msg_type == "bot_status":
             logger.info(f"ℹ️ Bot status: {data.get('status')}")
+
+        elif msg_type == "game_won":
+            logger.info("🏆 [VICTORY] The game has been beaten! Ender Dragon defeated and exit portal entered!")
+            if self.on_game_won_callback:
+                await self.on_game_won_callback(data)
 
         elif msg_type == "action_started":
             cmd = data.get("command", "")

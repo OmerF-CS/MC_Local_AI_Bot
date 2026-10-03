@@ -154,6 +154,21 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("activate_end_portal", {})
                     return
 
+                elif cmd_name in ("crystal", "crystals", "destroy_crystals"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "destroy_end_crystals"}
+                    await self.bot.bridge.send_action("destroy_end_crystals", {})
+                    return
+
+                elif cmd_name in ("dragon", "fight_dragon", "kill_dragon", "slay_dragon"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "fight_ender_dragon"}
+                    await self.bot.bridge.send_action("fight_ender_dragon", {"tactic": "melee_sword"})
+                    return
+
+                elif cmd_name in ("win", "victory", "exit_portal", "beat_game"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "enter_exit_portal"}
+                    await self.bot.bridge.send_action("enter_exit_portal", {})
+                    return
+
                 elif cmd_name == "status":
                     hp = state.get("health", 20)
                     fd = state.get("food", 20)
@@ -192,7 +207,8 @@ class MinecraftChatHandler:
             "collect_block", "craft_item", "guard_player", "follow_player",
             "hunt_food", "smelt_item", "go_to_coordinates",
             "go_to_saved_location", "attack_target", "eat_food",
-            "build_nether_portal", "throw_eye_of_ender", "activate_end_portal"
+            "build_nether_portal", "throw_eye_of_ender", "activate_end_portal",
+            "destroy_end_crystals", "fight_ender_dragon", "enter_exit_portal"
         }
         assigned_actions = [tc for tc in tool_calls if tc.get("name") in action_tools]
         if assigned_actions:
