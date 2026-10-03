@@ -1,20 +1,23 @@
-"""Minecraft Chat and Action Dispatcher in English with Full Encyclopedia Lookup."""
+"""Minecraft Chat ve Action Dispatcher - Production hardened emergency handling."""
 import asyncio
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from utils.logger import get_logger
 from ai.minecraft_registry import lookup_component_data
 
 logger = get_logger("MinecraftChatHandler")
 
+
 class MinecraftChatHandler:
+    """Oyuncu chat'ini işle ve AI beynine yönlendir."""
+    
     def __init__(self, bot):
         self.bot = bot
         self.last_response_time = 0.0
 
     async def handle_chat(self, sender: str, message: str, state: Dict[str, Any]):
-        """Processes incoming in-game chat and orchestrates the Ollama brain."""
+        """Gelen chat mesajını işle ve Ollama beynini orkestre et."""
         if sender == self.bot.config.BOT_NAME or sender == self.bot.config.MINECRAFT_USERNAME:
             return
 
@@ -22,7 +25,7 @@ class MinecraftChatHandler:
         if not clean_message:
             return
 
-        # Store in database
+        # Database'e kaydet
         if hasattr(self.bot, "db"):
             self.bot.db.log_chat(sender, clean_message, role="player")
             self.bot.db.update_player(sender)
@@ -31,7 +34,6 @@ class MinecraftChatHandler:
         is_owner = (sender.lower() == self.bot.config.BOT_OWNER.lower())
         is_mentioned = bot_name_lower in clean_message.lower()
         is_command = clean_message.startswith("!")
-
         should_respond = is_owner or is_mentioned or is_command
 
         if not should_respond:
@@ -40,37 +42,59 @@ class MinecraftChatHandler:
 
         msg_lower = clean_message.lower()
 
-        # Autonomous Speedrun Mode Toggles (English & Turkish aliases)
-        if any(w in msg_lower for w in ["beat the game", "beat game", "start auto", "autonomous on", "play solo", "advance", "start", "oyunu bitir", "otonom mod aç"]):
+        # OTONOM MOD AÇMA
+        if any(
+            w in msg_lower for w in [
+                "beat the game", "beat game", "start auto", "autonomous on",
+                "play solo", "advance", "start", "oyunu bitir", "otonom mod aç"
+            ]
+        ):
             self.bot.autonomous_mode = True
             msg = "🚀 Autonomous Speedrun Mode ACTIVATED! Analyzing tech tree and advancing through stages."
             await self.bot.bridge.send_action("say_chat", {"message": msg})
             return
 
-        if any(w in msg_lower for w in ["stop auto", "autonomous off", "halt auto", "otonom dur", "otonom mod kapat"]):
+        # OTONOM MOD KAPATMA
+        if any(
+            w in msg_lower for w in [
+                "stop auto", "autonomous off", "halt auto", "otonom dur", "otonom mod kapat"
+            ]
+        ):
             self.bot.autonomous_mode = False
             msg = "🛑 Autonomous mode stopped. Standing by for your instructions."
             await self.bot.bridge.send_action("say_chat", {"message": msg})
             return
 
-        # Stop / Cancellation / Teammate Task Resumption
-        if any(w in msg_lower for w in ["stop actions", "cancel task", "stop task", "dur", "iptal", "tamam", "thanks", "devam et", "resume", "carry on", "never mind"]):
+        # STOP ACTIONS - ACIL KOMUT (Cooldown bypass)
+        if any(
+            w in msg_lower for w in [
+                "stop actions", "cancel task", "stop task", "dur", "iptal",
+                "tamam", "thanks", "devam et", "resume", "carry on", "never mind",
+                "stop", "cancel", "halt"
+            ]
+        ):
             self.bot.active_player_task = None
             await self.bot.bridge.send_action("stop_actions", {})
             msg = "Understood! Resuming my own progression and gear upgrades."
             await self.bot.bridge.send_action("say_chat", {"message": msg})
             return
 
-        # Cooldown guard
+        # ACIL KOMUTLAR COOLDOWN'U BYPASS EDER
+        critical_words = ["stop", "cancel", "halt", "emergency", "danger", "help", "save", "hurry"]
+        is_critical = any(w in msg_lower for w in critical_words)
+
         now = time.time()
-        if now - self.last_response_time < self.bot.config.COOLDOWN_SECONDS:
-            logger.info("⏱️ Cooldown active, message skipped.")
+        if not is_critical and now - self.last_response_time < self.bot.config.COOLDOWN_SECONDS:
+            logger.info(
+                f"⏱️ Cooldown aktif ({self.bot.config.COOLDOWN_SECONDS}s). "
+                f"Message atlandı. (Acil komutlar bypass eder)"
+            )
             return
 
         self.last_response_time = now
         logger.info(f"🧠 AI Reasoning... [{sender}]: {clean_message}")
 
-        # Process through Ollama
+        # AI'ya sor
         ai_response = await self.bot.brain.process_chat(
             sender=sender,
             message=clean_message,
@@ -80,8 +104,12 @@ class MinecraftChatHandler:
         response_text = ai_response.get("text", "")
         tool_calls = ai_response.get("tool_calls", [])
 
-        # Track active teammate task if player assigned a concrete physical action
-        action_tools = {"collect_block", "craft_item", "guard_player", "follow_player", "hunt_food", "smelt_item", "go_to_coordinates", "go_to_saved_location", "attack_target"}
+        # Oyuncu konkreter bir aksiyon verdiyse, bunu track et
+        action_tools = {
+            "collect_block", "craft_item", "guard_player", "follow_player",
+            "hunt_food", "smelt_item", "go_to_coordinates",
+            "go_to_saved_location", "attack_target", "eat_food"
+        }
         assigned_actions = [tc for tc in tool_calls if tc.get("name") in action_tools]
         if assigned_actions:
             self.bot.active_player_task = {
@@ -91,9 +119,12 @@ class MinecraftChatHandler:
                 "timestamp": now,
                 "primary_action": assigned_actions[0].get("name")
             }
-            logger.info(f"📋 Set Active Teammate Task: '{clean_message}' ({assigned_actions[0].get('name')})")
+            logger.info(
+                f"📋 Set Active Teammate Task: '{clean_message}' "
+                f"({assigned_actions[0].get('name')})"
+            )
 
-        # Execute actions
+        # Eylemleri execute et
         for tc in tool_calls:
             cmd = tc.get("name")
             args = tc.get("arguments", {})
@@ -101,18 +132,17 @@ class MinecraftChatHandler:
             await self._execute_tool(cmd, args, state, sender)
             await asyncio.sleep(0.5)
 
-        # Output chat message if not already done via say_chat tool
+        # Response text'i output et (varsa say_chat halihazırda yapılmamışsa)
         has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
         if response_text and not has_say_chat:
             await self.bot.bridge.send_action("say_chat", {"message": response_text})
 
+        # AI yanıtını database'e kaydet
         if hasattr(self.bot, "db") and response_text:
             self.bot.db.log_chat(self.bot.config.BOT_NAME, response_text, role="assistant")
 
     async def _execute_tool(self, cmd: str, args: Dict[str, Any], state: Dict[str, Any], sender: str):
-        """Dispatches Python-level memory actions or forwards commands to Mineflayer."""
-        
-        # 1. Save landmark location
+        """Python-level memory actions veya Mineflayer commands'ı dispatch et."""
         if cmd == "save_current_location":
             loc_name = args.get("location_name", "").lower()
             desc = args.get("description", "")
@@ -125,7 +155,6 @@ class MinecraftChatHandler:
             msg = f"Saved '{loc_name}' to world memory at ({x}, {y}, {z})!"
             await self.bot.bridge.send_action("say_chat", {"message": msg})
 
-        # 2. Return to saved location
         elif cmd == "go_to_saved_location":
             loc_name = args.get("location_name", "").lower()
             saved = self.bot.db.get_location(loc_name)
@@ -141,22 +170,22 @@ class MinecraftChatHandler:
                 msg = f"I do not have '{loc_name}' saved in memory."
                 await self.bot.bridge.send_action("say_chat", {"message": msg})
 
-        # 3. List landmarks
         elif cmd == "list_saved_locations":
             locations = self.bot.db.list_locations()
             if locations:
-                loc_list_str = ", ".join([f"{l['name']} ({l['x']}, {l['y']}, {l['z']})" for l in locations])
+                loc_list_str = ", ".join(
+                    [f"{l['name']} ({l['x']}, {l['y']}, {l['z']})" for l in locations]
+                )
                 msg = f"Saved Landmarks: {loc_list_str}"
             else:
                 msg = "No landmarks saved in memory yet."
             await self.bot.bridge.send_action("say_chat", {"message": msg})
 
-        # 4. Comprehensive Encyclopedia Lookup
         elif cmd in ("lookup_recipe", "explain_component"):
             item_name = args.get("item_name") or args.get("component_name", "")
             summary = lookup_component_data(item_name)
             await self.bot.bridge.send_action("say_chat", {"message": summary})
 
-        # 5. Native Mineflayer actions (craft, collect, pvp, follow, etc.)
         else:
+            # Tüm diğer Mineflayer commands'ını forward et
             await self.bot.bridge.send_action(cmd, args)
