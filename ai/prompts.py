@@ -81,7 +81,7 @@ If you cannot decide, use: follow_player(player_name=\"{bot_owner}\")
 Choose. Act. Now.
 """
 
-# Ollama API'ye gönderilen prompt'u dinamik olarak build et
+# Dynamically build system prompt sent to Ollama API
 def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic, active_task):
     """Build the full system prompt with dynamic state injection."""
     health = state.get("health", 20)

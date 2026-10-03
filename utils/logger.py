@@ -5,8 +5,8 @@ from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 def setup_logging(config=None):
-    """Merkezi loglama yapılandırması."""
-    # Windows'ta stdout encoding düzeltmesi
+    """Central logging configuration."""
+    # Fix stdout encoding on Windows
     if sys.platform == "win32":
         try:
             sys.stdout.reconfigure(encoding='utf-8')
@@ -17,7 +17,7 @@ def setup_logging(config=None):
     log_level_str = getattr(config, "LOG_LEVEL", "INFO") if config else "INFO"
     log_level = getattr(logging, log_level_str.upper(), logging.INFO)
 
-    # Kök logger'ı temizle (Çift loglamayı önlemek için)
+    # Clean root logger to avoid duplicate log handlers
     root = logging.getLogger()
     if root.handlers:
         for handler in root.handlers:
@@ -28,12 +28,12 @@ def setup_logging(config=None):
     log_format = "%(asctime)s [%(levelname)s] [%(name)s]: %(message)s"
     formatter = logging.Formatter(log_format, datefmt="%Y-%m-%d %H:%M:%S")
 
-    # Konsol çıktısı
+    # Console output
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     root.addHandler(console_handler)
 
-    # Dosya çıktısı (Rotating File)
+    # File output (Rotating File)
     try:
         if not os.path.exists("logs"):
             os.makedirs("logs", exist_ok=True)
@@ -47,12 +47,12 @@ def setup_logging(config=None):
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
     except Exception as e:
-        logging.error(f"Dosya loglayıcı kurulamadı: {e}")
+        logging.error(f"Failed to setup file logger: {e}")
 
-    # Harici kütüphanelerin gürültüsünü kıs
+    # Silence noise from external libraries
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 def get_logger(name: str) -> logging.Logger:
-    """Modüllere logger verir."""
+    """Returns a logger instance for modules."""
     return logging.getLogger(name)

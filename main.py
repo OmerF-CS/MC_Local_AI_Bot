@@ -1,4 +1,4 @@
-"""Minecraft Otonom AI Asistanı ve Oyun Bitirme Orkestratörü - Production Hardened."""
+"""Minecraft Autonomous AI Assistant and Speedrun Orchestrator - Production Hardened."""
 import asyncio
 import os
 import subprocess
@@ -17,7 +17,7 @@ logger = get_logger("Main")
 
 
 class MinecraftAIBot:
-    """Ana orkestrasyon sınıfı - bot lifecycle ve koordinasyon."""
+    """Main orchestration class - coordinates bot lifecycle, AI brain, and worker."""
     
     def __init__(self, config: Config):
         self.config = config
@@ -40,22 +40,22 @@ class MinecraftAIBot:
         self._bot_ready = asyncio.Event()
         self._shutdown_event = asyncio.Event()
 
-        # Köprü Callback'lerini Bağla
+        # Wire up bridge callbacks
         self.bridge.on_chat_callback = self.chat_handler.handle_chat
         self.bridge.on_spawn_callback = self.on_bot_spawn
         self.bridge.on_death_callback = self.on_bot_death
         
-        # Signal handler'ları
+        # Signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _signal_handler(self, sig, frame):
-        """Graceful shutdown için signal handler."""
-        logger.warning(f"⚠️ Signal {sig} alındı. Kapanış başlatılıyor...")
+        """Signal handler for graceful shutdown."""
+        logger.warning(f"⚠️ Received signal {sig}. Initiating graceful shutdown...")
         self._shutdown_event.set()
 
     async def on_bot_spawn(self, state):
-        """Bot başarıyla spawn olduğunda çağrılır."""
+        """Called when the bot successfully spawns into the world."""
         logger.info(f"✨ {self.config.BOT_NAME} spawned into the world! Health: {state.get('health')}")
         self._bot_ready.set()
         await self.bridge.send_action("say_chat", {
@@ -63,32 +63,32 @@ class MinecraftAIBot:
         })
 
     async def on_bot_death(self, state):
-        """Bot öldüğünde çağrılır."""
+        """Called when the bot dies in-game."""
         logger.warning("💀 Bot has fallen! Waiting for respawn...")
         self._bot_ready.clear()
 
     async def wait_for_bot_ready(self, timeout: float = 30.0) -> bool:
-        """Mineflayer botunun online olmasını ve ilk durum snapshots'ını bekle."""
+        """Wait for the Mineflayer bot to become online and receive its initial state snapshot."""
         if self.bridge.latest_state and self.bridge.latest_state.get("health"):
-            logger.info("✅ Bot durumu zaten mevcut, startup tamamlandı.")
+            logger.info("✅ Bot state already available, startup complete.")
             self._bot_ready.set()
             return True
 
-        logger.info(f"⏳ Bot startup'ını bekliyorum ({timeout}s timeout)...")
+        logger.info(f"⏳ Waiting for bot startup ({timeout}s timeout)...")
         try:
             await asyncio.wait_for(self._bot_ready.wait(), timeout=timeout)
-            logger.info("✅ Bot başarıyla spawn oldu, otonom döngü başlıyor.")
+            logger.info("✅ Bot spawned successfully, starting autonomous progression loop.")
             return True
         except asyncio.TimeoutError:
             logger.warning(
-                f"⚠️ Bot {timeout}s içinde spawn olmadı. "
-                "Sunucu bağlantısını kontrol edin. Yine de devam ediyorum..."
+                f"⚠️ Bot did not spawn within {timeout}s. "
+                "Verify Minecraft server connection. Continuing anyway..."
             )
             return False
 
     async def autonomous_progression_loop(self):
-        """Oyuncu-benzeri otonom karar ve aksiyon döngüsü."""
-        logger.info("🌀 Autonomous Co-op Player Engine başlatıldı.")
+        """Player-like autonomous decision and action progression loop."""
+        logger.info("🌀 Autonomous Co-op Player Engine started.")
         loop_failures = 0
         max_consecutive_failures = 5
 
@@ -104,8 +104,8 @@ class MinecraftAIBot:
                     loop_failures += 1
                     if loop_failures >= max_consecutive_failures:
                         logger.error(
-                            f"❌ {max_consecutive_failures} kez state alamadım. "
-                            "Bot muhtemelen bağlantı kopmuş."
+                            f"❌ Did not receive state {max_consecutive_failures} times consecutively. "
+                            "Bot connection might be interrupted."
                         )
                         loop_failures = 0
                     continue
@@ -145,17 +145,17 @@ class MinecraftAIBot:
                 logger.error(f"❌ Autonomous player loop error: {e}", exc_info=True)
                 await asyncio.sleep(2)
 
-        logger.info("🛑 Autonomous progression loop sonlandırıldı.")
+        logger.info("🛑 Autonomous progression loop terminated.")
 
     def start_mineflayer_worker(self):
-        """Mineflayer Node.js bot sürecini subprocess olarak başlat."""
+        """Spawns Mineflayer Node.js bot process as a managed subprocess."""
         bot_dir = os.path.join(os.path.dirname(__file__), "minecraft_bot")
         node_modules = os.path.join(bot_dir, "node_modules")
 
         if not os.path.exists(node_modules):
-            logger.warning("⚠️ 'minecraft_bot/node_modules' bulunamadı!")
-            logger.warning("👉 Lütfen önce 'cd minecraft_bot && npm install' komutunu çalıştırın.")
-            logger.info("ℹ️ Node.js botunu manuel olarak da 'node minecraft_bot/bot.js' ile başlatabilirsiniz.")
+            logger.warning("⚠️ 'minecraft_bot/node_modules' not found!")
+            logger.warning("👉 Please run 'cd minecraft_bot && npm install' first.")
+            logger.info("ℹ️ You can also run the worker manually with 'node minecraft_bot/bot.js'.")
             return False
 
         env = os.environ.copy()
@@ -168,7 +168,7 @@ class MinecraftAIBot:
         env["BRIDGE_URL"] = f"ws://{self.config.BRIDGE_HOST}:{self.config.BRIDGE_PORT}"
 
         try:
-            logger.info("🚀 Mineflayer Node.js süreci başlatılıyor...")
+            logger.info("🚀 Launching Mineflayer Node.js process...")
             self.node_process = subprocess.Popen(
                 ["node", "bot.js"],
                 cwd=bot_dir,
@@ -178,17 +178,17 @@ class MinecraftAIBot:
                 text=True,
                 bufsize=1,
             )
-            logger.info(f"✅ Mineflayer süreci PID: {self.node_process.pid} ile başlatıldı.")
+            logger.info(f"✅ Mineflayer process spawned with PID: {self.node_process.pid}.")
             
-            # Log reader task'ını spawn et
+            # Spawn real-time log reader task
             asyncio.create_task(self._read_subprocess_logs())
             return True
         except Exception as e:
-            logger.error(f"❌ Mineflayer başlatılamadı: {e}")
+            logger.error(f"❌ Failed to launch Mineflayer: {e}")
             return False
 
     async def _read_subprocess_logs(self):
-        """Node.js bot output'ını real-time oku ve logla."""
+        """Reads and logs Node.js worker output in real time."""
         if not self.node_process:
             return
         
@@ -207,42 +207,42 @@ class MinecraftAIBot:
             logger.error(f"❌ Subprocess log reader error: {e}")
 
     async def run(self):
-        """Orkestratörü çalıştır."""
+        """Runs orchestrator lifecycle."""
         logger.info("="*60)
-        logger.info(f"🤖 Minecraft Otonom AI Asistanı: {self.config.BOT_NAME}")
-        logger.info(f"👑 Sahip: {self.config.BOT_OWNER}")
-        logger.info(f"🎮 Hedef Sunucu: {self.config.MINECRAFT_HOST}:{self.config.MINECRAFT_PORT}")
-        logger.info(f"🧠 AI Motoru: Ollama ({self.config.OLLAMA_MODEL})")
+        logger.info(f"🤖 Minecraft Autonomous AI Assistant: {self.config.BOT_NAME}")
+        logger.info(f"👑 Owner / Partner: {self.config.BOT_OWNER}")
+        logger.info(f"🎮 Target Server: {self.config.MINECRAFT_HOST}:{self.config.MINECRAFT_PORT}")
+        logger.info(f"🧠 AI Engine: Ollama ({self.config.OLLAMA_MODEL})")
         logger.info("="*60)
 
         # 1. Ollama health check
         is_ollama_ready = await self.brain.check_health()
         if not is_ollama_ready:
             logger.warning(
-                "⚠️ Ollama hazır görünmüyor. Bot yine de açılacak ancak karar veremeyebilir. "
-                "Ollama'yı başlattığınızdan emin olun: ollama serve"
+                "⚠️ Ollama does not appear ready. Bot will launch but reasoning may fall back to heuristics. "
+                "Ensure Ollama is running: 'ollama serve'"
             )
 
-        # 2. WebSocket bridge'i başlat
+        # 2. Start WebSocket bridge
         try:
             await self.bridge.start()
         except Exception as e:
-            logger.error(f"❌ Bridge başlatılamadı: {e}")
+            logger.error(f"❌ Failed to start bridge server: {e}")
             return
 
-        # 3. Mineflayer worker'ı başlat
+        # 3. Start Mineflayer worker
         if not self.start_mineflayer_worker():
-            logger.warning("⚠️ Mineflayer otomatik başlatılamamadı. Manuel olarak başlatın.")
+            logger.warning("⚠️ Mineflayer worker could not auto-start. Start it manually if needed.")
 
-        # 4. Bot spawn'unu bekle
+        # 4. Wait for bot spawn
         await self.wait_for_bot_ready(timeout=30)
 
-        # 5. Otonom loop'u başlat
+        # 5. Start autonomous progression loop
         self._loop_task = asyncio.create_task(self.autonomous_progression_loop())
 
-        logger.info("✅ Sistem hazır!")
+        logger.info("✅ System initialized and ready!")
 
-        # Ana loop - shutdown event'i bekle
+        # Main loop - wait for shutdown signal
         try:
             while not self._shutdown_event.is_set():
                 await asyncio.sleep(0.5)
@@ -252,39 +252,38 @@ class MinecraftAIBot:
             await self.shutdown()
 
     async def shutdown(self):
-        """Graceful shutdown ve resource cleanup."""
-        logger.info("\n🛑 Kapatış başlatılıyor...")
+        """Graceful shutdown and resource cleanup."""
+        logger.info("\n🛑 Initiating shutdown...")
         self._shutdown_event.set()
 
-        # Otonom loop'u iptal et
+        # Cancel autonomous loop
         if self._loop_task:
             self._loop_task.cancel()
             try:
                 await asyncio.wait_for(self._loop_task, timeout=2)
             except (asyncio.TimeoutError, asyncio.CancelledError):
-                logger.warning("⚠️ Loop task terminate timeout")
+                logger.warning("⚠️ Progression loop task termination timeout")
 
-        # Bridge'i kapat
+        # Stop bridge server
         try:
             await self.bridge.stop()
         except Exception as e:
             logger.error(f"Bridge shutdown error: {e}")
 
-        # Node.js process'ini terminate et
+        # Terminate Node.js process
         if self.node_process:
             try:
-                logger.info("Mineflayer process'i terminate ediliyor...")
+                logger.info("Terminating Mineflayer worker process...")
                 self.node_process.terminate()
                 
-                # SIGTERM sonrası bekle
                 try:
                     await asyncio.wait_for(
                         asyncio.to_thread(self.node_process.wait),
                         timeout=5
                     )
-                    logger.info("✅ Node.js process başarıyla terminate oldu.")
+                    logger.info("✅ Node.js process terminated cleanly.")
                 except asyncio.TimeoutError:
-                    logger.warning("⏳ Process terminate timeout; SIGKILL gönderiliyor...")
+                    logger.warning("⏳ Process terminate timeout; sending SIGKILL...")
                     self.node_process.kill()
                     try:
                         await asyncio.wait_for(
@@ -292,23 +291,23 @@ class MinecraftAIBot:
                             timeout=2
                         )
                     except asyncio.TimeoutError:
-                        logger.error("❌ Process zorla kapatılamadı!")
+                        logger.error("❌ Process could not be forcefully killed!")
             except Exception as e:
                 logger.error(f"Subprocess cleanup error: {e}")
 
-        logger.info("👋 Bot güvenle sonlandırıldı.")
+        logger.info("👋 Bot shutdown complete.")
 
 
 def main():
-    """Entry point."""
+    """Main entry point."""
     config = Config.load_from_env()
     setup_logging(config)
 
     missing = config.validate()
     if missing:
         logger.error(
-            f"❌ Eksik yapılandırma: {', '.join(missing)}. "
-            "Lütfen .env dosyasını kontrol edin veya .env.example'dan kopyalayın."
+            f"❌ Missing configuration keys: {', '.join(missing)}. "
+            "Please check your .env file or copy from .env.example."
         )
         sys.exit(1)
 
@@ -316,9 +315,9 @@ def main():
     try:
         asyncio.run(bot.run())
     except KeyboardInterrupt:
-        logger.info("⌨️ İşlem kullanıcı tarafından durduruldu (Ctrl+C).")
+        logger.info("⌨️ Process interrupted by user (Ctrl+C).")
     except Exception as e:
-        logger.error(f"❌ Kritik hata: {e}", exc_info=True)
+        logger.error(f"❌ Critical runtime error: {e}", exc_info=True)
         sys.exit(1)
 
 

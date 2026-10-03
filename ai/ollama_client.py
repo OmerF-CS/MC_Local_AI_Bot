@@ -1,4 +1,4 @@
-"""Ollama Yerel Yapay Zeka İstemcisi - Qwen 2.5 optimized."""
+"""Ollama Local AI Client - Qwen 2.5 optimized."""
 import asyncio
 import json
 import time
@@ -63,18 +63,18 @@ class OllamaBrain:
                 if resp.status == 200:
                     data = await resp.json()
                     models = [m.get("name") for m in data.get("models", [])]
-                    logger.info(f"✅ Ollama aktif. Mevcut modeller: {models}")
+                    logger.info(f"✅ Ollama active. Available models: {models}")
                     if not any(self.model in m for m in models):
                         logger.warning(
-                            f"⚠️ '{self.model}' modeli bulunamadı! "
-                            f"Çalıştırın: ollama run {self.model}"
+                            f"⚠️ '{self.model}' model not found! "
+                            f"Run: ollama run {self.model}"
                         )
                     return True
                 else:
-                    logger.error(f"❌ Ollama HTTP {resp.status} döndürdü.")
+                    logger.error(f"❌ Ollama returned HTTP {resp.status}.")
                     return False
         except Exception as e:
-            logger.error(f"❌ Ollama servisine bağlanılamadı ({self.base_url}): {e}")
+            logger.error(f"❌ Could not connect to Ollama service ({self.base_url}): {e}")
             return False
 
     async def process_chat(
@@ -151,7 +151,7 @@ class OllamaBrain:
                 
                 if resp.status != 200:
                     err_text = await resp.text()
-                    logger.error(f"❌ Ollama API hatası ({resp.status}): {err_text[:200]}")
+                    logger.error(f"❌ Ollama API error ({resp.status}): {err_text[:200]}")
                     return {"text": "LLM error - using fallback.", "tool_calls": []}
 
                 data = await resp.json()

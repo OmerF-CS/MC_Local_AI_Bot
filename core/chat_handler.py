@@ -1,4 +1,4 @@
-"""Minecraft Chat ve Action Dispatcher - Production hardened emergency handling."""
+"""Minecraft Chat and Action Dispatcher - Production hardened emergency handling."""
 import asyncio
 import time
 from typing import Dict, Any
@@ -10,14 +10,14 @@ logger = get_logger("MinecraftChatHandler")
 
 
 class MinecraftChatHandler:
-    """Oyuncu chat'ini işle ve AI beynine yönlendir."""
+    """Processes player chat and routes to AI brain."""
     
     def __init__(self, bot):
         self.bot = bot
         self.last_response_time = 0.0
 
     async def handle_chat(self, sender: str, message: str, state: Dict[str, Any]):
-        """Gelen chat mesajını işle ve Ollama beynini orkestre et."""
+        """Processes incoming chat message and orchestrates Ollama brain."""
         if sender == self.bot.config.BOT_NAME or sender == self.bot.config.MINECRAFT_USERNAME:
             return
 
@@ -25,7 +25,7 @@ class MinecraftChatHandler:
         if not clean_message:
             return
 
-        # Database'e kaydet
+        # Save to database
         if hasattr(self.bot, "db"):
             self.bot.db.log_chat(sender, clean_message, role="player")
             self.bot.db.update_player(sender)
@@ -42,7 +42,7 @@ class MinecraftChatHandler:
 
         msg_lower = clean_message.lower()
 
-        # OTONOM MOD AÇMA
+        # AUTONOMOUS MODE ACTIVATION
         if any(
             w in msg_lower for w in [
                 "beat the game", "beat game", "start auto", "autonomous on",
@@ -54,7 +54,7 @@ class MinecraftChatHandler:
             await self.bot.bridge.send_action("say_chat", {"message": msg})
             return
 
-        # OTONOM MOD KAPATMA
+        # AUTONOMOUS MODE DEACTIVATION
         if any(
             w in msg_lower for w in [
                 "stop auto", "autonomous off", "halt auto", "otonom dur", "otonom mod kapat"
@@ -65,7 +65,7 @@ class MinecraftChatHandler:
             await self.bot.bridge.send_action("say_chat", {"message": msg})
             return
 
-        # STOP ACTIONS - ACIL KOMUT (Cooldown bypass)
+        # STOP ACTIONS - EMERGENCY COMMAND (Cooldown bypass)
         if any(
             w in msg_lower for w in [
                 "stop actions", "cancel task", "stop task", "dur", "iptal",
@@ -163,21 +163,21 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("say_chat", {"message": msg})
                     return
 
-        # ACIL KOMUTLAR COOLDOWN'U BYPASS EDER
+        # EMERGENCY COMMANDS BYPASS COOLDOWN
         critical_words = ["stop", "cancel", "halt", "emergency", "danger", "help", "save", "hurry"]
         is_critical = any(w in msg_lower for w in critical_words)
         now = time.time()
         if not is_critical and now - self.last_response_time < self.bot.config.COOLDOWN_SECONDS:
             logger.info(
-                f"⏱️ Cooldown aktif ({self.bot.config.COOLDOWN_SECONDS}s). "
-                f"Message atlandı. (Acil komutlar bypass eder)"
+                f"⏱️ Cooldown active ({self.bot.config.COOLDOWN_SECONDS}s). "
+                f"Message skipped. (Emergency commands bypass cooldown)"
             )
             return
 
         self.last_response_time = now
         logger.info(f"🧠 AI Reasoning... [{sender}]: {clean_message}")
 
-        # AI'ya sor
+        # Query LLM Brain
         ai_response = await self.bot.brain.process_chat(
             sender=sender,
             message=clean_message,
@@ -187,7 +187,7 @@ class MinecraftChatHandler:
         response_text = ai_response.get("text", "")
         tool_calls = ai_response.get("tool_calls", [])
 
-        # Oyuncu konkreter bir aksiyon verdiyse, bunu track et
+        # Track concrete teammate directives
         action_tools = {
             "collect_block", "craft_item", "guard_player", "follow_player",
             "hunt_food", "smelt_item", "go_to_coordinates",
@@ -211,7 +211,7 @@ class MinecraftChatHandler:
                 f"({primary_act})"
             )
 
-        # Eylemleri execute et
+        # Execute tool calls
         for tc in tool_calls:
             cmd = tc.get("name")
             args = tc.get("arguments", {})
@@ -219,21 +219,21 @@ class MinecraftChatHandler:
             await self._execute_tool(cmd, args, state, sender)
             await asyncio.sleep(0.5)
 
-        # Response text'i output et (varsa say_chat halihazırda yapılmamışsa)
+        # Output response text if say_chat was not already emitted
         has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
         if response_text and not has_say_chat:
             await self.bot.bridge.send_action("say_chat", {"message": response_text})
 
-        # AI yanıtını database'e kaydet
+        # Log AI response to database
         if hasattr(self.bot, "db") and response_text:
             self.bot.db.log_chat(self.bot.config.BOT_NAME, response_text, role="assistant")
 
     async def _execute_tool(self, cmd: str, args: Dict[str, Any], state: Dict[str, Any], sender: str) -> Dict[str, Any]:
-        """Python-level memory actions veya Mineflayer commands'ı doğrula ve dispatch et."""
+        """Validates and dispatches Python-level memory actions or Mineflayer commands."""
         if not args:
             args = {}
 
-        # 1. Bellek ve Bilgi Araçları
+        # 1. Memory and Knowledge Tools
         if cmd == "save_current_location":
             loc_name = str(args.get("location_name", "")).strip().lower()
             if not loc_name:
@@ -288,7 +288,7 @@ class MinecraftChatHandler:
             await self.bot.bridge.send_action("say_chat", {"message": summary})
             return {"success": True, "message": summary}
 
-        # 2. Mineflayer Eylem Komutlarının Şema Doğrulaması
+        # 2. Mineflayer Action Schema Validation
         validated_args = dict(args)
         if cmd == "craft_item":
             item = str(validated_args.get("item_name", "")).strip().lower()
@@ -334,6 +334,6 @@ class MinecraftChatHandler:
             player = str(validated_args.get("player_name", sender)).strip()
             validated_args["player_name"] = player or sender
 
-        # 3. Mineflayer'a İlet
+        # 3. Dispatch to Mineflayer Bridge
         await self.bot.bridge.send_action(cmd, validated_args)
         return {"success": True, "command": cmd, "args": validated_args}

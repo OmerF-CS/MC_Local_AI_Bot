@@ -1,4 +1,4 @@
-"""Otonom insan-benzeri Minecraft co-op partner beyin - Production hardened."""
+"""Autonomous human-like Minecraft co-op partner brain - Production hardened."""
 import asyncio
 from typing import Dict, Any, List, Optional
 from utils.logger import get_logger
@@ -9,7 +9,7 @@ logger = get_logger("AutonomousCoopBrain")
 
 
 class AutonomousCoopBrain:
-    """Ollama ve Minecraft progression tech tree kullanan proaktif karar motoru."""
+    """Proactive decision engine using Ollama and Minecraft progression tech tree."""
 
     def __init__(self, ollama_brain, bot_owner: str = "Omer", db=None):
         self.brain = ollama_brain
@@ -22,7 +22,7 @@ class AutonomousCoopBrain:
         self.last_goal_target = None
 
     def parse_inventory(self, items: List[Dict[str, Any]]) -> Dict[str, int]:
-        """Inventory item listesini name -> count mapping'e çevir."""
+        """Converts inventory item list into a name -> count mapping."""
         inv = {}
         for item in items:
             name = item.get("name", "")
@@ -95,12 +95,12 @@ class AutonomousCoopBrain:
         return None
 
     async def decide_next_action(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Dünya durumu, oyuncu aksiyonları ve tech tree'yi analiz ederek optimal tool call'ı execute et."""
+        """Evaluates world state, partner directives, and tech tree to execute optimal tool calls."""
         if not state:
             return None
 
         if state.get("is_busy", False):
-            logger.debug("⏳ Bot şu an bir aksiyon yapıyor. Karar döngüsü geçiliyor.")
+            logger.debug("⏳ Bot is currently busy executing an action. Skipping decision cycle.")
             return None
 
         items = state.get("inventory_items", [])
@@ -243,9 +243,9 @@ Decide and invoke a SINGLE appropriate tool call now!"""
 
             tool_calls = response.get("tool_calls", [])
             
-            # Eğer LLM tool call vermedi ise fallback kullan
+            # If LLM returned no tool calls, trigger fallback heuristics
             if not tool_calls:
-                logger.info("ℹ️ LLM tool call üretmedi. Fallback action kullanılıyor.")
+                logger.info("ℹ️ LLM produced 0 tool calls. Using fallback heuristic action.")
                 fallback_action = self.generate_fallback_action(goal, inv_dict, owner_info, state)
                 if fallback_action:
                     tool_calls = [fallback_action]
@@ -256,11 +256,11 @@ Decide and invoke a SINGLE appropriate tool call now!"""
             else:
                 self.fallback_consecutive_count = 0
 
-            # Eğer çok fazla fallback ard arda geldi ise güvenli regroup yap
+            # If too many consecutive fallbacks occurred, activate safe regroup
             if self.fallback_consecutive_count >= 3:
                 logger.warning(
-                    "⚠️ Çok fazla fallback action gerekli. "
-                    "LLM muhtemelen issues'a sahip. Safe regroup modu aktivasyonu."
+                    "⚠️ Too many consecutive fallback actions required. "
+                    "Activating safe teammate regroup mode."
                 )
                 return {
                     "text": "I'm regrouping and staying close to you for safety.",
@@ -269,15 +269,15 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                     ]
                 }
 
-            # Infinite loop koruması - aynı action 3 kez tekrarlandı mı?
+            # Anti-repetition loop breaker - prevent repeating identical actions 3x
             if tool_calls:
                 first_cmd = tool_calls[0].get("name")
                 if first_cmd == self.last_action_command:
                     self.consecutive_repeats += 1
                     if self.consecutive_repeats >= 3:
                         logger.warning(
-                            f"⚠️ [Loop Break] '{first_cmd}' 3 kez tekrarlandı. "
-                            "Regrouping..."
+                            f"⚠️ [Loop Break] Action '{first_cmd}' repeated 3 times. "
+                            "Breaking loop by regrouping with partner..."
                         )
                         self.consecutive_repeats = 0
                         return {
@@ -292,7 +292,7 @@ Decide and invoke a SINGLE appropriate tool call now!"""
 
             return response
         except asyncio.TimeoutError:
-            logger.warning("⏱️ LLM timeout. Fallback action kullanılıyor.")
+            logger.warning("⏱️ LLM reasoning timed out. Using backup strategy.")
             fallback_action = self.generate_fallback_action(goal, inv_dict, owner_info, state)
             return {
                 "text": "Thinking timed out. Using backup strategy.",
@@ -309,11 +309,11 @@ Decide and invoke a SINGLE appropriate tool call now!"""
         owner_info: Optional[Dict[str, Any]],
         state: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
-        """Bot'un insan oyuncu gibi davranmasını sağla - fallback aksiyon."""
+        """Generates proactive fallback action when LLM is unavailable or timed out."""
         if not state:
             state = {}
 
-        # 1. Aktif oyuncu görevi kontrolü
+        # 1. Active teammate directive check
         active_task = state.get("active_player_task")
         if active_task:
             instruction = active_task.get("instruction", "").lower()
@@ -326,11 +326,11 @@ Decide and invoke a SINGLE appropriate tool call now!"""
             if any(w in instruction for w in ["sleep", "bed", "uyu"]):
                 return {"name": "sleep_in_bed", "arguments": {}}
 
-        # 2. Oyuncu çok uzakta mı? Takip et
+        # 2. Partner distance check - regroup if too far
         if owner_info and owner_info.get("distance", 0) > 16:
             return {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
 
-        # 3. Açlık tükenmi? Ye veya avla
+        # 3. Hunger check - consume food if hungry
         food_level = state.get("food", 20)
         has_eatable = any(
             f in inv for f in [
@@ -341,7 +341,7 @@ Decide and invoke a SINGLE appropriate tool call now!"""
         if food_level < 15 and has_eatable:
             return {"name": "eat_food", "arguments": {}}
 
-        # 4. Çiğ et ve yakıt varsa pişir
+        # 4. Smelt raw meats if food level dropping and fuel is available
         raw_meats = [
             m for m in [
                 "raw_beef", "raw_porkchop", "raw_mutton", "raw_chicken",
@@ -359,11 +359,11 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                 }
             }
 
-        # 5. Açlıktan ölmek üzereymişiz ve yemek yok? Avla
+        # 5. Hunt food animals if hungry and out of food
         if food_level < 15 and not has_eatable and not raw_meats:
             return {"name": "hunt_food", "arguments": {"animal_type": "any"}}
 
-        # 6. Gece mi? Yatak ara (Yalnızca Overworld'de! Nether/End'de yataklar patlar)
+        # 6. Night shelter check (Overworld only; beds explode in Nether and End!)
         dimension = str(state.get("dimension", "overworld")).lower()
         is_nether_or_end = "nether" in dimension or "end" in dimension
         if not state.get("is_day", True) and not is_nether_or_end:
@@ -371,7 +371,7 @@ Decide and invoke a SINGLE appropriate tool call now!"""
             if vis_res.get("bed"):
                 return {"name": "sleep_in_bed", "arguments": {}}
 
-        # 7. Tech tree progression
+        # 7. Tech tree progression milestones
         target = goal.get("target")
         log_count = sum(c for i, c in inv.items() if "log" in i or "stem" in i)
         plank_count = sum(c for i, c in inv.items() if "planks" in i)
@@ -477,5 +477,5 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                 return {"name": "activate_end_portal", "arguments": {}}
             return {"name": "throw_eye_of_ender", "arguments": {}}
 
-        # Default: Oyuncu yanında kal
+        # Default: Stay near partner
         return {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}

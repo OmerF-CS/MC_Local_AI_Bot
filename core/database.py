@@ -15,7 +15,7 @@ class Database:
 
     def _create_tables(self):
         with self.conn:
-            # Oyuncular
+            # Player Tracking
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS players (
                     username TEXT PRIMARY KEY,
@@ -27,7 +27,7 @@ class Database:
                 )
             """)
 
-            # Önemli Dünya Konumları (Ev, Maden, Sandık vb.)
+            # World Landmarks (Home, Base, Mines, Portal, etc.)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS locations (
                     name TEXT PRIMARY KEY,
@@ -40,7 +40,7 @@ class Database:
                 )
             """)
 
-            # Sohbet Geçmişi
+            # Chat History
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +51,7 @@ class Database:
                 )
             """)
 
-            # Oyun İlerlemesi ve Kilometre Taşları (Progression Checkpoints)
+            # Speedrun Progression Checkpoints
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS progression_checkpoints (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +62,7 @@ class Database:
                 )
             """)
 
-            # Çoklu Görev Kuyruğu (Task Queue)
+            # Task Queue
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS task_queue (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +77,7 @@ class Database:
             """)
 
     def save_location(self, name: str, x: float, y: float, z: float, description: str = "", created_by: str = ""):
-        """Önemli bir Minecraft koordinatını hafızaya kaydeder."""
+        """Saves a world coordinate with a name into memory."""
         with self.conn:
             self.conn.execute("""
                 INSERT OR REPLACE INTO locations (name, x, y, z, description, created_by)
@@ -85,20 +85,20 @@ class Database:
             """, (name.lower(), x, y, z, description, created_by))
 
     def get_location(self, name: str) -> Optional[Dict[str, Any]]:
-        """Kaydedilmiş konumu getirir."""
+        """Retrieves a saved landmark by name."""
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM locations WHERE name = ?", (name.lower(),))
         row = cur.fetchone()
         return dict(row) if row else None
 
     def list_locations(self) -> List[Dict[str, Any]]:
-        """Tüm kayıtlı yerleri listeler."""
+        """Lists all saved landmarks."""
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM locations ORDER BY name ASC")
         return [dict(row) for row in cur.fetchall()]
 
     def log_chat(self, sender: str, message: str, role: str = "user"):
-        """Sohbet mesajını kaydeder."""
+        """Logs chat messages to database."""
         with self.conn:
             self.conn.execute("""
                 INSERT INTO chat_history (sender, message, role)
@@ -106,7 +106,7 @@ class Database:
             """, (sender, message, role))
 
     def update_player(self, username: str):
-        """Oyuncunun görülme ve mesaj sayısını günceller."""
+        """Updates player metadata and interaction count."""
         with self.conn:
             self.conn.execute("""
                 INSERT INTO players (username, first_seen, last_seen, total_messages)
@@ -116,10 +116,10 @@ class Database:
                     total_messages = total_messages + 1
             """, (username,))
 
-    # --- OYUN İLERLEME SİSTEMİ (PROGRESSION CHECKPOINTS) ---
+    # --- PROGRESSION CHECKPOINTS ---
 
     def save_progression(self, stage: str, target: str, inventory: Optional[Dict[str, int]] = None):
-        """Ulaşılan yeni tech tree seviyesini veritabanına kaydeder."""
+        """Saves current milestone progression era to database."""
         inv_str = json.dumps(inventory or {})
         with self.conn:
             self.conn.execute("""
@@ -129,7 +129,7 @@ class Database:
             logger.info(f"💾 Progression checkpoint saved: {stage} -> {target}")
 
     def get_latest_progression(self) -> Optional[Dict[str, Any]]:
-        """En son kaydedilmiş ilerleme seviyesini döner."""
+        """Returns the most recent progression milestone checkpoint."""
         cur = self.conn.cursor()
         cur.execute("""
             SELECT * FROM progression_checkpoints
@@ -145,10 +145,10 @@ class Database:
             res["inventory"] = {}
         return res
 
-    # --- ÇOKLU GÖREV KUYRUĞU (TASK QUEUE) ---
+    # --- MULTI-TASK QUEUE ---
 
     def add_task(self, instruction: str, primary_action: str = "", assigned_by: str = "", priority: int = 1) -> int:
-        """Kuyruğa yeni bir oyuncu veya otonom görev ekler."""
+        """Adds a player or autonomous task to the queue."""
         with self.conn:
             cur = self.conn.execute("""
                 INSERT INTO task_queue (instruction, primary_action, assigned_by, priority, status)
@@ -157,7 +157,7 @@ class Database:
             return cur.lastrowid
 
     def get_pending_tasks(self) -> List[Dict[str, Any]]:
-        """Bekleyen görevleri öncelik sırasına göre listeler."""
+        """Lists pending tasks sorted by priority."""
         cur = self.conn.cursor()
         cur.execute("""
             SELECT * FROM task_queue
@@ -167,7 +167,7 @@ class Database:
         return [dict(row) for row in cur.fetchall()]
 
     def update_task_status(self, task_id: int, status: str):
-        """Görev durumunu günceller."""
+        """Updates task execution status."""
         with self.conn:
             completed_clause = ", completed_at = datetime('now')" if status in ("completed", "cancelled") else ""
             self.conn.execute(f"""
@@ -177,10 +177,10 @@ class Database:
             """, (status, task_id))
 
     def complete_task(self, task_id: int):
-        """Görevi tamamlandı olarak işaretler."""
+        """Marks a task as completed."""
         self.update_task_status(task_id, "completed")
 
     def clear_pending_tasks(self):
-        """Bekleyen tüm görevleri temizler."""
+        """Cancels all pending tasks in the queue."""
         with self.conn:
             self.conn.execute("UPDATE task_queue SET status = 'cancelled' WHERE status = 'pending'")

@@ -1,6 +1,6 @@
 /**
  * Mineflayer Bot Worker & Python Bridge
- * Otonom Takım Arkadaşı, Anti-Stuck (Sonsuz Döngü Koruması) ve Zanaat Sistemi
+ * Autonomous Co-op Teammate, Anti-Stuck Loop Guard, and Crafting Engine
  */
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
@@ -11,7 +11,7 @@ const WebSocket = require('ws');
 const Vec3 = require('vec3');
 const toolLearner = require('./tool_learner');
 
-// Konfigürasyon
+// Configuration
 const MC_HOST = process.env.MINECRAFT_HOST || 'localhost';
 const MC_PORT = parseInt(process.env.MINECRAFT_PORT || '25565', 10);
 const MC_USERNAME = process.env.MINECRAFT_USERNAME || 'AIAssistant';
@@ -22,31 +22,31 @@ let ws = null;
 let bot = null;
 let defaultMovements = null;
 
-// Otonom Durum Yönetimi
+// Autonomous State Management
 let isGuarding = false;
 let guardedPlayerName = null;
 let isEating = false;
-let isBusy = false; // Bot meşgul mü? (Aksiyon çakışmasını engeller)
+let isBusy = false; // Is bot currently busy with an action (prevents collision)
 let currentActionName = 'idle';
 
-// Anti-Stuck Takip Değişkenleri
+// Anti-Stuck Tracking Variables
 let lastPosition = null;
 let stuckCounter = 0;
 
-// Bilinen Yiyecekler Listesi
+// Known Food Items List
 const FOOD_NAMES = [
     'cooked_beef', 'cooked_porkchop', 'bread', 'apple', 'golden_apple',
     'cooked_chicken', 'baked_potato', 'cooked_mutton', 'carrot',
     'cooked_cod', 'cooked_salmon', 'melon_slice'
 ];
 
-// --- WEBSOCKET BRIDGE BAĞLANTISI ---
+// --- WEBSOCKET BRIDGE CONNECTION ---
 function connectBridge() {
-    console.log(`[Bridge] Python köprüsüne bağlanılıyor: ${BRIDGE_URL}`);
+    console.log(`[Bridge] Connecting to Python bridge at: ${BRIDGE_URL}`);
     ws = new WebSocket(BRIDGE_URL);
 
     ws.on('open', () => {
-        console.log('[Bridge] ✅ Python köprüsüne başarıyla bağlanıldı.');
+        console.log('[Bridge] ✅ Connected to Python bridge successfully.');
         sendToPython({
             type: 'bot_status',
             status: 'connected',
@@ -57,20 +57,20 @@ function connectBridge() {
     ws.on('message', async (data) => {
         try {
             const message = JSON.parse(data.toString());
-            console.log('[Bridge] 📥 Python Komutu Alındı:', message);
+            console.log('[Bridge] 📥 Python Command Received:', message);
             await handleAction(message);
         } catch (err) {
-            console.error('[Bridge] ❌ Mesaj işleme hatası:', err.message);
+            console.error('[Bridge] ❌ Message handling error:', err.message);
         }
     });
 
     ws.on('close', () => {
-        console.log('[Bridge] ⚠️ Köprü bağlantısı koptu. 3 saniye içinde yeniden denenecek...');
+        console.log('[Bridge] ⚠️ Bridge connection lost. Reconnecting in 3s...');
         setTimeout(connectBridge, 3000);
     });
 
     ws.on('error', (err) => {
-        console.error('[Bridge] ❌ Soket hatası:', err.message);
+        console.error('[Bridge] ❌ Socket error:', err.message);
     });
 }
 
@@ -265,7 +265,7 @@ function getBotState() {
     };
 }
 
-// --- SONSUZ DÖNGÜ & SIKIŞMA KORUMASI (ANTI-STUCK GUARD) ---
+// --- INFINITE LOOP & STUCK PREVENTION (ANTI-STUCK GUARD) ---
 function antiStuckCheck() {
     if (!bot || !bot.entity) return;
 
@@ -274,8 +274,8 @@ function antiStuckCheck() {
         const distMoved = currentPos.distanceTo(lastPosition);
         if (distMoved < 0.5) {
             stuckCounter++;
-            if (stuckCounter >= 3) { // ~9 saniyedir aynı yerde çırpınıyor
-                console.log('🚨 [Anti-Stuck] Bot engelde sıkıştı! Hedef sıfırlanıyor ve sıçrama yapılıyor...');
+            if (stuckCounter >= 3) { // Stuck in same spot for ~9s
+                console.log('🚨 [Anti-Stuck] Bot stuck on obstacle! Resetting goal and performing unstuck jump...');
                 bot.pathfinder.stop();
                 bot.setControlState('jump', true);
                 setTimeout(() => bot.setControlState('jump', false), 500);
@@ -288,7 +288,7 @@ function antiStuckCheck() {
                     type: 'action_completed',
                     command: 'stuck_recovery',
                     success: false,
-                    reason: 'Engel nedeniyle sıkışma algılandı, hedef sıfırlandı.'
+                    reason: 'Obstacle obstruction detected; goal reset.'
                 });
             }
         } else {
@@ -300,7 +300,7 @@ function antiStuckCheck() {
     lastPosition = currentPos.clone();
 }
 
-// --- OTONOM HAYATTA KALMA SİSTEMLERİ ---
+// --- AUTONOMOUS SURVIVAL SYSTEMS ---
 async function autoEatCheck() {
     if (!bot || !bot.entity || isEating || isBusy) return;
 
@@ -309,12 +309,12 @@ async function autoEatCheck() {
         if (foodItem) {
             try {
                 isEating = true;
-                console.log(`[AutoEat] 🍞 Açlık azaldı (${bot.food}/20). ${foodItem.name} yeniyor...`);
+                console.log(`[AutoEat] 🍞 Low hunger (${bot.food}/20). Consuming ${foodItem.name}...`);
                 await bot.equip(foodItem, 'hand');
                 await bot.consume();
-                console.log(`[AutoEat] ✅ Doydu! Yeni Açlık: ${bot.food}/20`);
+                console.log(`[AutoEat] ✅ Replenished! New hunger: ${bot.food}/20`);
             } catch (err) {
-                console.log(`[AutoEat] Yemek yeme hatası: ${err.message}`);
+                console.log(`[AutoEat] Error consuming food: ${err.message}`);
             } finally {
                 isEating = false;
             }
@@ -462,9 +462,9 @@ async function autoSelfDefenseCheck() {
     }
 }
 
-// --- BOT OLUŞTURMA & OLAYLAR ---
+// --- BOT CREATION & LIFECYCLE EVENTS ---
 function createBot() {
-    console.log(`[Minecraft] ${MC_HOST}:${MC_PORT} sunucusuna '${MC_USERNAME}' olarak bağlanılıyor...`);
+    console.log(`[Minecraft] Connecting to ${MC_HOST}:${MC_PORT} as '${MC_USERNAME}'...`);
     
     const botOptions = {
         host: MC_HOST,
@@ -483,20 +483,20 @@ function createBot() {
     bot.loadPlugin(pvp);
 
     bot.once('spawn', () => {
-        console.log('[Minecraft] 🌟 Bot başarıyla oyuna girdi!');
+        console.log('[Minecraft] 🌟 Bot successfully spawned into the world!');
         const mcData = require('minecraft-data')(bot.version);
         defaultMovements = new Movements(bot, mcData);
         bot.pathfinder.setMovements(defaultMovements);
 
-        // Periyodik döngüler
+        // Periodic maintenance loops
         setInterval(autoEatCheck, 6000);
         setInterval(guardLoop, 1500);
-        setInterval(autoSelfDefenseCheck, 1500); // Proaktif yakın tehdit savunması
-        setInterval(antiStuckCheck, 3000); // 3 saniyede bir sıkışma kontrolü
-        setInterval(autoEquipGearCheck, 4000); // 4 saniyede bir zırh ve kalkan kuşanma
-        setInterval(autoTorchCheck, 8000); // Karanlık mağaralarda meşale koyma
+        setInterval(autoSelfDefenseCheck, 1500); // Proactive close-range threat defense
+        setInterval(antiStuckCheck, 3000); // Anti-stuck watchdog every 3s
+        setInterval(autoEquipGearCheck, 4000); // Armor & shield auto-equip every 4s
+        setInterval(autoTorchCheck, 8000); // Dark cave auto-torching
 
-        // Canlı 2-saniyelik durum senkronizasyon kalp atışı (heartbeat)
+        // Live 2-second state synchronization heartbeat
         setInterval(() => {
             if (bot && bot.entity) {
                 sendToPython({
@@ -525,7 +525,7 @@ function createBot() {
     });
 
     bot.on('death', () => {
-        console.log('[Minecraft] 💀 Bot öldü!');
+        console.log('[Minecraft] 💀 Bot died!');
         isGuarding = false;
         isBusy = false;
         currentActionName = 'idle';
@@ -536,15 +536,15 @@ function createBot() {
     });
 
     bot.on('kicked', (reason) => {
-        console.log('[Minecraft] 🚫 Sunucudan atıldı:', reason);
+        console.log('[Minecraft] 🚫 Kicked from server:', reason);
     });
 
     bot.on('error', (err) => {
-        console.error('[Minecraft] ❌ Hata:', err.message);
+        console.error('[Minecraft] ❌ Error:', err.message);
     });
 
     bot.on('end', () => {
-        console.log('[Minecraft] 🔄 Bağlantı kapandı. 5 saniye sonra tekrar denenecek...');
+        console.log('[Minecraft] 🔄 Connection closed. Reconnecting in 5 seconds...');
         setTimeout(createBot, 5000);
     });
 }
@@ -924,7 +924,7 @@ async function smartSmelt(bot, inputItemName, count = 1) {
     return true;
 }
 
-// --- YERDEKİ DÜŞEN EŞYALARI TOPLAMA (LOOT COLLECTION) ---
+// --- LOOT COLLECTION SYSTEM ---
 async function collectNearbyDrops(bot, maxDistance = 12) {
     if (!bot || !bot.entity) return;
     const drops = [];
@@ -1210,7 +1210,7 @@ async function handleActivateEndPortal(bot) {
     return true;
 }
 
-// --- EYLEMLERİN (ACTIONS) İCRASI (ZAMAN AŞIMI VE ÇAKIŞMA KORUMALI) ---
+// --- ACTION EXECUTION ENGINE (TIMEOUT & CONCURRENCY GUARDED) ---
 async function handleAction(action) {
     if (!bot) return;
 
@@ -1218,7 +1218,7 @@ async function handleAction(action) {
     let actionSuccess = true;
     let actionError = null;
 
-    // Eğer bot zaten kritik bir işlemle meşgulse ve yeni bir hareket geldiyse
+    // Guard against action overlap if bot is already performing a critical multi-step action
     if (isBusy && command !== 'stop_actions' && command !== 'say_chat') {
         console.log(`⚠️ [Busy Guard] Bot currently busy with '${currentActionName}'. Postponing new action.`);
         return;
@@ -1625,6 +1625,6 @@ async function handleAction(action) {
     }
 }
 
-// Başlatıcı
+// Startup & Initialization
 connectBridge();
 createBot();
