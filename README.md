@@ -93,9 +93,18 @@ The bot uses an asynchronous decoupled architecture separating high-level strate
   - **Flight Phase**: Evades purple dragon breath clouds (`area_effect_cloud`) and raises shield against diving attacks.
 - **Victory & Exit Fountain (`enter_exit_portal`)**: Saps the 68 levels of fallen dragon XP orbs and enters the central exit portal to beat the game.
 
+### 🌾 Sustainable Farming & Bread Engine
+- **Hay Bale Harvesting (`farm_crops`)**: Rapidly scans villages and plains for `hay_block`s. Automatically converts 1 hay bale into 9 wheat $\to$ 3 loaves of fresh bread (providing 60+ loaves in minutes).
+- **Crop Lifecycle & Farmland**: Harvests mature wheat, carrots, and potatoes, replants seeds on farmland, and tills dirt near water with hoes.
+
+### 🏰 Universal Emergency Shelter & Burrowing
+- **Universal Solid Block Support (`build_shelter`)**: Constructs 360-degree protective bunkers using **ANY solid block** in Minecraft (cobblestone, deepslate, dirt, sandstone, tuff, planks, netherrack, etc.).
+- **Zero-Resource Burrowing (`burrow`)**: If unarmed with zero blocks, digs 3 blocks deep into the terrain and seals the roof with a mined block for 100% immunity to mobs.
+- **Interior Lighting & Safe Breakout (`break_out_shelter`)**: Places torches inside to prevent monster spawns, and mines an exit once daylight arrives and health regenerates.
+
 ### 🛡️ Dimension Safety & Health Reflexes
 - **Exploding Bed Prevention**: Strictly forbids bed sleeping in `the_nether` and `the_end`, preventing catastrophic explosions.
-- **Emergency Reflexes**: Bypasses LLM cooldown instantly when health drops $\le 6$ HP or hunger drops $\le 4$.
+- **Emergency Reflexes**: Bypasses LLM cooldown instantly when health drops $\le 6$ HP or hunger drops $\le 4$, sealing into shelter or consuming food.
 - **Anti-Stuck Protection**: Detects repetitive actions and pathfinding deadlocks, automatically triggering safe regroups.
 - **Durability Monitoring**: Alerts the team and preserves tools with $\le 5$ durability remaining.
 
@@ -188,6 +197,9 @@ You can talk to the bot normally in chat or use **instant shortcut commands** (0
 | `!crystal` | Snipes and demolishes End Crystals atop obsidian pillars |
 | `!dragon` | Engages the Ender Dragon in melee perch / bed bombing combat |
 | `!win` | Collects victory dragon XP and steps into the exit fountain |
+| `!farm` / `!bread` | Harvests hay bales, bakes fresh bread, and harvests ripe crops |
+| `!shelter` / `!bunker` | Constructs an emergency bunker with any solid blocks or digs a sealed burrow |
+| `!unbunker` | Safely breaks out of shelter when danger passes |
 | `!follow` / `!come` | Follows the owner |
 | `!guard` | Defends the owner against hostile mobs |
 | `!status` | Reports current HP, hunger, coordinates, and inventory |

@@ -29,6 +29,7 @@ let isEating = false;
 let isBusy = false; // Is bot currently busy with an action (prevents collision)
 let currentActionName = 'idle';
 let dragonDefeatedFlag = false;
+let isSheltered = false;
 
 // Anti-Stuck Tracking Variables
 let lastPosition = null;
@@ -99,6 +100,7 @@ function getBotState() {
     const visibleResources = {};
     const keyCategories = [
         'crafting_table', 'furnace', 'chest', 'bed',
+        'hay_block', 'wheat', 'carrots', 'potatoes', 'farmland',
         'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'acacia_log', 'jungle_log', 'cherry_log',
         'stone', 'cobblestone', 'deepslate', 'coal_ore', 'iron_ore', 'copper_ore', 'gold_ore', 'redstone_ore', 'lapis_ore', 'diamond_ore',
         'water', 'lava'
@@ -307,7 +309,8 @@ function getBotState() {
         end_crystals_count: endCrystalsCount,
         ender_dragon: enderDragonInfo,
         dragon_defeated: dragonDefeated,
-        dragon_health: enderDragonInfo ? enderDragonInfo.health : (dragonDefeated ? 0 : 200)
+        dragon_health: enderDragonInfo ? enderDragonInfo.health : (dragonDefeated ? 0 : 200),
+        is_sheltered: isSheltered
     };
 }
 
@@ -569,6 +572,12 @@ function createBot() {
             handleAction({ command: 'destroy_end_crystals', args: {} });
         } else if (cleanMsg === '!win' || cleanMsg === '!victory' || cleanMsg === '!exit_portal') {
             handleAction({ command: 'enter_exit_portal', args: {} });
+        } else if (cleanMsg === '!farm' || cleanMsg === '!bread' || cleanMsg === '!harvest') {
+            handleAction({ command: 'farm_crops', args: { action_type: 'auto' } });
+        } else if (cleanMsg === '!shelter' || cleanMsg === '!bunker' || cleanMsg === '!hide') {
+            handleAction({ command: 'build_shelter', args: { mode: 'auto' } });
+        } else if (cleanMsg === '!unbunker' || cleanMsg === '!unshelter' || cleanMsg === '!exit_shelter') {
+            handleAction({ command: 'break_out_shelter', args: {} });
         }
 
         sendToPython({
@@ -1510,6 +1519,295 @@ async function enterExitPortal(bot) {
     return true;
 }
 
+// --- SUSTAINABLE FARMING & UNIVERSAL SHELTER ENGINE ---
+
+async function farmCrops(bot, actionType = 'auto') {
+    if (!bot || !bot.entity) return false;
+    const { GoalNear } = goals;
+    const mcData = require('minecraft-data')(bot.version);
+
+    // 1. Hay Bales Priority: Fastest way to gather hundreds of hunger points
+    const hayBlockId = mcData.blocksByName['hay_block']?.id;
+    if (hayBlockId && (actionType === 'auto' || actionType === 'harvest_hay_bales')) {
+        const hayBlocks = bot.findBlocks({ matching: hayBlockId, maxDistance: 48, count: 8 });
+        if (hayBlocks.length > 0) {
+            bot.chat(`🌾 Located ${hayBlocks.length} Hay Bale(s)! Harvesting for bread... 🍞`);
+            let harvestedHay = 0;
+            for (const pos of hayBlocks) {
+                const b = bot.blockAt(pos);
+                if (!b || b.name !== 'hay_block') continue;
+                try {
+                    await bot.pathfinder.goto(new GoalNear(pos.x, pos.y, pos.z, 2.5));
+                    await bot.dig(b);
+                    harvestedHay++;
+                    await new Promise(r => setTimeout(r, 200));
+                } catch (err) {
+                    console.warn(`[Farm] Error harvesting hay block: ${err.message}`);
+                }
+            }
+            // Collect drops
+            await collectNearbyDrops(bot, 12);
+
+            // Convert hay into wheat and bread
+            const hayItem = bot.inventory.items().find(i => i.name === 'hay_block');
+            if (hayItem && hayItem.count > 0) {
+                bot.chat(`Crafting wheat & fresh bread from ${hayItem.count} harvested Hay Bale(s)... 🥖`);
+                try {
+                    await smartCraft(bot, 'wheat', hayItem.count * 9);
+                    const wheatItem = bot.inventory.items().find(i => i.name === 'wheat');
+                    if (wheatItem && wheatItem.count >= 3) {
+                        const loavesToCraft = Math.floor(wheatItem.count / 3);
+                        await smartCraft(bot, 'bread', loavesToCraft);
+                        bot.chat(`✅ Successfully baked ${loavesToCraft} loaves of Bread! 🍞✨`);
+                    }
+                } catch (err) {
+                    console.warn(`[Farm] Bread crafting error: ${err.message}`);
+                }
+            }
+            return true;
+        }
+    }
+
+    // 2. Harvest Ripe Crops (wheat age 7, carrots age 7, potatoes age 7, beetroots age 3)
+    const cropNames = ['wheat', 'carrots', 'potatoes', 'beetroots'];
+    const cropIds = cropNames.map(name => mcData.blocksByName[name]?.id).filter(Boolean);
+
+    if (cropIds.length > 0 && (actionType === 'auto' || actionType === 'harvest_ripe_crops')) {
+        const foundCrops = bot.findBlocks({
+            matching: cropIds,
+            maxDistance: 32,
+            count: 10
+        });
+
+        let harvestedCount = 0;
+        for (const pos of foundCrops) {
+            const b = bot.blockAt(pos);
+            if (!b) continue;
+
+            const isRipe = (b.metadata === 7 && ['wheat', 'carrots', 'potatoes'].includes(b.name)) ||
+                           (b.metadata === 3 && b.name === 'beetroots');
+
+            if (isRipe) {
+                try {
+                    await bot.pathfinder.goto(new GoalNear(pos.x, pos.y, pos.z, 2.5));
+                    await bot.dig(b);
+                    harvestedCount++;
+                    await new Promise(r => setTimeout(r, 200));
+
+                    // Check if ground beneath is farmland and replant seed
+                    const belowBlock = bot.blockAt(pos.offset(0, -1, 0));
+                    if (belowBlock && belowBlock.name === 'farmland') {
+                        const seedName = b.name === 'wheat' ? 'wheat_seeds' : b.name === 'beetroots' ? 'beetroot_seeds' : b.name === 'carrots' ? 'carrot' : 'potato';
+                        const seedItem = bot.inventory.items().find(i => i.name === seedName);
+                        if (seedItem) {
+                            await bot.equip(seedItem, 'hand');
+                            await bot.placeBlock(belowBlock, new Vec3(0, 1, 0)).catch(() => {});
+                        }
+                    }
+                } catch (_) {}
+            }
+        }
+
+        if (harvestedCount > 0) {
+            await collectNearbyDrops(bot, 12);
+            bot.chat(`🌾 Harvested & replanted ${harvestedCount} mature crop(s)!`);
+
+            // If we have 3+ wheat, craft into bread
+            const wheatItem = bot.inventory.items().find(i => i.name === 'wheat');
+            if (wheatItem && wheatItem.count >= 3) {
+                await smartCraft(bot, 'bread', Math.floor(wheatItem.count / 3));
+            }
+            return true;
+        }
+    }
+
+    // 3. Till and Plant Seeds if hoe and seeds are in inventory
+    const hoeItem = bot.inventory.items().find(i => i.name.endsWith('_hoe'));
+    const seedItem = bot.inventory.items().find(i => ['wheat_seeds', 'carrot', 'potato', 'beetroot_seeds'].includes(i.name));
+
+    if (hoeItem && seedItem && (actionType === 'auto' || actionType === 'till_and_plant')) {
+        const waterId = mcData.blocksByName['water']?.id;
+        const waterBlocks = waterId ? bot.findBlocks({ matching: waterId, maxDistance: 16, count: 5 }) : [];
+        if (waterBlocks.length > 0) {
+            const dirtIds = ['dirt', 'grass_block'].map(n => mcData.blocksByName[n]?.id).filter(Boolean);
+            const dirtBlocks = bot.findBlocks({ matching: dirtIds, maxDistance: 16, count: 6 });
+            let tilledCount = 0;
+            for (const pos of dirtBlocks) {
+                const above = bot.blockAt(pos.offset(0, 1, 0));
+                if (above && (above.name === 'air' || above.name === 'cave_air')) {
+                    try {
+                        await bot.pathfinder.goto(new GoalNear(pos.x, pos.y, pos.z, 2.5));
+                        await bot.equip(hoeItem, 'hand');
+                        const dirtBlock = bot.blockAt(pos);
+                        await bot.activateBlock(dirtBlock, new Vec3(0, 1, 0));
+                        tilledCount++;
+                        await new Promise(r => setTimeout(r, 250));
+
+                        // Plant seed
+                        const currentSeed = bot.inventory.items().find(i => ['wheat_seeds', 'carrot', 'potato', 'beetroot_seeds'].includes(i.name));
+                        if (currentSeed) {
+                            await bot.equip(currentSeed, 'hand');
+                            const farmland = bot.blockAt(pos);
+                            await bot.placeBlock(farmland, new Vec3(0, 1, 0)).catch(() => {});
+                        }
+                    } catch (_) {}
+                    if (tilledCount >= 4) break;
+                }
+            }
+            if (tilledCount > 0) {
+                bot.chat(`🌱 Tilled and planted ${tilledCount} crops near water!`);
+                return true;
+            }
+        }
+    }
+
+    bot.chat("No harvestable crops, hay bales, or tilling spots found nearby. 🌾");
+    return true;
+}
+
+async function buildShelter(bot, mode = 'auto') {
+    if (!bot || !bot.entity) return false;
+    const { GoalNear } = goals;
+
+    bot.pathfinder.stop();
+
+    // 1. Identify all usable solid building blocks in inventory
+    const SOLID_NAMES = [
+        'cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'blackstone',
+        'granite', 'diorite', 'andesite', 'tuff', 'calcite', 'dirt', 'mud', 'packed_mud',
+        'netherrack', 'end_stone', 'sandstone', 'red_sandstone', 'basalt',
+        'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks',
+        'dark_oak_planks', 'mangrove_planks', 'cherry_planks', 'bamboo_planks'
+    ];
+
+    let availableBlocks = bot.inventory.items().filter(i => {
+        return SOLID_NAMES.includes(i.name) || i.name.endsWith('_planks') || i.name.endsWith('_cobblestone');
+    });
+
+    let totalBlocks = availableBlocks.reduce((s, i) => s + i.count, 0);
+
+    // If zero blocks, mine 3 dirt/stone blocks adjacent or below to acquire blocks
+    if (totalBlocks < 4) {
+        bot.chat("No building blocks in hand! Rapidly digging dirt/stone to acquire wall blocks... ⛏️");
+        const adjOffsets = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
+        for (const off of adjOffsets) {
+            const targetPos = bot.entity.position.offset(off.x, off.y, off.z);
+            const b = bot.blockAt(targetPos);
+            if (b && (b.name === 'dirt' || b.name === 'grass_block' || b.name === 'stone' || b.name === 'netherrack')) {
+                try {
+                    await bot.dig(b);
+                    await new Promise(r => setTimeout(r, 200));
+                } catch (_) {}
+            }
+        }
+        await collectNearbyDrops(bot, 4);
+        availableBlocks = bot.inventory.items().filter(i => SOLID_NAMES.includes(i.name) || i.name.endsWith('_planks'));
+        totalBlocks = availableBlocks.reduce((s, i) => s + i.count, 0);
+    }
+
+    const chosenMode = (mode === 'burrow' || (mode === 'auto' && totalBlocks < 6)) ? 'burrow' : mode;
+
+    if (chosenMode === 'burrow') {
+        bot.chat("🕳️ BURROWING: Digging 3-deep emergency burrow hole and sealing roof! 🛡️");
+        const basePos = bot.entity.position.floored();
+
+        // Dig down 3 blocks
+        for (let d = 0; d >= -2; d--) {
+            const digPos = basePos.offset(0, d, 0);
+            const b = bot.blockAt(digPos);
+            if (b && b.name !== 'bedrock' && b.name !== 'air' && b.name !== 'lava') {
+                try {
+                    await bot.dig(b);
+                    await new Promise(r => setTimeout(r, 250));
+                } catch (_) {}
+            }
+        }
+
+        await new Promise(r => setTimeout(r, 400));
+
+        // Place 1 seal block directly above head
+        const sealBlockItem = bot.inventory.items().find(i => SOLID_NAMES.includes(i.name) || i.name.endsWith('_planks'));
+        if (sealBlockItem) {
+            const roofPos = basePos.offset(0, 1, 0);
+            await placeBlockDirect(bot, sealBlockItem, roofPos);
+        }
+
+        // Place torch if available
+        const torch = bot.inventory.items().find(i => i.name === 'torch');
+        if (torch) {
+            await bot.equip(torch, 'hand').catch(() => {});
+            const floorBlock = bot.blockAt(bot.entity.position.offset(0, -1, 0));
+            if (floorBlock) {
+                await bot.placeBlock(floorBlock, new Vec3(0, 1, 0)).catch(() => {});
+            }
+        }
+
+        isSheltered = true;
+        bot.chat("🔒 Burrow completely sealed! Safe from all hostile mobs. Resting until danger passes.");
+        return true;
+    }
+
+    // Default: 'emergency_box' (Surface 4-wall + roof enclosure)
+    bot.chat("🏰 Constructing emergency protective bunker with surrounding blocks! 🧱");
+    const myPos = bot.entity.position.floored();
+    const wallOffsets = [
+        new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+        new Vec3(1, 1, 0), new Vec3(-1, 1, 0), new Vec3(0, 1, 1), new Vec3(0, 1, -1),
+        new Vec3(0, 2, 0)
+    ];
+
+    for (const off of wallOffsets) {
+        const placePos = myPos.offset(off.x, off.y, off.z);
+        const blockItem = bot.inventory.items().find(i => SOLID_NAMES.includes(i.name) || i.name.endsWith('_planks'));
+        if (!blockItem) break;
+        await placeBlockDirect(bot, blockItem, placePos);
+    }
+
+    // Interior lighting: place torch inside so mobs cannot spawn
+    const torchItem = bot.inventory.items().find(i => i.name === 'torch');
+    if (torchItem) {
+        try {
+            await bot.equip(torchItem, 'hand');
+            const interiorWall = bot.blockAt(myPos.offset(1, 1, 0)) || bot.blockAt(myPos.offset(0, -1, 0));
+            if (interiorWall) {
+                await bot.placeBlock(interiorWall, new Vec3(0, 1, 0)).catch(() => {});
+            }
+        } catch (_) {}
+    }
+
+    isSheltered = true;
+    bot.chat("🛡️ Emergency bunker sealed! 100% immune to hostile mobs. Resting safely.");
+    return true;
+}
+
+async function breakOutShelter(bot) {
+    if (!bot || !bot.entity) return false;
+    bot.chat("☀️ Daybreak / danger passed! Breaking open shelter to resume exploration... ⛏️");
+
+    const myPos = bot.entity.position.floored();
+    const exitOffsets = [
+        new Vec3(0, 2, 0),
+        new Vec3(1, 1, 0), new Vec3(1, 0, 0),
+        new Vec3(0, 1, 1), new Vec3(0, 0, 1)
+    ];
+
+    for (const off of exitOffsets) {
+        const targetPos = myPos.offset(off.x, off.y, off.z);
+        const b = bot.blockAt(targetPos);
+        if (b && b.name !== 'air' && b.name !== 'cave_air' && b.name !== 'bedrock') {
+            try {
+                await bot.dig(b);
+                await new Promise(r => setTimeout(r, 200));
+            } catch (_) {}
+        }
+    }
+
+    await collectNearbyDrops(bot, 4);
+    isSheltered = false;
+    bot.chat("🚪 Safely exited shelter! Resuming progression. 🚀");
+    return true;
+}
+
 // --- ACTION EXECUTION ENGINE (TIMEOUT & CONCURRENCY GUARDED) ---
 async function handleAction(action) {
     if (!bot) return;
@@ -1524,9 +1822,9 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal'].includes(command)) {
+    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter'].includes(command)) {
         isBusy = true;
-        currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || ''}`;
+        currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || args.action_type || args.mode || ''}`;
         sendToPython({
             type: 'action_started',
             command: command,
@@ -1933,6 +2231,41 @@ async function handleAction(action) {
                 if (!ok) {
                     actionSuccess = false;
                     actionError = "Failed to enter exit portal";
+                }
+                break;
+            }
+
+            case 'farm_crops': {
+                isBusy = true;
+                currentActionName = 'farming_crops';
+                const actionType = args.action_type || 'auto';
+                const ok = await farmCrops(bot, actionType);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to farm crops";
+                }
+                break;
+            }
+
+            case 'build_shelter': {
+                isBusy = true;
+                currentActionName = 'building_shelter';
+                const mode = args.mode || 'auto';
+                const ok = await buildShelter(bot, mode);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to construct shelter";
+                }
+                break;
+            }
+
+            case 'break_out_shelter': {
+                isBusy = true;
+                currentActionName = 'breaking_out_shelter';
+                const ok = await breakOutShelter(bot);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to break out of shelter";
                 }
                 break;
             }

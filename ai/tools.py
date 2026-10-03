@@ -430,5 +430,55 @@ MINECRAFT_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "farm_crops",
+            "description": "Harvest hay bales (converting to wheat & bread), harvest ripe crops, till farmland near water, plant seeds, or apply bone meal for sustainable food.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action_type": {
+                        "type": "string",
+                        "description": "Farming action to perform: 'auto', 'harvest_hay_bales', 'harvest_ripe_crops', 'till_and_plant', or 'bone_meal'.",
+                        "enum": ["auto", "harvest_hay_bales", "harvest_ripe_crops", "till_and_plant", "bone_meal"],
+                        "default": "auto"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_shelter",
+            "description": "Construct an emergency protective shelter or burrow using ANY available solid blocks in inventory (cobblestone, dirt, deepslate, planks, netherrack, etc.) or dig a sealed burrow hole.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "description": "Shelter structure type: 'auto' (chooses best based on materials/threats), 'emergency_box' (4 walls + roof), 'burrow' (zero-material 3-deep sealed hole), or 'enderman_roof' (2-block canopy).",
+                        "enum": ["auto", "emergency_box", "burrow", "enderman_roof"],
+                        "default": "auto"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "break_out_shelter",
+            "description": "Mine the ceiling or doorway block of an emergency shelter/burrow to safely exit and resume travel when danger has passed.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     }
 ]

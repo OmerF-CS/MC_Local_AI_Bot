@@ -37,13 +37,31 @@ class AutonomousCoopBrain:
         nearby_hostiles = state.get("nearby_hostiles", [])
         is_day = state.get("is_day", True)
 
-        # 1. Critical health (<= 6 HP / 3 hearts) with nearby hostile mobs
+        # 0. If currently sheltered inside a bunker: check if it's safe to break out!
+        if state.get("is_sheltered"):
+            from ai.shelter import should_break_out_of_shelter
+            if should_break_out_of_shelter(state):
+                logger.info("☀️ [SHELTER] Threat passed, daylight arrived. Breaking out of bunker!")
+                return {
+                    "text": "The danger has passed and it is safe outside. Breaking out of my shelter!",
+                    "tool_calls": [{"name": "break_out_shelter", "arguments": {}}]
+                }
+            else:
+                # Still unsafe - remain safely inside bunker, eat if needed
+                if food < 18 and any(f in inv for f in ["bread", "cooked_beef", "cooked_porkchop", "apple"]):
+                    return {
+                        "text": "Resting safely inside my shelter and eating food to heal.",
+                        "tool_calls": [{"name": "eat_food", "arguments": {}}]
+                    }
+                return None
+
+        # 1. Critical health (<= 6 HP / 3 hearts) with nearby hostile mobs -> build emergency shelter
         if health <= 6 and nearby_hostiles:
-            logger.warning(f"🚨 [EMERGENCY] Critical health ({health}/20) with hostiles nearby! Defending.")
+            logger.warning(f"🚨 [EMERGENCY] Critical health ({health}/20) with hostiles nearby! Building emergency bunker.")
             return {
-                "text": "I'm in critical danger! Defending myself NOW!",
+                "text": "I'm in critical danger! Sealing myself in an emergency bunker NOW!",
                 "tool_calls": [
-                    {"name": "guard_player", "arguments": {"player_name": self.bot_owner}}
+                    {"name": "build_shelter", "arguments": {"mode": "auto"}}
                 ]
             }
 
@@ -60,6 +78,15 @@ class AutonomousCoopBrain:
                     "tool_calls": [{"name": "eat_food", "arguments": {}}]
                 }
             else:
+                # Check for instant hay bale / farm harvest before roaming for animals
+                from ai.farming import should_prioritize_farming, get_farming_action_plan
+                if inv and should_prioritize_farming(inv, state):
+                    farm_plan = get_farming_action_plan(inv, state)
+                    return {
+                        "text": "I'm starving! Harvesting nearby crops/hay bales for food!",
+                        "tool_calls": [farm_plan]
+                    }
+
                 return {
                     "text": "I'm STARVING and have NO food! Hunting for meat NOW!",
                     "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
@@ -86,9 +113,9 @@ class AutonomousCoopBrain:
                 }
             else:
                 return {
-                    "text": "Night and danger! Regrouping with you for safety.",
+                    "text": "Night and danger! Constructing an emergency shelter/bunker for safety.",
                     "tool_calls": [
-                        {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
+                        {"name": "build_shelter", "arguments": {"mode": "auto"}}
                     ]
                 }
 
@@ -359,17 +386,24 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                 }
             }
 
-        # 5. Hunt food animals if hungry and out of food
+        # 5. Sustainable farming / hay bale harvesting
+        from ai.farming import should_prioritize_farming, get_farming_action_plan
+        if should_prioritize_farming(inv, state):
+            return get_farming_action_plan(inv, state)
+
+        # 6. Hunt food animals if hungry and out of food
         if food_level < 15 and not has_eatable and not raw_meats:
             return {"name": "hunt_food", "arguments": {"animal_type": "any"}}
 
-        # 6. Night shelter check (Overworld only; beds explode in Nether and End!)
+        # 7. Night shelter check (Overworld only; beds explode in Nether and End!)
         dimension = str(state.get("dimension", "overworld")).lower()
         is_nether_or_end = "nether" in dimension or "end" in dimension
         if not state.get("is_day", True) and not is_nether_or_end:
             vis_res = state.get("visible_resources", {})
             if vis_res.get("bed"):
                 return {"name": "sleep_in_bed", "arguments": {}}
+            else:
+                return {"name": "build_shelter", "arguments": {"mode": "auto"}}
 
         # 7. Tech tree progression milestones
         target = goal.get("target")

@@ -169,6 +169,21 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("enter_exit_portal", {})
                     return
 
+                elif cmd_name in ("farm", "bread", "harvest", "crops"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "farm_crops"}
+                    await self.bot.bridge.send_action("farm_crops", {"action_type": "auto"})
+                    return
+
+                elif cmd_name in ("shelter", "bunker", "box", "hide", "burrow", "siginak"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "build_shelter"}
+                    await self.bot.bridge.send_action("build_shelter", {"mode": "auto"})
+                    return
+
+                elif cmd_name in ("unbunker", "unshelter", "cikis", "break_out"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "break_out_shelter"}
+                    await self.bot.bridge.send_action("break_out_shelter", {})
+                    return
+
                 elif cmd_name == "status":
                     hp = state.get("health", 20)
                     fd = state.get("food", 20)
@@ -208,7 +223,8 @@ class MinecraftChatHandler:
             "hunt_food", "smelt_item", "go_to_coordinates",
             "go_to_saved_location", "attack_target", "eat_food",
             "build_nether_portal", "throw_eye_of_ender", "activate_end_portal",
-            "destroy_end_crystals", "fight_ender_dragon", "enter_exit_portal"
+            "destroy_end_crystals", "fight_ender_dragon", "enter_exit_portal",
+            "farm_crops", "build_shelter", "break_out_shelter"
         }
         assigned_actions = [tc for tc in tool_calls if tc.get("name") in action_tools]
         if assigned_actions:
