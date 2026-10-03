@@ -74,6 +74,8 @@ class MinecraftChatHandler:
             ]
         ):
             self.bot.active_player_task = None
+            if hasattr(self.bot, "db"):
+                self.bot.db.clear_pending_tasks()
             await self.bot.bridge.send_action("stop_actions", {})
             msg = "Understood! Resuming my own progression and gear upgrades."
             await self.bot.bridge.send_action("say_chat", {"message": msg})
@@ -131,6 +133,8 @@ class MinecraftChatHandler:
 
                 elif cmd_name == "stop":
                     self.bot.active_player_task = None
+                    if hasattr(self.bot, "db"):
+                        self.bot.db.clear_pending_tasks()
                     await self.bot.bridge.send_action("stop_actions", {})
                     await self.bot.bridge.send_action("say_chat", {"message": "Stopped actions. Standing by."})
                     return
@@ -176,16 +180,19 @@ class MinecraftChatHandler:
         }
         assigned_actions = [tc for tc in tool_calls if tc.get("name") in action_tools]
         if assigned_actions:
+            primary_act = assigned_actions[0].get("name", "co-op task")
             self.bot.active_player_task = {
                 "instruction": clean_message,
                 "assigned_by": sender,
                 "status": "active",
                 "timestamp": now,
-                "primary_action": assigned_actions[0].get("name")
+                "primary_action": primary_act
             }
+            if hasattr(self.bot, "db"):
+                self.bot.db.add_task(clean_message, primary_act, sender)
             logger.info(
                 f"📋 Set Active Teammate Task: '{clean_message}' "
-                f"({assigned_actions[0].get('name')})"
+                f"({primary_act})"
             )
 
         # Eylemleri execute et
@@ -205,51 +212,112 @@ class MinecraftChatHandler:
         if hasattr(self.bot, "db") and response_text:
             self.bot.db.log_chat(self.bot.config.BOT_NAME, response_text, role="assistant")
 
-    async def _execute_tool(self, cmd: str, args: Dict[str, Any], state: Dict[str, Any], sender: str):
-        """Python-level memory actions veya Mineflayer commands'ı dispatch et."""
+    async def _execute_tool(self, cmd: str, args: Dict[str, Any], state: Dict[str, Any], sender: str) -> Dict[str, Any]:
+        """Python-level memory actions veya Mineflayer commands'ı doğrula ve dispatch et."""
+        if not args:
+            args = {}
+
+        # 1. Bellek ve Bilgi Araçları
         if cmd == "save_current_location":
-            loc_name = args.get("location_name", "").lower()
-            desc = args.get("description", "")
+            loc_name = str(args.get("location_name", "")).strip().lower()
+            if not loc_name:
+                logger.warning("⚠️ 'save_current_location' called without location_name.")
+                return {"success": False, "error": "Missing location_name"}
+            desc = str(args.get("description", ""))
             pos = state.get("position", {})
             x = pos.get("x", 0)
             y = pos.get("y", 0)
             z = pos.get("z", 0)
 
-            self.bot.db.save_location(loc_name, x, y, z, desc, created_by=sender)
-            msg = f"Saved '{loc_name}' to world memory at ({x}, {y}, {z})!"
+            if hasattr(self.bot, "db"):
+                self.bot.db.save_location(loc_name, x, y, z, desc, created_by=sender)
+            msg = f"Saved '{loc_name}' to world memory at ({x:.0f}, {y:.0f}, {z:.0f})!"
             await self.bot.bridge.send_action("say_chat", {"message": msg})
+            return {"success": True, "message": msg}
 
         elif cmd == "go_to_saved_location":
-            loc_name = args.get("location_name", "").lower()
-            saved = self.bot.db.get_location(loc_name)
+            loc_name = str(args.get("location_name", "")).strip().lower()
+            if not loc_name:
+                return {"success": False, "error": "Missing location_name"}
+            saved = self.bot.db.get_location(loc_name) if hasattr(self.bot, "db") else None
             if saved:
-                msg = f"Heading to '{loc_name}' at ({saved['x']}, {saved['y']}, {saved['z']})."
+                msg = f"Heading to '{loc_name}' at ({saved['x']:.0f}, {saved['y']:.0f}, {saved['z']:.0f})."
                 await self.bot.bridge.send_action("say_chat", {"message": msg})
                 await self.bot.bridge.send_action("go_to_coordinates", {
                     "x": saved["x"],
                     "y": saved["y"],
                     "z": saved["z"]
                 })
+                return {"success": True, "message": msg}
             else:
                 msg = f"I do not have '{loc_name}' saved in memory."
                 await self.bot.bridge.send_action("say_chat", {"message": msg})
+                return {"success": False, "error": msg}
 
         elif cmd == "list_saved_locations":
-            locations = self.bot.db.list_locations()
+            locations = self.bot.db.list_locations() if hasattr(self.bot, "db") else []
             if locations:
                 loc_list_str = ", ".join(
-                    [f"{l['name']} ({l['x']}, {l['y']}, {l['z']})" for l in locations]
+                    [f"{l['name']} ({l['x']:.0f}, {l['y']:.0f}, {l['z']:.0f})" for l in locations]
                 )
                 msg = f"Saved Landmarks: {loc_list_str}"
             else:
                 msg = "No landmarks saved in memory yet."
             await self.bot.bridge.send_action("say_chat", {"message": msg})
+            return {"success": True, "message": msg}
 
         elif cmd in ("lookup_recipe", "explain_component"):
-            item_name = args.get("item_name") or args.get("component_name", "")
+            item_name = str(args.get("item_name") or args.get("component_name", "")).strip()
             summary = lookup_component_data(item_name)
             await self.bot.bridge.send_action("say_chat", {"message": summary})
+            return {"success": True, "message": summary}
 
-        else:
-            # Tüm diğer Mineflayer commands'ını forward et
-            await self.bot.bridge.send_action(cmd, args)
+        # 2. Mineflayer Eylem Komutlarının Şema Doğrulaması
+        validated_args = dict(args)
+        if cmd == "craft_item":
+            item = str(validated_args.get("item_name", "")).strip().lower()
+            if not item:
+                logger.warning("⚠️ 'craft_item' called without item_name.")
+                return {"success": False, "error": "Missing item_name"}
+            validated_args["item_name"] = item
+            count = validated_args.get("count", 1)
+            validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
+
+        elif cmd == "collect_block":
+            block = str(validated_args.get("block_name", "")).strip().lower()
+            if not block:
+                logger.warning("⚠️ 'collect_block' called without block_name.")
+                return {"success": False, "error": "Missing block_name"}
+            validated_args["block_name"] = block
+            count = validated_args.get("count", 1)
+            validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
+
+        elif cmd == "smelt_item":
+            item = str(validated_args.get("input_item", "")).strip().lower()
+            if not item:
+                logger.warning("⚠️ 'smelt_item' called without input_item.")
+                return {"success": False, "error": "Missing input_item"}
+            validated_args["input_item"] = item
+            count = validated_args.get("count", 1)
+            validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
+
+        elif cmd == "go_to_coordinates":
+            try:
+                validated_args["x"] = float(validated_args["x"])
+                validated_args["y"] = float(validated_args["y"])
+                validated_args["z"] = float(validated_args["z"])
+            except (KeyError, ValueError, TypeError) as err:
+                logger.warning(f"⚠️ 'go_to_coordinates' invalid coordinates: {err}")
+                return {"success": False, "error": f"Invalid coordinates: {err}"}
+
+        elif cmd == "hunt_food":
+            animal = str(validated_args.get("animal_type", "any")).strip().lower()
+            validated_args["animal_type"] = animal or "any"
+
+        elif cmd in ("follow_player", "guard_player"):
+            player = str(validated_args.get("player_name", sender)).strip()
+            validated_args["player_name"] = player or sender
+
+        # 3. Mineflayer'a İlet
+        await self.bot.bridge.send_action(cmd, validated_args)
+        return {"success": True, "command": cmd, "args": validated_args}

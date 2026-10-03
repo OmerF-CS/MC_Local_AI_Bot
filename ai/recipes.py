@@ -1,88 +1,94 @@
-"""Minecraft Eşya ve Zanaat (Crafting) Bilgi Bankası."""
+"""Minecraft Crafting Recipes & Knowledge Registry in English."""
 from typing import Optional, Dict, Any
 
 RECIPES: Dict[str, Dict[str, Any]] = {
     "torch": {
-        "name": "Meşale",
-        "ingredients": "1 Kömür (Coal) veya Odun Kömürü + 1 Çubuk (Stick)",
+        "name": "Torch",
+        "ingredients": "1 Coal or Charcoal + 1 Stick",
         "output_count": 4,
-        "description": "Karanlık yerleri ve madenleri aydınlatmak, yaratık doğmasını engellemek için kullanılır."
+        "description": "Illuminates dark caves, tunnels, and prevents hostile mobs from spawning."
     },
     "crafting_table": {
-        "name": "Çalışma Masası (Crafting Table)",
-        "ingredients": "4 Tahta (Planks)",
+        "name": "Crafting Table",
+        "ingredients": "4 Wooden Planks (any wood type)",
         "output_count": 1,
-        "description": "3x3 üretim ızgarası sağlar, neredeyse tüm karmaşık eşyalar için zorunludur."
+        "description": "Provides a 3x3 crafting grid essential for almost all advanced tools and items."
     },
     "furnace": {
-        "name": "Fırın (Furnace)",
-        "ingredients": "8 Kırıktaş (Cobblestone)",
+        "name": "Furnace",
+        "ingredients": "8 Cobblestone, Cobbled Deepslate, or Blackstone",
         "output_count": 1,
-        "description": "Madenleri eritmek ve yemek pişirmek için kullanılır."
+        "description": "Used for smelting raw ores into ingots and cooking food."
     },
     "chest": {
-        "name": "Sandık (Chest)",
-        "ingredients": "8 Tahta (Planks)",
+        "name": "Chest",
+        "ingredients": "8 Wooden Planks",
         "output_count": 1,
-        "description": "27 yuvalık depolama alanı sağlar."
+        "description": "Provides 27 slots of secure item storage."
     },
     "bed": {
-        "name": "Yatak (Bed)",
-        "ingredients": "3 Yün (Wool) + 3 Tahta (Planks)",
+        "name": "Bed",
+        "ingredients": "3 Wool + 3 Wooden Planks",
         "output_count": 1,
-        "description": "Geceyi atlamak ve yeniden doğma noktasını ayarlamak için kullanılır."
+        "description": "Skips the night and resets player and bot respawn points."
     },
     "wooden_pickaxe": {
-        "name": "Tahta Kazma",
-        "ingredients": "3 Tahta + 2 Çubuk",
+        "name": "Wooden Pickaxe",
+        "ingredients": "3 Wooden Planks + 2 Sticks",
         "output_count": 1,
-        "description": "Taş ve kömür kazmak için gereken en temel alet."
+        "description": "Fundamental mining tool required to break and harvest stone, deepslate, and coal."
     },
     "stone_pickaxe": {
-        "name": "Taş Kazma",
-        "ingredients": "3 Kırıktaş + 2 Çubuk",
+        "name": "Stone Pickaxe",
+        "ingredients": "3 Cobblestone, Cobbled Deepslate, or Blackstone + 2 Sticks",
         "output_count": 1,
-        "description": "Demir cevheri kazmak için gereken alet."
+        "description": "Mines iron ore, copper ore, and lapis lazuli."
     },
     "iron_pickaxe": {
-        "name": "Demir Kazma",
-        "ingredients": "3 Demir Külçesi (Iron Ingot) + 2 Çubuk",
+        "name": "Iron Pickaxe",
+        "ingredients": "3 Iron Ingots + 2 Sticks",
         "output_count": 1,
-        "description": "Altın, kızıltaş ve elmas cevheri kazabilir."
+        "description": "Mines gold, redstone, and diamond ore."
+    },
+    "diamond_pickaxe": {
+        "name": "Diamond Pickaxe",
+        "ingredients": "3 Diamonds + 2 Sticks",
+        "output_count": 1,
+        "description": "Required to mine obsidian and access the Nether."
     },
     "shield": {
-        "name": "Kalkan (Shield)",
-        "ingredients": "1 Demir Külçesi + 6 Tahta",
+        "name": "Shield",
+        "ingredients": "1 Iron Ingot + 6 Wooden Planks",
         "output_count": 1,
-        "description": "Okları ve creeper patlamalarını engellemek için hayat kurtarıcıdır."
+        "description": "Lifesaving off-hand defense against arrows and creeper blast damage."
     },
     "iron_sword": {
-        "name": "Demir Kılıç",
-        "ingredients": "2 Demir Külçesi + 1 Çubuk",
+        "name": "Iron Sword",
+        "ingredients": "2 Iron Ingots + 1 Stick",
         "output_count": 1,
-        "description": "6 saldırı hasarı verir."
+        "description": "Deals 6 attack damage for effective combat."
     },
     "iron_chestplate": {
-        "name": "Demir Göğüslük",
-        "ingredients": "8 Demir Külçesi",
+        "name": "Iron Chestplate",
+        "ingredients": "8 Iron Ingots",
         "output_count": 1,
-        "description": "Güçlü zırh koruması sağlar."
+        "description": "Provides solid torso armor protection."
     },
     "bucket": {
-        "name": "Kova (Bucket)",
-        "ingredients": "3 Demir Külçesi",
+        "name": "Bucket",
+        "ingredients": "3 Iron Ingots",
         "output_count": 1,
-        "description": "Su, lav veya süt taşımak için kullanılır."
+        "description": "Carries water for MLG drops and portal casting, or scoops lava for fuel."
     }
 }
 
 def get_recipe(query: str) -> Optional[Dict[str, Any]]:
-    """Girilen sorguya göre en uygun crafting tarifini döner."""
+    """Returns the most appropriate recipe definition for a query."""
     clean = query.lower().strip().replace(" ", "_")
-    # Doğrudan eşleşme
+    # Direct match
     if clean in RECIPES:
         return RECIPES[clean]
-    # Kısmi eşleşme
+    # Fuzzy match
     for key, val in RECIPES.items():
         if clean in key or key in clean or clean in val["name"].lower():
             return val

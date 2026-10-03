@@ -11,13 +11,15 @@ logger = get_logger("AutonomousCoopBrain")
 class AutonomousCoopBrain:
     """Ollama ve Minecraft progression tech tree kullanan proaktif karar motoru."""
 
-    def __init__(self, ollama_brain, bot_owner: str = "Omer"):
+    def __init__(self, ollama_brain, bot_owner: str = "Omer", db=None):
         self.brain = ollama_brain
         self.bot_owner = bot_owner
+        self.db = db
         self.last_action_command = None
         self.consecutive_repeats = 0
         self.fallback_consecutive_count = 0
         self.last_llm_failure_time = 0
+        self.last_goal_target = None
 
     def parse_inventory(self, items: List[Dict[str, Any]]) -> Dict[str, int]:
         """Inventory item listesini name -> count mapping'e çevir."""
@@ -119,6 +121,12 @@ class AutonomousCoopBrain:
 
         # Tech tree milestone'u al
         goal = get_current_progression_goal(inv_dict)
+        if goal["target"] != self.last_goal_target:
+            self.last_goal_target = goal["target"]
+            logger.info(f"🏆 [Milestone Checkpoint] Era: {goal['stage']} -> Target: {goal['target']}")
+            if self.db:
+                self.db.save_progression(goal["stage"], goal["target"], inv_dict)
+
         missing_ingredients = resolve_missing_ingredients(goal["target"], inv_dict)
         missing_str = ", ".join(missing_ingredients) or "All materials ready for crafting!"
 

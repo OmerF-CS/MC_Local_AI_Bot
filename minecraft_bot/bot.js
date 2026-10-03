@@ -415,11 +415,28 @@ async function autoSelfDefenseCheck() {
         const mobName = dangerMob.name.toLowerCase();
         const dist = dangerMob.position.distanceTo(bot.entity.position);
 
+        // Emergency heal/eat during combat if health drops below 10 HP
+        if (bot.health <= 10 && !isEating) {
+            const food = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
+            if (food) {
+                try {
+                    await bot.equip(food, 'hand');
+                    await bot.consume();
+                } catch (_) {}
+            }
+        }
+
         // Creeper defense: back off immediately to avoid explosion!
         if (mobName.includes('creeper') && dist < 4) {
             bot.setControlState('back', true);
             setTimeout(() => bot.setControlState('back', false), 800);
             return;
+        }
+
+        // Off-hand shield auto-equip
+        const shield = bot.inventory.items().find(i => i.name.includes('shield'));
+        if (shield && (!bot.inventory.slots[45] || !bot.inventory.slots[45].name.includes('shield'))) {
+            try { await bot.equip(shield, 'off-hand'); } catch (_) {}
         }
 
         // Equip best weapon
@@ -926,6 +943,8 @@ async function handleAction(action) {
     if (!bot) return;
 
     const { command, args } = action;
+    let actionSuccess = true;
+    let actionError = null;
 
     // Eğer bot zaten kritik bir işlemle meşgulse ve yeni bir hareket geldiyse
     if (isBusy && command !== 'stop_actions' && command !== 'say_chat') {
@@ -1070,6 +1089,16 @@ async function handleAction(action) {
                     const lesson = toolLearner.recordExperience(blocks[0].name, prep.toolEquipped, durationMs, true, gained);
                     if (lesson) console.log(`🧠 [Tool Learning] ${lesson}`);
                     bot.chat(`Gathered ${count}x ${categoryLabel}! (Used: ${prep.toolEquipped})`);
+
+                    // Tool durability check
+                    const heldTool = bot.heldItem;
+                    if (heldTool && heldTool.maxDurability) {
+                        const remainingDurability = heldTool.maxDurability - (heldTool.durabilityUsed || 0);
+                        if (remainingDurability <= 5) {
+                            console.log(`⚠️ [Tool Durability] ${heldTool.name} is low: ${remainingDurability} uses left!`);
+                            bot.chat(`Warning: ${heldTool.name} is nearly broken (${remainingDurability} uses left).`);
+                        }
+                    }
                 } catch (cErr) {
                     bot.chat(`Mining interrupted: ${cErr.message}`);
                 }
@@ -1264,16 +1293,21 @@ async function handleAction(action) {
 
             default:
                 console.log(`[Bridge] Unknown command received: ${command}`);
+                actionSuccess = false;
+                actionError = `Unknown command: ${command}`;
         }
     } catch (err) {
         console.error(`[Action Error] ${command}:`, err.message);
+        actionSuccess = false;
+        actionError = err.message;
     } finally {
         isBusy = false;
         currentActionName = 'idle';
         sendToPython({
             type: 'action_completed',
             command: command,
-            success: true,
+            success: actionSuccess,
+            error: actionError,
             state: getBotState()
         });
     }

@@ -31,7 +31,7 @@ class MinecraftAIBot:
             bot_owner=config.BOT_OWNER
         )
 
-        self.planner = AutonomousCoopBrain(self.brain, bot_owner=config.BOT_OWNER)
+        self.planner = AutonomousCoopBrain(self.brain, bot_owner=config.BOT_OWNER, db=self.db)
         self.chat_handler = MinecraftChatHandler(self)
         self.node_process: subprocess.Popen | None = None
         self.autonomous_mode = True

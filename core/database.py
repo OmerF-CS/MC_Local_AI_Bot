@@ -51,6 +51,31 @@ class Database:
                 )
             """)
 
+            # Oyun İlerlemesi ve Kilometre Taşları (Progression Checkpoints)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS progression_checkpoints (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    stage TEXT,
+                    target TEXT,
+                    inventory_json TEXT DEFAULT '{}',
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Çoklu Görev Kuyruğu (Task Queue)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS task_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    instruction TEXT,
+                    primary_action TEXT,
+                    assigned_by TEXT,
+                    priority INTEGER DEFAULT 1,
+                    status TEXT DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME
+                )
+            """)
+
     def save_location(self, name: str, x: float, y: float, z: float, description: str = "", created_by: str = ""):
         """Önemli bir Minecraft koordinatını hafızaya kaydeder."""
         with self.conn:
@@ -90,3 +115,72 @@ class Database:
                     last_seen = datetime('now'),
                     total_messages = total_messages + 1
             """, (username,))
+
+    # --- OYUN İLERLEME SİSTEMİ (PROGRESSION CHECKPOINTS) ---
+
+    def save_progression(self, stage: str, target: str, inventory: Optional[Dict[str, int]] = None):
+        """Ulaşılan yeni tech tree seviyesini veritabanına kaydeder."""
+        inv_str = json.dumps(inventory or {})
+        with self.conn:
+            self.conn.execute("""
+                INSERT INTO progression_checkpoints (stage, target, inventory_json)
+                VALUES (?, ?, ?)
+            """, (stage, target, inv_str))
+            logger.info(f"💾 Progression checkpoint saved: {stage} -> {target}")
+
+    def get_latest_progression(self) -> Optional[Dict[str, Any]]:
+        """En son kaydedilmiş ilerleme seviyesini döner."""
+        cur = self.conn.cursor()
+        cur.execute("""
+            SELECT * FROM progression_checkpoints
+            ORDER BY id DESC LIMIT 1
+        """)
+        row = cur.fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        try:
+            res["inventory"] = json.loads(res.get("inventory_json", "{}"))
+        except Exception:
+            res["inventory"] = {}
+        return res
+
+    # --- ÇOKLU GÖREV KUYRUĞU (TASK QUEUE) ---
+
+    def add_task(self, instruction: str, primary_action: str = "", assigned_by: str = "", priority: int = 1) -> int:
+        """Kuyruğa yeni bir oyuncu veya otonom görev ekler."""
+        with self.conn:
+            cur = self.conn.execute("""
+                INSERT INTO task_queue (instruction, primary_action, assigned_by, priority, status)
+                VALUES (?, ?, ?, ?, 'pending')
+            """, (instruction, primary_action, assigned_by, priority))
+            return cur.lastrowid
+
+    def get_pending_tasks(self) -> List[Dict[str, Any]]:
+        """Bekleyen görevleri öncelik sırasına göre listeler."""
+        cur = self.conn.cursor()
+        cur.execute("""
+            SELECT * FROM task_queue
+            WHERE status = 'pending'
+            ORDER BY priority DESC, id ASC
+        """)
+        return [dict(row) for row in cur.fetchall()]
+
+    def update_task_status(self, task_id: int, status: str):
+        """Görev durumunu günceller."""
+        with self.conn:
+            completed_clause = ", completed_at = datetime('now')" if status in ("completed", "cancelled") else ""
+            self.conn.execute(f"""
+                UPDATE task_queue
+                SET status = ? {completed_clause}
+                WHERE id = ?
+            """, (status, task_id))
+
+    def complete_task(self, task_id: int):
+        """Görevi tamamlandı olarak işaretler."""
+        self.update_task_status(task_id, "completed")
+
+    def clear_pending_tasks(self):
+        """Bekleyen tüm görevleri temizler."""
+        with self.conn:
+            self.conn.execute("UPDATE task_queue SET status = 'cancelled' WHERE status = 'pending'")
