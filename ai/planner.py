@@ -67,6 +67,16 @@ class AutonomousCoopBrain:
 
         # 3. Night and low health with hostiles
         if not is_day and health < 10 and nearby_hostiles and not state.get("is_guarding"):
+            dimension = str(state.get("dimension", "overworld")).lower()
+            if "nether" in dimension or "end" in dimension:
+                logger.warning("🔥 [EMERGENCY] Hostiles and low health in Nether/End! Guarding player (no beds in Nether/End).")
+                return {
+                    "text": "Dangerous mobs nearby! Defending and staying alert!",
+                    "tool_calls": [
+                        {"name": "guard_player", "arguments": {"player_name": self.bot_owner}}
+                    ]
+                }
+
             logger.warning("🌙 [EMERGENCY] Night + low health + hostiles! Seeking shelter.")
             vis_res = state.get("visible_resources", {})
             if vis_res.get("bed"):
@@ -353,8 +363,10 @@ Decide and invoke a SINGLE appropriate tool call now!"""
         if food_level < 15 and not has_eatable and not raw_meats:
             return {"name": "hunt_food", "arguments": {"animal_type": "any"}}
 
-        # 6. Gece mi? Yatak ara
-        if not state.get("is_day", True):
+        # 6. Gece mi? Yatak ara (Yalnızca Overworld'de! Nether/End'de yataklar patlar)
+        dimension = str(state.get("dimension", "overworld")).lower()
+        is_nether_or_end = "nether" in dimension or "end" in dimension
+        if not state.get("is_day", True) and not is_nether_or_end:
             vis_res = state.get("visible_resources", {})
             if vis_res.get("bed"):
                 return {"name": "sleep_in_bed", "arguments": {}}
@@ -407,6 +419,63 @@ Decide and invoke a SINGLE appropriate tool call now!"""
             if diamonds < 3:
                 return {"name": "collect_block", "arguments": {"block_name": "diamond", "count": 3}}
             return {"name": "craft_item", "arguments": {"item_name": "diamond_pickaxe", "count": 1}}
+
+        # Phase 3: Nether Portal Progression
+        if target == "nether_portal":
+            if "nether" in dimension:
+                return {"name": "attack_target", "arguments": {"target_name": "blaze"}}
+
+            obsidian_count = inv.get("obsidian", 0)
+            if obsidian_count < 10:
+                return {"name": "collect_block", "arguments": {"block_name": "obsidian", "count": 10 - obsidian_count}}
+
+            has_flint_and_steel = "flint_and_steel" in inv
+            if not has_flint_and_steel:
+                flint_count = inv.get("flint", 0)
+                iron_count = inv.get("iron_ingot", 0)
+                if iron_count < 1:
+                    raw_iron_count = inv.get("raw_iron", 0) + inv.get("iron_ore", 0)
+                    if raw_iron_count >= 1:
+                        return {"name": "smelt_item", "arguments": {"input_item": "raw_iron", "count": 1}}
+                    return {"name": "collect_block", "arguments": {"block_name": "iron", "count": 1}}
+                if flint_count < 1:
+                    return {"name": "collect_block", "arguments": {"block_name": "gravel", "count": 3}}
+                return {"name": "craft_item", "arguments": {"item_name": "flint_and_steel", "count": 1}}
+
+            return {"name": "build_nether_portal", "arguments": {}}
+
+        # Phase 3: Eye of Ender & Stronghold Tracking
+        if target == "eye_of_ender":
+            blaze_rods = inv.get("blaze_rod", 0)
+            blaze_powders = inv.get("blaze_powder", 0)
+            ender_pearls = inv.get("ender_pearl", 0)
+            eyes = inv.get("eye_of_ender", 0)
+
+            if eyes >= 12:
+                return {"name": "throw_eye_of_ender", "arguments": {}}
+
+            if blaze_rods >= 1 and blaze_powders < 2:
+                return {"name": "craft_item", "arguments": {"item_name": "blaze_powder", "count": 2}}
+
+            if blaze_powders >= 1 and ender_pearls >= 1:
+                return {"name": "craft_item", "arguments": {"item_name": "eye_of_ender", "count": 1}}
+
+            if ender_pearls < 1:
+                return {"name": "attack_target", "arguments": {"target_name": "enderman"}}
+
+            if blaze_rods < 1 and blaze_powders < 1:
+                if "nether" in dimension:
+                    return {"name": "attack_target", "arguments": {"target_name": "blaze"}}
+                return {"name": "build_nether_portal", "arguments": {}}
+
+        # Phase 3: The End & Ender Dragon Slaying
+        if target == "ender_dragon":
+            if "end" in dimension:
+                return {"name": "attack_target", "arguments": {"target_name": "ender_dragon"}}
+            vis_res = state.get("visible_resources", {})
+            if vis_res.get("end_portal_frame") or inv.get("eye_of_ender", 0) > 0:
+                return {"name": "activate_end_portal", "arguments": {}}
+            return {"name": "throw_eye_of_ender", "arguments": {}}
 
         # Default: Oyuncu yanında kal
         return {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}

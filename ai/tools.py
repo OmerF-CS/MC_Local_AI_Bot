@@ -22,7 +22,8 @@ MINECRAFT_TOOLS = [
                             "iron_chestplate", "diamond_chestplate",
                             "iron_leggings", "diamond_leggings",
                             "iron_boots", "diamond_boots",
-                            "stone_stairs", "wooden_stairs"
+                            "stone_stairs", "wooden_stairs",
+                            "flint_and_steel", "blaze_powder", "eye_of_ender"
                         ]
                     },
                     "count": {
@@ -39,13 +40,13 @@ MINECRAFT_TOOLS = [
         "type": "function",
         "function": {
             "name": "collect_block",
-            "description": "Mine and collect blocks. Examples: log, stone, iron_ore, coal_ore, diamond_ore, cobblestone, dirt, sand, obsidian, lapis_ore, gold_ore, copper_ore, deepslate_iron_ore, deepslate_diamond_ore, deepslate_coal_ore.",
+            "description": "Mine and collect blocks. Examples: log, stone, iron_ore, coal_ore, diamond_ore, cobblestone, dirt, sand, obsidian, netherrack, glowstone, lapis_ore, gold_ore, copper_ore, deepslate_iron_ore, deepslate_diamond_ore, deepslate_coal_ore.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "block_name": {
                         "type": "string",
-                        "description": "Block to collect: log, stone, iron_ore, coal_ore, diamond_ore, cobblestone, dirt, sand, obsidian, lapis_ore, gold_ore, copper_ore, deepslate_iron_ore, deepslate_diamond_ore, deepslate_coal_ore, deepslate_lapis_ore.",
+                        "description": "Block to collect: log, stone, iron_ore, coal_ore, diamond_ore, cobblestone, dirt, sand, obsidian, netherrack, glowstone, soul_sand, lapis_ore, gold_ore, copper_ore, deepslate_iron_ore, deepslate_diamond_ore, deepslate_coal_ore, deepslate_lapis_ore.",
                         "enum": [
                             "log", "wood", "stone", "cobblestone", "deepslate", "cobbled_deepslate", "blackstone",
                             "iron_ore", "deepslate_iron_ore", "coal_ore", "deepslate_coal_ore",
@@ -54,7 +55,8 @@ MINECRAFT_TOOLS = [
                             "copper_ore", "deepslate_copper_ore",
                             "lapis_ore", "deepslate_lapis_ore",
                             "redstone_ore", "deepslate_redstone_ore",
-                            "obsidian", "dirt", "sand", "gravel"
+                            "obsidian", "dirt", "sand", "gravel",
+                            "netherrack", "glowstone", "soul_sand", "basalt"
                         ]
                     },
                     "count": {
@@ -348,6 +350,42 @@ MINECRAFT_TOOLS = [
                     }
                 },
                 "required": ["player_name", "item_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_nether_portal",
+            "description": "Construct a 4x5 vertical obsidian frame and ignite it with flint_and_steel to activate a Nether Portal. Requires at least 10 obsidian blocks and flint_and_steel in inventory.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "throw_eye_of_ender",
+            "description": "Throw an Eye of Ender into the sky to track the Stronghold and detect the direction/angle of the signal.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "activate_end_portal",
+            "description": "Scan for nearby End Portal Frames (within 16m), insert Eyes of Ender into any empty frames, and activate the End Portal.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         }
     }

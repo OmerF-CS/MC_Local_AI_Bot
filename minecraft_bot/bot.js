@@ -225,6 +225,14 @@ function getBotState() {
         };
     }
 
+    let dimension = 'overworld';
+    if (bot.game && bot.game.dimension) {
+        const rawDim = String(bot.game.dimension).toLowerCase();
+        if (rawDim.includes('nether')) dimension = 'the_nether';
+        else if (rawDim.includes('end')) dimension = 'the_end';
+        else dimension = 'overworld';
+    }
+
     return {
         health: bot.health || 20,
         food: bot.food || 20,
@@ -233,6 +241,7 @@ function getBotState() {
             y: Math.round(bot.entity.position.y * 10) / 10,
             z: Math.round(bot.entity.position.z * 10) / 10
         },
+        dimension: dimension,
         inventory_items: inventoryItems,
         inventory_summary: inventorySummary,
         nearby_players: nearbyPlayers,
@@ -938,6 +947,269 @@ async function collectNearbyDrops(bot, maxDistance = 12) {
     }
 }
 
+// --- PHASE 3: NETHER & END PROGRESSION HELPERS ---
+
+async function placeBlockDirect(bot, item, targetPos) {
+    if (!item) return false;
+    const currentBlock = bot.blockAt(targetPos);
+    if (currentBlock && currentBlock.name !== 'air' && currentBlock.name !== 'cave_air' && currentBlock.name !== 'water' && currentBlock.name !== 'lava') {
+        return true;
+    }
+
+    const directions = [
+        new Vec3(0, -1, 0),
+        new Vec3(0, 1, 0),
+        new Vec3(-1, 0, 0),
+        new Vec3(1, 0, 0),
+        new Vec3(0, 0, -1),
+        new Vec3(0, 0, 1)
+    ];
+
+    let refBlock = null;
+    let faceVector = null;
+
+    for (const dir of directions) {
+        const neighborPos = targetPos.minus(dir);
+        const neighbor = bot.blockAt(neighborPos);
+        if (neighbor && neighbor.name !== 'air' && neighbor.name !== 'cave_air' && neighbor.name !== 'water' && neighbor.name !== 'lava') {
+            refBlock = neighbor;
+            faceVector = dir;
+            break;
+        }
+    }
+
+    if (!refBlock) return false;
+
+    const dist = bot.entity.position.distanceTo(targetPos);
+    if (dist > 3.8) {
+        const { GoalNear } = goals;
+        await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 2.5)).catch(() => {});
+    }
+
+    await bot.equip(item, 'hand');
+    await bot.placeBlock(refBlock, faceVector);
+    await new Promise(r => setTimeout(r, 250));
+    return true;
+}
+
+async function buildNetherPortal(bot) {
+    const mcData = require('minecraft-data')(bot.version);
+    const portalBlockId = mcData.blocksByName['nether_portal']?.id;
+    if (portalBlockId) {
+        const existing = bot.findBlock({ matching: portalBlockId, maxDistance: 32 });
+        if (existing) {
+            bot.chat("Active Nether Portal located nearby! Stepping through... 🌀");
+            const { GoalNear } = goals;
+            await bot.pathfinder.goto(new GoalNear(existing.position.x, existing.position.y, existing.position.z, 0.5));
+            return true;
+        }
+    }
+
+    const totalObsidian = bot.inventory.items().filter(i => i.name === 'obsidian').reduce((s, i) => s + i.count, 0);
+    if (totalObsidian < 10) {
+        bot.chat(`Need at least 10 Obsidian to build a Nether Portal (have ${totalObsidian}). 🪨`);
+        return false;
+    }
+
+    const flintItem = bot.inventory.items().find(i => i.name === 'flint_and_steel');
+    if (!flintItem) {
+        bot.chat("Flint and Steel is required to ignite the Nether Portal! 🔥");
+        return false;
+    }
+
+    bot.chat("Surveying location to construct Nether Portal frame (4x5 obsidian)... 🏗️");
+
+    const basePos = bot.entity.position.floored().offset(2, 0, 0);
+    const fillerItem = bot.inventory.items().find(i => ['dirt', 'cobblestone', 'stone', 'netherrack'].includes(i.name)) || bot.inventory.items().find(i => i.name === 'obsidian');
+
+    for (let dx = 0; dx <= 3; dx++) {
+        const groundPos = basePos.offset(dx, -1, 0);
+        const ground = bot.blockAt(groundPos);
+        if (!ground || ground.name === 'air' || ground.name === 'cave_air' || ground.name === 'water' || ground.name === 'lava') {
+            if (fillerItem) {
+                await placeBlockDirect(bot, fillerItem, groundPos).catch(() => {});
+            }
+        }
+    }
+
+    for (let dx = 1; dx <= 2; dx++) {
+        for (let dy = 1; dy <= 3; dy++) {
+            const insidePos = basePos.offset(dx, dy, 0);
+            const insideBlock = bot.blockAt(insidePos);
+            if (insideBlock && insideBlock.name !== 'air' && insideBlock.name !== 'cave_air') {
+                try {
+                    await bot.dig(insideBlock);
+                } catch (_) {}
+            }
+        }
+    }
+
+    const portalObsidianOffsets = [
+        new Vec3(1, 0, 0),
+        new Vec3(2, 0, 0),
+        new Vec3(0, 1, 0),
+        new Vec3(0, 2, 0),
+        new Vec3(0, 3, 0),
+        new Vec3(3, 1, 0),
+        new Vec3(3, 2, 0),
+        new Vec3(3, 3, 0),
+        new Vec3(1, 4, 0),
+        new Vec3(2, 4, 0)
+    ];
+
+    const scaffoldPos = basePos.offset(0, 4, 0);
+    if (fillerItem) {
+        await placeBlockDirect(bot, fillerItem, scaffoldPos).catch(() => {});
+    }
+
+    for (const offset of portalObsidianOffsets) {
+        const obsItem = bot.inventory.items().find(i => i.name === 'obsidian');
+        if (!obsItem) {
+            bot.chat("Ran out of obsidian while building frame!");
+            return false;
+        }
+        const targetPos = basePos.plus(offset);
+        const currentB = bot.blockAt(targetPos);
+        if (currentB && currentB.name === 'obsidian') continue;
+
+        const placed = await placeBlockDirect(bot, obsItem, targetPos);
+        if (!placed) {
+            console.log(`[NetherPortal] Could not place obsidian at ${targetPos}`);
+        }
+    }
+
+    bot.chat("Frame complete! Striking flint and steel to ignite Nether Portal... 🔥");
+    const readyFlint = bot.inventory.items().find(i => i.name === 'flint_and_steel');
+    if (readyFlint) {
+        await bot.equip(readyFlint, 'hand');
+        const igniteBase = bot.blockAt(basePos.offset(1, 0, 0));
+        if (igniteBase) {
+            try {
+                await bot.activateBlock(igniteBase, new Vec3(0, 1, 0));
+            } catch (ignErr) {
+                console.warn(`[NetherPortal] Ignite error: ${ignErr.message}`);
+            }
+        }
+    }
+
+    await new Promise(r => setTimeout(r, 1200));
+
+    const interiorPos = basePos.offset(1, 1, 0);
+    const litPortal = bot.blockAt(interiorPos);
+    if (litPortal && (litPortal.name.includes('portal') || litPortal.name === 'fire')) {
+        bot.chat("Portal activated! Entering Nether dimension! 🌌");
+        const { GoalNear } = goals;
+        await bot.pathfinder.goto(new GoalNear(interiorPos.x, interiorPos.y, interiorPos.z, 0.5)).catch(() => {});
+        return true;
+    }
+
+    bot.chat("Nether Portal frame built! Standing by to ignite or enter.");
+    return true;
+}
+
+async function handleThrowEyeOfEnder(bot) {
+    const eyeItem = bot.inventory.items().find(i => i.name === 'eye_of_ender');
+    if (!eyeItem) {
+        bot.chat("I don't have an Eye of Ender in inventory to throw! 👁️");
+        return false;
+    }
+
+    bot.chat("Throwing Eye of Ender to scan Stronghold trajectory... 👁️");
+    await bot.equip(eyeItem, 'hand');
+    await bot.look(bot.entity.yaw, 0.6, true);
+    bot.activateItem();
+
+    let foundSignal = null;
+    const startCheck = Date.now();
+    while (Date.now() - startCheck < 3000) {
+        for (const id in bot.entities) {
+            const e = bot.entities[id];
+            if (e && (e.name === 'eye_of_ender' || e.name === 'eye_of_ender_signal' || e.entityType === 83)) {
+                foundSignal = e;
+                break;
+            }
+        }
+        if (foundSignal) break;
+        await new Promise(r => setTimeout(r, 200));
+    }
+
+    if (foundSignal) {
+        const dx = foundSignal.position.x - bot.entity.position.x;
+        const dz = foundSignal.position.z - bot.entity.position.z;
+        const angleDeg = Math.round(Math.atan2(-dx, -dz) * (180 / Math.PI));
+        bot.chat(`Stronghold signal tracked! Heading: ${angleDeg}°, moving towards (${Math.round(foundSignal.position.x)}, ${Math.round(foundSignal.position.z)}). 🧭`);
+        return true;
+    } else {
+        bot.chat("Eye of Ender launched! Advancing towards the Stronghold signal. 🏃");
+        return true;
+    }
+}
+
+async function handleActivateEndPortal(bot) {
+    const mcData = require('minecraft-data')(bot.version);
+    const frameId = mcData.blocksByName['end_portal_frame']?.id;
+    if (!frameId) {
+        bot.chat("End Portal Frame definition not found in game data.");
+        return false;
+    }
+
+    const frameBlocks = bot.findBlocks({ matching: frameId, maxDistance: 16, count: 16 });
+    if (frameBlocks.length === 0) {
+        bot.chat("No End Portal frames found within 16m radar.");
+        return false;
+    }
+
+    bot.chat(`Found ${frameBlocks.length} End Portal frames! Checking sockets... 👁️`);
+
+    const eyeItem = bot.inventory.items().find(i => i.name === 'eye_of_ender');
+    if (!eyeItem) {
+        bot.chat("Need Eye of Ender in inventory to activate End Portal frames!");
+        return false;
+    }
+
+    let filledCount = 0;
+    for (const pos of frameBlocks) {
+        const b = bot.blockAt(pos);
+        if (!b) continue;
+
+        const hasEye = (b._properties && (b._properties.eye === 'true' || b._properties.eye === true)) ||
+                       (b.properties && (b.properties.eye === 'true' || b.properties.eye === true)) ||
+                       (b.stateValues && b.stateValues.eye === 1);
+
+        if (!hasEye) {
+            try {
+                const { GoalNear } = goals;
+                await bot.pathfinder.goto(new GoalNear(pos.x, pos.y, pos.z, 2.5));
+                const currentEye = bot.inventory.items().find(i => i.name === 'eye_of_ender');
+                if (!currentEye) {
+                    bot.chat("Ran out of Eyes of Ender while filling frames!");
+                    break;
+                }
+                await bot.equip(currentEye, 'hand');
+                await bot.activateBlock(b);
+                filledCount++;
+                await new Promise(r => setTimeout(r, 400));
+            } catch (err) {
+                console.warn(`[EndPortal] Failed to place eye on frame: ${err.message}`);
+            }
+        }
+    }
+
+    const portalId = mcData.blocksByName['end_portal']?.id;
+    if (portalId) {
+        const portal = bot.findBlock({ matching: portalId, maxDistance: 16 });
+        if (portal) {
+            bot.chat("🌌 The End Portal is fully ACTIVATED! Entering the End dimension to face the Ender Dragon!");
+            const { GoalNear } = goals;
+            await bot.pathfinder.goto(new GoalNear(portal.position.x, portal.position.y, portal.position.z, 0.5));
+            return true;
+        }
+    }
+
+    bot.chat(`Placed ${filledCount} Eye(s) of Ender in portal frames.`);
+    return true;
+}
+
 // --- EYLEMLERİN (ACTIONS) İCRASI (ZAMAN AŞIMI VE ÇAKIŞMA KORUMALI) ---
 async function handleAction(action) {
     if (!bot) return;
@@ -952,7 +1224,7 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates'].includes(command)) {
+    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal'].includes(command)) {
         isBusy = true;
         currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || ''}`;
         sendToPython({
@@ -1151,6 +1423,13 @@ async function handleAction(action) {
             }
 
             case 'sleep_in_bed': {
+                const curDim = (bot.game && bot.game.dimension) ? String(bot.game.dimension).toLowerCase() : '';
+                if (curDim.includes('nether') || curDim.includes('end')) {
+                    bot.chat("Cannot sleep in this dimension! Beds explode violently here! 💥");
+                    actionSuccess = false;
+                    actionError = "Cannot sleep in Nether or End (beds explode)";
+                    break;
+                }
                 const bed = bot.findBlock({ matching: b => b.name.includes('bed'), maxDistance: 16 });
                 if (bed) {
                     try {
@@ -1287,6 +1566,39 @@ async function handleAction(action) {
                     bot.chat(`Placed ${item.name}!`);
                 } else {
                     bot.chat(`Could not find a clear spot to place ${blockName}.`);
+                }
+                break;
+            }
+
+            case 'build_nether_portal': {
+                isBusy = true;
+                currentActionName = 'building_nether_portal';
+                const ok = await buildNetherPortal(bot);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to build or ignite Nether portal";
+                }
+                break;
+            }
+
+            case 'throw_eye_of_ender': {
+                isBusy = true;
+                currentActionName = 'throwing_eye_of_ender';
+                const ok = await handleThrowEyeOfEnder(bot);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to throw Eye of Ender";
+                }
+                break;
+            }
+
+            case 'activate_end_portal': {
+                isBusy = true;
+                currentActionName = 'activating_end_portal';
+                const ok = await handleActivateEndPortal(bot);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to activate End portal";
                 }
                 break;
             }

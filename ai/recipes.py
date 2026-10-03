@@ -79,6 +79,24 @@ RECIPES: Dict[str, Dict[str, Any]] = {
         "ingredients": "3 Iron Ingots",
         "output_count": 1,
         "description": "Carries water for MLG drops and portal casting, or scoops lava for fuel."
+    },
+    "flint_and_steel": {
+        "name": "Flint and Steel",
+        "ingredients": "1 Iron Ingot + 1 Flint",
+        "output_count": 1,
+        "description": "Ignites fire to activate Nether portals, ignite TNT, or create light."
+    },
+    "blaze_powder": {
+        "name": "Blaze Powder",
+        "ingredients": "1 Blaze Rod",
+        "output_count": 2,
+        "description": "Crafted from blaze rods; essential for Eye of Ender and brewing."
+    },
+    "eye_of_ender": {
+        "name": "Eye of Ender",
+        "ingredients": "1 Ender Pearl + 1 Blaze Powder",
+        "output_count": 1,
+        "description": "Used to locate Strongholds and activate the End Portal."
     }
 }
 

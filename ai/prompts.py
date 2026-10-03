@@ -14,9 +14,9 @@ Your Partner & Mission Lead: {bot_owner}
 1. [CRITICAL] Health < 5 AND hostile mobs nearby → guard_player OR attack_target (IMMEDIATE)
 2. [CRITICAL] Food < 3 AND no food in inventory → hunt_food (IMMEDIATE)
 3. [CRITICAL] Food < 3 AND have food in inventory → eat_food (IMMEDIATE)
-4. [HIGH] Night (is_day=false) + Health < 10 + Hostiles nearby → sleep_in_bed OR follow_player
+4. [HIGH] Night (is_day=false in Overworld) + Health < 10 + Hostiles nearby → sleep_in_bed OR follow_player (WARNING: NEVER sleep in Nether or End, beds explode!)
 5. [ACTIVE TASK] {bot_owner} assigned a specific instruction → fulfill it NOW
-6. [PROGRESSION] Check Tech Tree milestone - missing materials? → collect_block OR craft_item
+6. [PROGRESSION] Check Tech Tree milestone: Nether era → build_nether_portal / attack_target(blaze). End era → throw_eye_of_ender / activate_end_portal / attack_target(ender_dragon)
 7. [SURVIVAL] Low hunger (< 15) → eat_food (if have) OR hunt_food (if don't)
 8. [PARTNERSHIP] {bot_owner} too far (distance > 16 blocks) → follow_player
 9. [AUTONOMY] Free to roam → advance gear OR mine visible resources OR explore
@@ -24,6 +24,7 @@ Your Partner & Mission Lead: {bot_owner}
 === YOUR CURRENT STATE ===
 Health: {health}/20 HP ({hearts} Hearts) [CRITICAL IF < 5, DANGEROUS IF < 10]
 Hunger: {food}/20 [CRITICAL IF < 3, DANGEROUS IF < 15]
+Dimension: {dimension} [CRITICAL: NEVER sleep in Nether or End - beds explode!]
 Position: {position}
 Biome: {biome}
 Time: {time_status}
@@ -136,12 +137,15 @@ def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic,
     else:
         active_task_header = "🕹️ NO ACTIVE MISSION: You are free to explore and progress autonomously."
     
+    dimension = state.get("dimension", "overworld")
+
     return MINECRAFT_SYSTEM_PROMPT.format(
         bot_name=bot_name,
         bot_owner=bot_owner,
         health=health,
         hearts=hearts,
         food=food,
+        dimension=dimension,
         time_status=time_status,
         guard_status=guard_status,
         position=pos_str,

@@ -139,6 +139,21 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("say_chat", {"message": "Stopped actions. Standing by."})
                     return
 
+                elif cmd_name in ("portal", "nether_portal"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "build_nether_portal"}
+                    await self.bot.bridge.send_action("build_nether_portal", {})
+                    return
+
+                elif cmd_name in ("eye", "throw_eye"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "throw_eye_of_ender"}
+                    await self.bot.bridge.send_action("throw_eye_of_ender", {})
+                    return
+
+                elif cmd_name in ("end", "end_portal", "activate_portal"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "activate_end_portal"}
+                    await self.bot.bridge.send_action("activate_end_portal", {})
+                    return
+
                 elif cmd_name == "status":
                     hp = state.get("health", 20)
                     fd = state.get("food", 20)
@@ -176,7 +191,8 @@ class MinecraftChatHandler:
         action_tools = {
             "collect_block", "craft_item", "guard_player", "follow_player",
             "hunt_food", "smelt_item", "go_to_coordinates",
-            "go_to_saved_location", "attack_target", "eat_food"
+            "go_to_saved_location", "attack_target", "eat_food",
+            "build_nether_portal", "throw_eye_of_ender", "activate_end_portal"
         }
         assigned_actions = [tc for tc in tool_calls if tc.get("name") in action_tools]
         if assigned_actions:
