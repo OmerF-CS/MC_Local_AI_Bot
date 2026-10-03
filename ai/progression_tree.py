@@ -80,6 +80,26 @@ TECH_TREE: Dict[str, Dict[str, Any]] = {
         "ingredients": {"diamond": 3, "stick": 2},
         "description": "Mines obsidian to build portals or enchantment tables."
     },
+    "paper": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"sugar_cane": 3},
+        "description": "Crafted from sugar cane to make books and maps."
+    },
+    "book": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"paper": 3, "leather": 1},
+        "description": "Combined with obsidian and diamonds to craft an enchanting table."
+    },
+    "enchanting_table": {
+        "requires_tools": ["crafting_table", "diamond_pickaxe"],
+        "ingredients": {"obsidian": 4, "diamond": 2, "book": 1},
+        "description": "Imbues weapons, armor, and tools with powerful magical enchantments."
+    },
+    "bookshelf": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"book": 3, "planks": 6},
+        "description": "Surrounds enchanting table to unlock up to Level 30 max enchantments."
+    },
 
     # --- NETHER AGE ---
     "nether_portal": {

@@ -480,5 +480,72 @@ MINECRAFT_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "enchant_gear",
+            "description": "Enchant equipped weapons, armor, or tools using an enchanting table, XP levels, and lapis lazuli catalyst.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "gear_type": {
+                        "type": "string",
+                        "description": "Gear to enchant: 'auto', 'sword', 'chestplate', 'helmet', 'leggings', 'boots', 'bow', or 'pickaxe'.",
+                        "enum": ["auto", "sword", "chestplate", "helmet", "leggings", "boots", "bow", "pickaxe"],
+                        "default": "auto"
+                    },
+                    "target_level": {
+                        "type": "integer",
+                        "description": "Desired enchantment tier or minimum level (1 to 30). Default 15.",
+                        "default": 15
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_nether_outpost",
+            "description": "Construct a blast-resistant cobblestone/deepslate enclosure surrounding the Nether portal to protect against Ghast fireball explosions and hostile mob intrusions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "wall_material": {
+                        "type": "string",
+                        "description": "Blast-resistant building material: 'auto', 'cobblestone', 'cobbled_deepslate', 'stone', or 'blackstone'.",
+                        "enum": ["auto", "cobblestone", "cobbled_deepslate", "stone", "blackstone"],
+                        "default": "auto"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bridge_chasm",
+            "description": "Safely bridge across voids, lava lakes, or chasms by crouching (sneaking) and placing blocks beneath feet iteratively without falling.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "description": "Direction to bridge: 'forward', 'north', 'south', 'east', or 'west'.",
+                        "enum": ["forward", "north", "south", "east", "west"],
+                        "default": "forward"
+                    },
+                    "distance": {
+                        "type": "integer",
+                        "description": "Number of blocks to extend the bridge (default 5).",
+                        "default": 5
+                    }
+                },
+                "required": []
+            }
+        }
     }
 ]

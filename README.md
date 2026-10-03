@@ -102,6 +102,15 @@ The bot uses an asynchronous decoupled architecture separating high-level strate
 - **Zero-Resource Burrowing (`burrow`)**: If unarmed with zero blocks, digs 3 blocks deep into the terrain and seals the roof with a mined block for 100% immunity to mobs.
 - **Interior Lighting & Safe Breakout (`break_out_shelter`)**: Places torches inside to prevent monster spawns, and mines an exit once daylight arrives and health regenerates.
 
+### ✨ Autonomous Enchanting & XP Engine
+- **XP & Catalyst Management (`enchant_gear`)**: Tracks player XP levels (levels 15–30) and lapis lazuli catalyst availability. Automatically places and uses Enchanting Tables.
+- **Optimal Gear Buff Priorities**: Prioritizes Diamond Weapons (`Sharpness`, `Looting`), Diamond Armor (`Protection`, `Unbreaking`), Bows (`Power`, `Infinity`), and Pickaxes (`Efficiency`, `Fortune`).
+- **Pipeline Automation**: Manages sugar cane $\to$ paper $\to$ book $\to$ bookshelf chains, optimizing 15-bookshelf perimeter geometry for Level 30 max enchants.
+
+### 🛡️ Tactical Nether Outposts & Void Bridging
+- **Ghast-Proof Forts (`build_nether_outpost`)**: Encases Nether portals in blast-resistant cobblestone/blackstone (blast resistance $\ge 6$), ensuring Ghast fireballs cannot extinguish portals or leave the team stranded.
+- **Safe Crouch-Bridging (`bridge_chasm`)**: Activates `sneak` controls to bridge across lava lakes or End void chasms without ever falling off edges.
+
 ### 🛡️ Dimension Safety & Health Reflexes
 - **Exploding Bed Prevention**: Strictly forbids bed sleeping in `the_nether` and `the_end`, preventing catastrophic explosions.
 - **Emergency Reflexes**: Bypasses LLM cooldown instantly when health drops $\le 6$ HP or hunger drops $\le 4$, sealing into shelter or consuming food.
@@ -200,6 +209,9 @@ You can talk to the bot normally in chat or use **instant shortcut commands** (0
 | `!farm` / `!bread` | Harvests hay bales, bakes fresh bread, and harvests ripe crops |
 | `!shelter` / `!bunker` | Constructs an emergency bunker with any solid blocks or digs a sealed burrow |
 | `!unbunker` | Safely breaks out of shelter when danger passes |
+| `!enchant` / `!buyu` | Enchants weapons, armor, or tools with lapis and XP at an enchanting table |
+| `!outpost` / `!nether_outpost` | Builds a blast-resistant cobblestone fort around the Nether portal |
+| `!bridge [distance]` | Crouch-bridges safely across chasms, lava, or End void without falling |
 | `!follow` / `!come` | Follows the owner |
 | `!guard` | Defends the owner against hostile mobs |
 | `!status` | Reports current HP, hunger, coordinates, and inventory |

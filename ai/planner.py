@@ -354,7 +354,7 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                 return {"name": "sleep_in_bed", "arguments": {}}
 
         # 2. Partner distance check - regroup if too far
-        if owner_info and owner_info.get("distance", 0) > 16:
+        if isinstance(owner_info, dict) and owner_info.get("distance", 0) > 16:
             return {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
 
         # 3. Hunger check - consume food if hungry
@@ -454,9 +454,18 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                 return {"name": "collect_block", "arguments": {"block_name": "diamond", "count": 3}}
             return {"name": "craft_item", "arguments": {"item_name": "diamond_pickaxe", "count": 1}}
 
+        # Tactical Gear Buff: Enchanting check before dangerous dimensions
+        from ai.enchanting import should_prioritize_enchanting
+        xp_level = state.get("xp_level", 0)
+        if should_prioritize_enchanting(inv, xp_level, dimension):
+            return {"name": "enchant_gear", "arguments": {"gear_type": "auto", "target_level": 15}}
+
         # Phase 3: Nether Portal Progression
         if target == "nether_portal":
             if "nether" in dimension:
+                cobble_count = inv.get("cobblestone", 0) + inv.get("cobbled_deepslate", 0) + inv.get("blackstone", 0)
+                if cobble_count >= 12 and not state.get("nether_outpost_built", False):
+                    return {"name": "build_nether_outpost", "arguments": {"wall_material": "auto"}}
                 return {"name": "attack_target", "arguments": {"target_name": "blaze"}}
 
             obsidian_count = inv.get("obsidian", 0)

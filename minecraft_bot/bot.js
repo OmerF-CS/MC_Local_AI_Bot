@@ -30,6 +30,7 @@ let isBusy = false; // Is bot currently busy with an action (prevents collision)
 let currentActionName = 'idle';
 let dragonDefeatedFlag = false;
 let isSheltered = false;
+let netherOutpostBuilt = false;
 
 // Anti-Stuck Tracking Variables
 let lastPosition = null;
@@ -310,7 +311,10 @@ function getBotState() {
         ender_dragon: enderDragonInfo,
         dragon_defeated: dragonDefeated,
         dragon_health: enderDragonInfo ? enderDragonInfo.health : (dragonDefeated ? 0 : 200),
-        is_sheltered: isSheltered
+        is_sheltered: isSheltered,
+        nether_outpost_built: netherOutpostBuilt,
+        xp_level: bot.experience ? bot.experience.level : 0,
+        xp_points: bot.experience ? bot.experience.points : 0
     };
 }
 
@@ -578,6 +582,14 @@ function createBot() {
             handleAction({ command: 'build_shelter', args: { mode: 'auto' } });
         } else if (cleanMsg === '!unbunker' || cleanMsg === '!unshelter' || cleanMsg === '!exit_shelter') {
             handleAction({ command: 'break_out_shelter', args: {} });
+        } else if (cleanMsg === '!enchant' || cleanMsg === '!buyu') {
+            handleAction({ command: 'enchant_gear', args: { gear_type: 'auto', target_level: 15 } });
+        } else if (cleanMsg === '!outpost' || cleanMsg === '!nether_outpost') {
+            handleAction({ command: 'build_nether_outpost', args: { wall_material: 'auto' } });
+        } else if (cleanMsg.startsWith('!bridge')) {
+            const parts = cleanMsg.split(' ');
+            const dist = parts.length > 1 && !isNaN(parseInt(parts[1])) ? parseInt(parts[1]) : 5;
+            handleAction({ command: 'bridge_chasm', args: { direction: 'forward', distance: dist } });
         }
 
         sendToPython({
@@ -1808,6 +1820,209 @@ async function breakOutShelter(bot) {
     return true;
 }
 
+// --- AUTONOMOUS ENCHANTING & XP ENGINE ---
+async function enchantGear(bot, gearType = 'auto', targetLevel = 15) {
+    if (!bot || !bot.entity) return false;
+    const { GoalNear } = goals;
+    const mcData = require('minecraft-data')(bot.version);
+
+    const currentXp = bot.experience ? bot.experience.level : 0;
+    const lapis = bot.inventory.items().find(i => i.name === 'lapis_lazuli');
+    if (!lapis || lapis.count < 1) {
+        bot.chat("I need Lapis Lazuli to enchant gear! Please supply lapis or help me mine it. 💠");
+        return false;
+    }
+    if (currentXp < 1) {
+        bot.chat(`I don't have enough XP levels to enchant! Current level: ${currentXp}. Let's slay mobs or smelt ores first. ✨`);
+        return false;
+    }
+
+    const GEAR_CANDIDATES = [
+        'diamond_sword', 'diamond_chestplate', 'diamond_leggings', 'diamond_helmet', 'diamond_boots',
+        'bow', 'diamond_pickaxe', 'diamond_axe',
+        'iron_sword', 'iron_chestplate', 'iron_leggings', 'iron_helmet', 'iron_boots', 'iron_pickaxe'
+    ];
+
+    let targetItem = null;
+    if (gearType !== 'auto') {
+        targetItem = bot.inventory.items().find(i => i.name.toLowerCase().includes(gearType.toLowerCase()));
+    }
+    if (!targetItem) {
+        for (const candidate of GEAR_CANDIDATES) {
+            const item = bot.inventory.items().find(i => i.name === candidate);
+            if (item) {
+                targetItem = item;
+                break;
+            }
+        }
+    }
+
+    if (!targetItem) {
+        bot.chat("No enchantable equipment found in my inventory! 🛡️");
+        return false;
+    }
+
+    let tableBlockId = mcData.blocksByName['enchanting_table']?.id;
+    let tableBlock = tableBlockId ? bot.findBlock({ matching: tableBlockId, maxDistance: 16 }) : null;
+
+    if (!tableBlock) {
+        const tableItem = bot.inventory.items().find(i => i.name === 'enchanting_table');
+        if (tableItem) {
+            bot.chat("Placing Enchanting Table from inventory... 📖✨");
+            const groundPos = bot.entity.position.offset(1, 0, 0).floored();
+            const ref = bot.blockAt(groundPos.offset(0, -1, 0));
+            if (ref && ref.name !== 'air') {
+                await bot.equip(tableItem, 'hand');
+                await bot.placeBlock(ref, new Vec3(0, 1, 0)).catch(() => {});
+                await new Promise(r => setTimeout(r, 400));
+                tableBlock = bot.findBlock({ matching: tableBlockId, maxDistance: 8 });
+            }
+        }
+    }
+
+    if (!tableBlock) {
+        bot.chat("No Enchanting Table found nearby and none in inventory! 📚");
+        return false;
+    }
+
+    await bot.pathfinder.goto(new GoalNear(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 2.5)).catch(() => {});
+
+    try {
+        bot.chat(`Opening Enchanting Table to enchant ${targetItem.name}... ✨`);
+        const tableWindow = await bot.openEnchantmentTable(tableBlock);
+
+        await tableWindow.putTargetItem(targetItem);
+        await new Promise(r => setTimeout(r, 200));
+
+        const updatedLapis = bot.inventory.items().find(i => i.name === 'lapis_lazuli');
+        if (updatedLapis) {
+            await tableWindow.putLapis(updatedLapis);
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        let choice = 0;
+        if (currentXp >= 30 && updatedLapis && updatedLapis.count >= 3) {
+            choice = 2;
+        } else if (currentXp >= 15 && updatedLapis && updatedLapis.count >= 2) {
+            choice = 1;
+        }
+
+        await tableWindow.enchant(choice);
+        await new Promise(r => setTimeout(r, 300));
+
+        await tableWindow.takeTargetItem();
+        await new Promise(r => setTimeout(r, 200));
+
+        tableWindow.close();
+        bot.chat(`🎉 Successfully enchanted ${targetItem.name}! Power increased! ⚔️🛡️`);
+        return true;
+    } catch (err) {
+        console.warn(`[Enchant] Error during enchanting: ${err.message}`);
+        bot.chat(`Enchanting encountered an issue: ${err.message}`);
+        return false;
+    }
+}
+
+// --- TACTICAL ARCHITECTURAL BLUEPRINTS ---
+async function buildNetherOutpost(bot, wallMaterial = 'auto') {
+    if (!bot || !bot.entity) return false;
+    const mcData = require('minecraft-data')(bot.version);
+
+    const BLAST_RESISTANT_NAMES = [
+        'cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'blackstone',
+        'basalt', 'polished_blackstone', 'stone_bricks', 'nether_bricks'
+    ];
+
+    const wallBlocks = bot.inventory.items().filter(i => BLAST_RESISTANT_NAMES.includes(i.name));
+    const totalWallCount = wallBlocks.reduce((s, i) => s + i.count, 0);
+
+    if (totalWallCount < 8) {
+        bot.chat(`Not enough blast-resistant blocks for Nether Outpost! Need 8+ cobblestone/blackstone, have ${totalWallCount}. 🧱`);
+        return false;
+    }
+
+    const portalBlockId = mcData.blocksByName['nether_portal']?.id;
+    let portalBlock = portalBlockId ? bot.findBlock({ matching: portalBlockId, maxDistance: 16 }) : null;
+    const centerPos = portalBlock ? portalBlock.position.floored() : bot.entity.position.floored();
+
+    bot.chat("🏰 Constructing blast-resistant Nether Outpost around portal against Ghasts! 🔥🛡️");
+
+    const shieldOffsets = [
+        new Vec3(2, 0, 0), new Vec3(2, 1, 0), new Vec3(2, 2, 0),
+        new Vec3(-2, 0, 0), new Vec3(-2, 1, 0), new Vec3(-2, 2, 0),
+        new Vec3(0, 0, 2), new Vec3(0, 1, 2), new Vec3(0, 2, 2),
+        new Vec3(0, 0, -2), new Vec3(0, 1, -2), new Vec3(0, 2, -2),
+        new Vec3(2, 0, 2), new Vec3(2, 1, 2), new Vec3(-2, 0, -2), new Vec3(-2, 1, -2),
+        new Vec3(0, 3, 0), new Vec3(1, 3, 0), new Vec3(-1, 3, 0), new Vec3(0, 3, 1), new Vec3(0, 3, -1)
+    ];
+
+    for (const off of shieldOffsets) {
+        const placePos = centerPos.offset(off.x, off.y, off.z);
+        const blockItem = bot.inventory.items().find(i => BLAST_RESISTANT_NAMES.includes(i.name));
+        if (!blockItem) break;
+        await placeBlockDirect(bot, blockItem, placePos);
+        await new Promise(r => setTimeout(r, 100));
+    }
+
+    netherOutpostBuilt = true;
+    bot.chat("✅ Nether Outpost fortified! Portal is safe from Ghast fireball explosions! 🔥🛡️");
+    return true;
+}
+
+async function bridgeChasm(bot, direction = 'forward', distance = 5) {
+    if (!bot || !bot.entity) return false;
+
+    const SOLID_NAMES = [
+        'cobblestone', 'cobbled_deepslate', 'stone', 'dirt', 'netherrack', 'end_stone',
+        'deepslate', 'blackstone', 'granite', 'diorite', 'andesite', 'sandstone'
+    ];
+
+    const bridgeBlocks = bot.inventory.items().filter(i => SOLID_NAMES.includes(i.name) || i.name.endsWith('_planks'));
+    const totalBridgeBlocks = bridgeBlocks.reduce((s, i) => s + i.count, 0);
+
+    if (totalBridgeBlocks < distance) {
+        bot.chat(`Not enough blocks to bridge ${distance}m! Have ${totalBridgeBlocks}. ⛏️`);
+        return false;
+    }
+
+    bot.chat(`🌉 Starting safe crouch-bridging for ${distance} blocks... Sneak activated! 🛡️`);
+    bot.pathfinder.stop();
+
+    bot.setControlState('sneak', true);
+
+    try {
+        let yaw = bot.entity.yaw;
+        if (direction === 'north') yaw = Math.PI;
+        else if (direction === 'south') yaw = 0;
+        else if (direction === 'west') yaw = Math.PI / 2;
+        else if (direction === 'east') yaw = -Math.PI / 2;
+
+        for (let i = 0; i < distance; i++) {
+            const currentFeet = bot.entity.position.floored();
+            const forwardVector = new Vec3(-Math.sin(yaw), 0, Math.cos(yaw)).floored();
+
+            const targetPos = currentFeet.offset(forwardVector.x, -1, forwardVector.z);
+            const blockItem = bot.inventory.items().find(i => SOLID_NAMES.includes(i.name) || i.name.endsWith('_planks'));
+            if (!blockItem) break;
+
+            await placeBlockDirect(bot, blockItem, targetPos);
+            await new Promise(r => setTimeout(r, 150));
+
+            bot.setControlState('back', true);
+            await new Promise(r => setTimeout(r, 250));
+            bot.setControlState('back', false);
+        }
+
+        bot.chat(`✅ Successfully extended safe bridge across the void! 🌉`);
+        return true;
+    } catch (err) {
+        console.warn(`[BridgeChasm] Bridging interrupted: ${err.message}`);
+        return false;
+    } finally {
+        bot.setControlState('sneak', false);
+    }
+}
+
 // --- ACTION EXECUTION ENGINE (TIMEOUT & CONCURRENCY GUARDED) ---
 async function handleAction(action) {
     if (!bot) return;
@@ -1822,9 +2037,9 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter'].includes(command)) {
+    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm'].includes(command)) {
         isBusy = true;
-        currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || args.action_type || args.mode || ''}`;
+        currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || args.action_type || args.mode || args.gear_type || ''}`;
         sendToPython({
             type: 'action_started',
             command: command,
@@ -2266,6 +2481,44 @@ async function handleAction(action) {
                 if (!ok) {
                     actionSuccess = false;
                     actionError = "Failed to break out of shelter";
+                }
+                break;
+            }
+
+            case 'enchant_gear': {
+                isBusy = true;
+                currentActionName = 'enchanting_gear';
+                const gearType = args.gear_type || 'auto';
+                const targetLevel = args.target_level || 15;
+                const ok = await enchantGear(bot, gearType, targetLevel);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to enchant gear";
+                }
+                break;
+            }
+
+            case 'build_nether_outpost': {
+                isBusy = true;
+                currentActionName = 'building_nether_outpost';
+                const wallMaterial = args.wall_material || 'auto';
+                const ok = await buildNetherOutpost(bot, wallMaterial);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to construct Nether outpost";
+                }
+                break;
+            }
+
+            case 'bridge_chasm': {
+                isBusy = true;
+                currentActionName = 'bridging_chasm';
+                const direction = args.direction || 'forward';
+                const distance = args.distance || 5;
+                const ok = await bridgeChasm(bot, direction, distance);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = "Failed to bridge chasm";
                 }
                 break;
             }

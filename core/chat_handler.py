@@ -184,6 +184,24 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("break_out_shelter", {})
                     return
 
+                elif cmd_name in ("enchant", "buyu", "büyü"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "enchant_gear"}
+                    gear = cmd_args[0] if cmd_args else "auto"
+                    await self.bot.bridge.send_action("enchant_gear", {"gear_type": gear, "target_level": 15})
+                    return
+
+                elif cmd_name in ("outpost", "nether_outpost", "fort"):
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "build_nether_outpost"}
+                    mat = cmd_args[0] if cmd_args else "auto"
+                    await self.bot.bridge.send_action("build_nether_outpost", {"wall_material": mat})
+                    return
+
+                elif cmd_name in ("bridge", "kopru", "köprü"):
+                    dist = int(cmd_args[0]) if cmd_args and cmd_args[0].isdigit() else 5
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "bridge_chasm"}
+                    await self.bot.bridge.send_action("bridge_chasm", {"direction": "forward", "distance": dist})
+                    return
+
                 elif cmd_name == "status":
                     hp = state.get("health", 20)
                     fd = state.get("food", 20)
