@@ -18,22 +18,34 @@ class OllamaBrain:
         self.bot_owner = bot_owner
         self.chat_history: List[Dict[str, Any]] = []
         self.max_history = 12
+        self.session: Optional[aiohttp.ClientSession] = None
+
+    async def ensure_session(self) -> aiohttp.ClientSession:
+        """Reuses persistent aiohttp session for connection pooling and fast Ollama inference."""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+
+    async def close(self):
+        """Closes the persistent HTTP session."""
+        if self.session and not self.session.closed:
+            await self.session.close()
 
     async def check_health(self) -> bool:
         """Ollama servisinin ayakta olup olmadığını ve modelin varlığını kontrol eder."""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.base_url}/api/tags", timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        models = [m.get("name") for m in data.get("models", [])]
-                        logger.info(f"✅ Ollama aktif. Mevcut modeller: {models}")
-                        if not any(self.model in m for m in models):
-                            logger.warning(f"⚠️ Dikkat: '{self.model}' modeli Ollama'da bulunamadı! 'ollama run {self.model}' komutunu çalıştırdığınızdan emin olun.")
-                        return True
-                    else:
-                        logger.error(f"❌ Ollama HTTP {resp.status} döndürdü.")
-                        return False
+            session = await self.ensure_session()
+            async with session.get(f"{self.base_url}/api/tags", timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    models = [m.get("name") for m in data.get("models", [])]
+                    logger.info(f"✅ Ollama aktif. Mevcut modeller: {models}")
+                    if not any(self.model in m for m in models):
+                        logger.warning(f"⚠️ Dikkat: '{self.model}' modeli Ollama'da bulunamadı! 'ollama run {self.model}' komutunu çalıştırdığınızdan emin olun.")
+                    return True
+                else:
+                    logger.error(f"❌ Ollama HTTP {resp.status} döndürdü.")
+                    return False
         except Exception as e:
             logger.error(f"❌ Ollama servisine bağlanılamadı ({self.base_url}): {e}")
             return False
@@ -123,8 +135,8 @@ class OllamaBrain:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.base_url}/api/chat", json=payload, timeout=25) as resp:
+            session = await self.ensure_session()
+            async with session.post(f"{self.base_url}/api/chat", json=payload, timeout=25) as resp:
                     if resp.status != 200:
                         err_text = await resp.text()
                         logger.error(f"❌ Ollama API hatası ({resp.status}): {err_text}")

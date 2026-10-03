@@ -61,6 +61,71 @@ class MinecraftChatHandler:
             await self.bot.bridge.send_action("say_chat", {"message": msg})
             return
 
+        # Direct Shortcut Commands (Instant 0ms latency, bypasses LLM cooldown)
+        if clean_message.startswith("!"):
+            cmd_parts = clean_message[1:].strip().split()
+            if cmd_parts:
+                cmd_name = cmd_parts[0].lower()
+                cmd_args = cmd_parts[1:]
+
+                if cmd_name in ("mine", "collect"):
+                    block = cmd_args[0] if cmd_args else "stone"
+                    count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 3
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "collect_block"}
+                    await self.bot.bridge.send_action("collect_block", {"block_name": block, "count": count})
+                    return
+
+                elif cmd_name == "craft":
+                    item = cmd_args[0] if cmd_args else "crafting_table"
+                    count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 1
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "craft_item"}
+                    await self.bot.bridge.send_action("craft_item", {"item_name": item, "count": count})
+                    return
+
+                elif cmd_name == "smelt":
+                    item = cmd_args[0] if cmd_args else "raw_iron"
+                    count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 1
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "smelt_item"}
+                    await self.bot.bridge.send_action("smelt_item", {"input_item": item, "count": count})
+                    return
+
+                elif cmd_name == "hunt":
+                    animal = cmd_args[0] if cmd_args else "any"
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "hunt_food"}
+                    await self.bot.bridge.send_action("hunt_food", {"animal_type": animal})
+                    return
+
+                elif cmd_name in ("follow", "come"):
+                    target = cmd_args[0] if cmd_args else sender
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "follow_player"}
+                    await self.bot.bridge.send_action("follow_player", {"player_name": target})
+                    return
+
+                elif cmd_name == "guard":
+                    target = cmd_args[0] if cmd_args else sender
+                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "guard_player"}
+                    await self.bot.bridge.send_action("guard_player", {"player_name": target})
+                    return
+
+                elif cmd_name in ("sleep", "bed"):
+                    await self.bot.bridge.send_action("sleep_in_bed", {})
+                    return
+
+                elif cmd_name == "stop":
+                    self.bot.active_player_task = None
+                    await self.bot.bridge.send_action("stop_actions", {})
+                    await self.bot.bridge.send_action("say_chat", {"message": "Stopped actions. Standing by."})
+                    return
+
+                elif cmd_name == "status":
+                    hp = state.get("health", 20)
+                    fd = state.get("food", 20)
+                    inv = state.get("inventory_summary", "Empty")
+                    pos = state.get("position", {})
+                    msg = f"HP: {hp}/20 | Food: {fd}/20 | Pos: ({pos.get('x',0):.0f}, {pos.get('y',0):.0f}, {pos.get('z',0):.0f}) | Inv: {inv[:60]}"
+                    await self.bot.bridge.send_action("say_chat", {"message": msg})
+                    return
+
         # Cooldown guard
         now = time.time()
         if now - self.last_response_time < self.bot.config.COOLDOWN_SECONDS:

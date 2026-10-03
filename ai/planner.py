@@ -25,6 +25,35 @@ class AutonomousCoopBrain:
             inv[name] = inv.get(name, 0) + count
         return inv
 
+    def _emergency_action(self, state: Dict[str, Any], inv: Dict[str, int]) -> Optional[Dict[str, Any]]:
+        """Immediate reflex for critical health or imminent starvation."""
+        health = state.get("health", 20)
+        food = state.get("food", 20)
+        hostiles = state.get("nearby_hostiles", [])
+
+        # Critical health (<= 6 HP / 3 hearts) with nearby hostile mobs
+        if health <= 6 and hostiles:
+            logger.warning("🚨 [EMERGENCY] Critical health with hostiles nearby! Defending.")
+            return {
+                "text": "Taking heavy damage! Defending myself!",
+                "tool_calls": [{"name": "guard_player", "arguments": {"player_name": self.bot_owner}}]
+            }
+
+        # Severe starvation (<= 4 hunger): consume food or hunt immediately
+        if food <= 4:
+            has_food = any(f in inv for f in ["cooked_beef", "cooked_porkchop", "bread", "apple", "cooked_chicken", "cooked_mutton", "baked_potato"])
+            if has_food:
+                return {
+                    "text": "Starving! Eating food now.",
+                    "tool_calls": [{"name": "eat_food", "arguments": {}}]
+                }
+            return {
+                "text": "Starving with no food! Hunting livestock immediately!",
+                "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
+            }
+
+        return None
+
     async def decide_next_action(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Analyzes real-time world, player actions, tech tree goals, and executes the optimal tool call."""
         if not state:
@@ -37,6 +66,11 @@ class AutonomousCoopBrain:
 
         items = state.get("inventory_items", [])
         inv_dict = self.parse_inventory(items)
+
+        # 0. Emergency survival reflex
+        emergency = self._emergency_action(state, inv_dict)
+        if emergency:
+            return emergency
 
         owner_info = state.get("owner_info")
         health = state.get("health", 20)
