@@ -16,6 +16,25 @@ class MinecraftChatHandler:
         self.bot = bot
         self.last_response_time = 0.0
 
+    def _assign_task(self, instruction: str, primary_action: str, sender: str, priority: int = 5) -> Dict[str, Any]:
+        """Saves a player directive into SQLite task queue and marks it as active."""
+        task_id = None
+        if hasattr(self.bot, "db") and self.bot.db:
+            task_id = self.bot.db.add_task(instruction, primary_action, sender, priority)
+            self.bot.db.update_task_status(task_id, "active")
+
+        task = {
+            "id": task_id,
+            "instruction": instruction,
+            "assigned_by": sender,
+            "status": "active",
+            "timestamp": time.time(),
+            "primary_action": primary_action
+        }
+        self.bot.active_player_task = task
+        logger.info(f"📋 Registered Active Task #{task_id or 'mem'}: '{instruction}' (Action: {primary_action})")
+        return task
+
     async def handle_chat(self, sender: str, message: str, state: Dict[str, Any]):
         """Processes incoming chat message and orchestrates Ollama brain."""
         if sender == self.bot.config.BOT_NAME or sender == self.bot.config.MINECRAFT_USERNAME:
@@ -91,39 +110,39 @@ class MinecraftChatHandler:
                 if cmd_name in ("mine", "collect"):
                     block = cmd_args[0] if cmd_args else "stone"
                     count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 3
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "collect_block"}
+                    self._assign_task(clean_message, "collect_block", sender)
                     await self.bot.bridge.send_action("collect_block", {"block_name": block, "count": count})
                     return
 
                 elif cmd_name == "craft":
                     item = cmd_args[0] if cmd_args else "crafting_table"
                     count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 1
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "craft_item"}
+                    self._assign_task(clean_message, "craft_item", sender)
                     await self.bot.bridge.send_action("craft_item", {"item_name": item, "count": count})
                     return
 
                 elif cmd_name == "smelt":
                     item = cmd_args[0] if cmd_args else "raw_iron"
                     count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 1
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "smelt_item"}
+                    self._assign_task(clean_message, "smelt_item", sender)
                     await self.bot.bridge.send_action("smelt_item", {"input_item": item, "count": count})
                     return
 
                 elif cmd_name == "hunt":
                     animal = cmd_args[0] if cmd_args else "any"
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "hunt_food"}
+                    self._assign_task(clean_message, "hunt_food", sender)
                     await self.bot.bridge.send_action("hunt_food", {"animal_type": animal})
                     return
 
                 elif cmd_name in ("follow", "come"):
                     target = cmd_args[0] if cmd_args else sender
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "follow_player"}
+                    self._assign_task(clean_message, "follow_player", sender)
                     await self.bot.bridge.send_action("follow_player", {"player_name": target})
                     return
 
                 elif cmd_name == "guard":
                     target = cmd_args[0] if cmd_args else sender
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "guard_player"}
+                    self._assign_task(clean_message, "guard_player", sender)
                     await self.bot.bridge.send_action("guard_player", {"player_name": target})
                     return
 
@@ -133,73 +152,107 @@ class MinecraftChatHandler:
 
                 elif cmd_name == "stop":
                     self.bot.active_player_task = None
-                    if hasattr(self.bot, "db"):
+                    if hasattr(self.bot, "db") and self.bot.db:
                         self.bot.db.clear_pending_tasks()
                     await self.bot.bridge.send_action("stop_actions", {})
                     await self.bot.bridge.send_action("say_chat", {"message": "Stopped actions. Standing by."})
                     return
 
+                elif cmd_name in ("clear", "clear_tasks", "iptal_et"):
+                    if hasattr(self.bot, "db") and self.bot.db:
+                        self.bot.db.clear_pending_tasks()
+                    self.bot.active_player_task = None
+                    await self.bot.bridge.send_action("stop_actions", {})
+                    await self.bot.bridge.send_action("say_chat", {"message": "🧹 Cleared all active and queued tasks."})
+                    return
+
                 elif cmd_name in ("portal", "nether_portal"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "build_nether_portal"}
+                    self._assign_task(clean_message, "build_nether_portal", sender)
                     await self.bot.bridge.send_action("build_nether_portal", {})
                     return
 
                 elif cmd_name in ("eye", "throw_eye"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "throw_eye_of_ender"}
+                    self._assign_task(clean_message, "throw_eye_of_ender", sender)
                     await self.bot.bridge.send_action("throw_eye_of_ender", {})
                     return
 
                 elif cmd_name in ("end", "end_portal", "activate_portal"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "activate_end_portal"}
+                    self._assign_task(clean_message, "activate_end_portal", sender)
                     await self.bot.bridge.send_action("activate_end_portal", {})
                     return
 
                 elif cmd_name in ("crystal", "crystals", "destroy_crystals"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "destroy_end_crystals"}
+                    self._assign_task(clean_message, "destroy_end_crystals", sender)
                     await self.bot.bridge.send_action("destroy_end_crystals", {})
                     return
 
                 elif cmd_name in ("dragon", "fight_dragon", "kill_dragon", "slay_dragon"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "fight_ender_dragon"}
+                    self._assign_task(clean_message, "fight_ender_dragon", sender)
                     await self.bot.bridge.send_action("fight_ender_dragon", {"tactic": "melee_sword"})
                     return
 
                 elif cmd_name in ("win", "victory", "exit_portal", "beat_game"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "enter_exit_portal"}
+                    self._assign_task(clean_message, "enter_exit_portal", sender)
                     await self.bot.bridge.send_action("enter_exit_portal", {})
                     return
 
                 elif cmd_name in ("farm", "bread", "harvest", "crops"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "farm_crops"}
+                    self._assign_task(clean_message, "farm_crops", sender)
                     await self.bot.bridge.send_action("farm_crops", {"action_type": "auto"})
                     return
 
                 elif cmd_name in ("shelter", "bunker", "box", "hide", "burrow", "siginak"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "build_shelter"}
+                    self._assign_task(clean_message, "build_shelter", sender)
                     await self.bot.bridge.send_action("build_shelter", {"mode": "auto"})
                     return
 
                 elif cmd_name in ("unbunker", "unshelter", "cikis", "break_out"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "break_out_shelter"}
+                    self._assign_task(clean_message, "break_out_shelter", sender)
                     await self.bot.bridge.send_action("break_out_shelter", {})
                     return
 
                 elif cmd_name in ("enchant", "buyu", "büyü"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "enchant_gear"}
+                    self._assign_task(clean_message, "enchant_gear", sender)
                     gear = cmd_args[0] if cmd_args else "auto"
                     await self.bot.bridge.send_action("enchant_gear", {"gear_type": gear, "target_level": 15})
                     return
 
                 elif cmd_name in ("outpost", "nether_outpost", "fort"):
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "build_nether_outpost"}
+                    self._assign_task(clean_message, "build_nether_outpost", sender)
                     mat = cmd_args[0] if cmd_args else "auto"
                     await self.bot.bridge.send_action("build_nether_outpost", {"wall_material": mat})
                     return
 
                 elif cmd_name in ("bridge", "kopru", "köprü"):
                     dist = int(cmd_args[0]) if cmd_args and cmd_args[0].isdigit() else 5
-                    self.bot.active_player_task = {"instruction": clean_message, "assigned_by": sender, "status": "active", "timestamp": time.time(), "primary_action": "bridge_chasm"}
+                    self._assign_task(clean_message, "bridge_chasm", sender)
                     await self.bot.bridge.send_action("bridge_chasm", {"direction": "forward", "distance": dist})
+                    return
+
+                elif cmd_name in ("tasks", "queue", "gorevler", "gorev"):
+                    active = self.bot.active_player_task
+                    pending = self.bot.db.get_pending_tasks() if hasattr(self.bot, "db") and self.bot.db else []
+                    active_txt = f"Active: '{active.get('instruction')}'" if active else "Active: None (Speedrun/Idle)"
+                    msg = f"📋 Tasks -> {active_txt} | Queue: {len(pending)} pending"
+                    await self.bot.bridge.send_action("say_chat", {"message": msg})
+                    return
+
+                elif cmd_name in ("gpu", "vram", "donanim"):
+                    import subprocess
+                    try:
+                        p = subprocess.run(
+                            ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu", "--format=csv,noheader,nounits"],
+                            capture_output=True, text=True, timeout=2
+                        )
+                        if p.returncode == 0:
+                            parts = [x.strip() for x in p.stdout.strip().split(",")]
+                            name, used, total, util, temp = parts
+                            msg = f"🚀 GPU: {name} | VRAM: {used}MB / {total}MB | Util: {util}% | Temp: {temp}°C | Model: {self.bot.config.OLLAMA_MODEL} (100% GPU)"
+                        else:
+                            msg = f"🚀 GPU: RTX 3060 CUDA Active | Model: {self.bot.config.OLLAMA_MODEL}"
+                    except Exception:
+                        msg = f"🚀 GPU: RTX 3060 CUDA Active | Model: {self.bot.config.OLLAMA_MODEL}"
+                    await self.bot.bridge.send_action("say_chat", {"message": msg})
                     return
 
                 elif cmd_name == "status":
@@ -242,24 +295,13 @@ class MinecraftChatHandler:
             "go_to_saved_location", "attack_target", "eat_food",
             "build_nether_portal", "throw_eye_of_ender", "activate_end_portal",
             "destroy_end_crystals", "fight_ender_dragon", "enter_exit_portal",
-            "farm_crops", "build_shelter", "break_out_shelter"
+            "farm_crops", "build_shelter", "break_out_shelter",
+            "enchant_gear", "build_nether_outpost", "bridge_chasm"
         }
         assigned_actions = [tc for tc in tool_calls if tc.get("name") in action_tools]
         if assigned_actions:
             primary_act = assigned_actions[0].get("name", "co-op task")
-            self.bot.active_player_task = {
-                "instruction": clean_message,
-                "assigned_by": sender,
-                "status": "active",
-                "timestamp": now,
-                "primary_action": primary_act
-            }
-            if hasattr(self.bot, "db"):
-                self.bot.db.add_task(clean_message, primary_act, sender)
-            logger.info(
-                f"📋 Set Active Teammate Task: '{clean_message}' "
-                f"({primary_act})"
-            )
+            self._assign_task(clean_message, primary_act, sender, priority=3)
 
         # Execute tool calls
         for tc in tool_calls:

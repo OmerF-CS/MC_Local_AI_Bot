@@ -45,6 +45,7 @@ class MinecraftAIBot:
         self.bridge.on_spawn_callback = self.on_bot_spawn
         self.bridge.on_death_callback = self.on_bot_death
         self.bridge.on_game_won_callback = self.on_game_won
+        self.bridge.on_action_completed_callback = self.on_action_completed
         
         # Signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -54,6 +55,41 @@ class MinecraftAIBot:
         """Signal handler for graceful shutdown."""
         logger.warning(f"⚠️ Received signal {sig}. Initiating graceful shutdown...")
         self._shutdown_event.set()
+
+    async def on_action_completed(self, cmd: str, success: bool, error: Optional[str], state: Dict[str, Any]):
+        """Called when an action finishes execution on Mineflayer."""
+        logger.info(f"🏁 Action finished: {cmd} (success={success}, error={error})")
+        if self.active_player_task:
+            task = self.active_player_task
+            task_id = task.get("id")
+            instruction = task.get("instruction", cmd)
+            if success:
+                logger.info(f"✅ Player task completed successfully: '{instruction}'")
+                if self.db and task_id:
+                    self.db.complete_task(task_id)
+                await self.bridge.send_action("say_chat", {
+                    "message": f"✅ Completed task: '{instruction}'! Ready for next task."
+                })
+            else:
+                logger.warning(f"⚠️ Player task failed or interrupted: '{instruction}' (Error: {error})")
+                if self.db and task_id:
+                    self.db.update_task_status(task_id, "failed")
+                await self.bridge.send_action("say_chat", {
+                    "message": f"⚠️ Task '{instruction}' had an issue: {error or 'interrupted'}"
+                })
+            self.active_player_task = None
+
+        # Check if there are queued pending tasks in SQLite
+        if self.db:
+            pending = self.db.get_pending_tasks()
+            if pending:
+                next_task = pending[0]
+                self.db.update_task_status(next_task["id"], "active")
+                self.active_player_task = next_task
+                logger.info(f"📋 Promoted next queued task to active: #{next_task['id']} '{next_task['instruction']}'")
+                await self.bridge.send_action("say_chat", {
+                    "message": f"📋 Starting next queued task: '{next_task['instruction']}'"
+                })
 
     async def on_bot_spawn(self, state):
         """Called when the bot successfully spawns into the world."""

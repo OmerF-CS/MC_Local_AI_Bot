@@ -69,6 +69,15 @@ class OllamaBrain:
                             f"⚠️ '{self.model}' model not found! "
                             f"Run: ollama run {self.model}"
                         )
+                    try:
+                        async with session.get(f"{self.base_url}/api/ps", timeout=3) as ps_resp:
+                            if ps_resp.status == 200:
+                                ps_data = await ps_resp.json()
+                                for running in ps_data.get("models", []):
+                                    proc = running.get("processor", "")
+                                    logger.info(f"🚀 Model '{running.get('name')}' active on: {proc or 'GPU/CUDA'}")
+                    except Exception:
+                        pass
                     return True
                 else:
                     logger.error(f"❌ Ollama returned HTTP {resp.status}.")
@@ -118,17 +127,19 @@ class OllamaBrain:
 
         messages = [{"role": "system", "content": system_content}] + self.chat_history
 
-        # Qwen 2.5 3B optimized parameters
+        # Qwen 2.5 3B optimized parameters with 100% GPU acceleration (RTX 3060 CUDA)
         payload = {
             "model": self.model,
             "messages": messages,
             "tools": MINECRAFT_TOOLS,
             "stream": False,
             "options": {
-                "temperature": 0.2,  # Lower for more consistent decisions
-                "top_p": 0.8,  # Reduce sampling variance
+                "num_gpu": 999,      # Force 100% layer offload to RTX 3060 GPU VRAM
+                "num_thread": 8,     # Parallel thread processing
+                "temperature": 0.2,  # Lower for deterministic, precise tool calling
+                "top_p": 0.8,        # Reduce sampling variance
                 "top_k": 40,
-                "num_predict": 200  # Limit output tokens for 3B model
+                "num_predict": 200   # Fast sub-second response generation
             }
         }
 

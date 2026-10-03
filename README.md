@@ -215,6 +215,9 @@ You can talk to the bot normally in chat or use **instant shortcut commands** (0
 | `!follow` / `!come` | Follows the owner |
 | `!guard` | Defends the owner against hostile mobs |
 | `!status` | Reports current HP, hunger, coordinates, and inventory |
+| `!tasks` / `!queue` | Lists active task and pending SQLite queue length |
+| `!clear` | Cancels all active and queued tasks |
+| `!gpu` | Displays RTX 3060 VRAM, GPU utilization, and model acceleration |
 | `!stop` | Immediately interrupts all actions and clears task queue |
 | `beat the game` | Activates autonomous speedrun progression mode |
 
