@@ -1,85 +1,223 @@
-# 🎮 MC Local AI Bot (Ollama + Mineflayer Autonomous Co-op Player)
+# 🎮 MC Local AI Bot
 
-Bu proje, Minecraft dünyasında size yol arkadaşlığı yapan, sohbet eden, oyuncuyu takip eden, maden ve kaynak toplayan, canavarlardan koruyan, yemek avlayan ve tüm kararlarını **Lokal Yapay Zeka (Ollama)** ile alan otonom bir Minecraft insan-benzeri co-op oyuncu botudur.
+> **Autonomous Human-Like Minecraft Co-op Companion Powered 100% Locally by Ollama & Mineflayer**
+
+[![Status: Active Development](https://img.shields.io/badge/status-active%20development%20(alpha)-orange.svg)](IMPLEMENTATION_ROADMAP.md)
+[![Progress: 90%](https://img.shields.io/badge/progress-90%25%20(Phase%203%20Complete)-brightgreen.svg)](IMPLEMENTATION_ROADMAP.md)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Node.js: 18+](https://img.shields.io/badge/node.js-18%2B-green.svg)](https://nodejs.org/)
+[![LLM: Ollama](https://img.shields.io/badge/LLM-Ollama%20(Qwen%202.5)-purple.svg)](https://ollama.com/)
 
 ---
 
-## 📐 Sistem Mimarisi
+> [!IMPORTANT]
+> ### ⚠️ Project Status: Active Development / Alpha (v0.3.0)
+> **MC Local AI Bot is currently in active open-source development.**  
+> - **Phases 1 to 3 are complete and verified:** Core survival, resource gathering, recursive crafting, smelting, combat, dimension safety, autonomous Nether portal construction, Stronghold tracking, and End Portal activation are fully functional.
+> - **Phase 4 is in progress:** Ender Dragon fight tactics and production containerization are actively being developed.  
+> Issues, feature requests, and community pull requests are warmly welcomed!
+
+---
+
+## 🌟 Overview
+
+**MC Local AI Bot** is an embodied AI agent designed to play vanilla survival Minecraft as a genuine co-op teammate alongside you. Unlike cloud-based agents that cost money per token, this bot runs **entirely on your local machine** using [Ollama](https://ollama.com/) and models like **Qwen 2.5 (3B / 7B)** or **Llama 3**.
+
+The bot perceives its 3D environment, manages its hunger and health, crafts tools recursively, builds Nether portals, and aims to reach the End to defeat the Ender Dragon—all with **zero cloud dependencies, zero API costs, and complete privacy**.
+
+---
+
+## 📐 Architecture
+
+The bot uses an asynchronous decoupled architecture separating high-level strategic reasoning from low-level real-time tick execution:
 
 ```
 +-------------------------------------------------------------+
-|                     Minecraft Sunucusu                      |
+|                     Minecraft Server                        |
+|             (Paper / Fabric / Vanilla / LAN)                |
 +-------------------------------------------------------------+
                               ▲
-                              │ Minecraft Protokolü (TCP)
+                              │ Minecraft Protocol (TCP)
                               ▼
 +-------------------------------------------------------------+
-|              Mineflayer Bot Worker (Node.js)                |
-|  - mineflayer, mineflayer-pathfinder, collectblock           |
-|  - Anlık durum (sağlık, envanter, etraftaki bloklar)       |
-|  - Eylem icrası (git, topla, saldır, chat yap, takip et)    |
+|             Mineflayer Worker (Node.js Engine)              |
+|  - Real-time pathfinding (A*), block perception & spatial   |
+|  - Recursive smartCraft & smartSmelt engine                 |
+|  - Off-hand shield defense & tool durability monitor        |
+|  - Autonomous Nether portal builder & End portal activator  |
 +-------------------------------------------------------------+
                               ▲
-                              │ WebSocket Köprüsü (JSON)
+                              │ WebSocket Bridge (JSON RPC)
                               ▼
 +-------------------------------------------------------------+
-|                Python AI Orkestratörü (Beyin)               |
-|  - Karar Motoru & Eylem Yönlendirici (Skill Dispatcher)     |
-|  - Oyuncu Hafızası & Dünya Koordinatları (SQLite)          |
-|  - Ollama LLM Client (Tool Calling / Function Calling)      |
+|              Python AI Orchestrator (Brain)                 |
+|  - Strategic Decision Engine & Speedrun Tech-Tree Planner   |
+|  - Emergency Reflex System (Health <= 6 / Food <= 4)        |
+|  - Dimension Safety Guard (Exploding bed prevention)        |
+|  - SQLite Persistent World Memory & Player Task Queue       |
 +-------------------------------------------------------------+
                               ▲
-                              │ HTTP REST (http://localhost:11434)
+                              │ HTTP REST API (Function Calling)
                               ▼
 +-------------------------------------------------------------+
-|                   Ollama (Lokal AI Modeli)                  |
-|          (qwen2.5:7b, llama3.1:8b, mistral vb.)             |
+|                   Local LLM Engine (Ollama)                 |
+|           qwen2.5:3b (default) / qwen2.5:7b / llama3        |
 +-------------------------------------------------------------+
 ```
 
 ---
 
-## 🚀 Temel Yetenekler
+## 🚀 Key Capabilities
 
-* **Lokal ve Ücretsiz Yapay Zeka:** Bulut API anahtarlarına ihtiyaç duymadan Ollama üzerinden çalışır (`qwen2.5:7b`, `llama3.1:8b` vb.).
-* **Tool Calling (Fonksiyon Çağırma):** Model metin üretmenin yanı sıra doğrudan oyun içi eylemleri (odun kırma, takip etme, eşya verme) JSON komutu olarak çağırır.
-* **Gelişmiş Yol Bulma (Pathfinding):** A* algoritması ile engebeleri, çukurları ve engelleri aşarak hedefine ulaşır.
-* **Akıllı Kaynak Toplama:** "5 tane odun topla", "bana taş kaz" gibi emirlere göre yakındaki blokları otonom şekilde kırıp envanterine katar.
-* **Dünya & Oyuncu Hafızası:** SQLite veritabanı sayesinde ev, maden koordinatlarını ve oyuncu geçmişini saklar.
+### 🧠 100% Local & Free AI Reasoning
+- Powered by **Qwen 2.5 3B/7B** running locally through Ollama.
+- Native function calling / tool calling schemas (`craft_item`, `collect_block`, `smelt_item`, `build_nether_portal`, etc.).
+- Sub-second local inference with connection pooling and emergency fallbacks.
+
+### ⛏️ Autonomous Survival Engine
+- **Resource Gathering**: Universal tag matching for all wood species, stone/deepslate variants, and vanilla ores.
+- **Recursive Crafting (`smartCraft`)**: Automatically checks and crafts prerequisite materials (e.g. logs $\to$ planks $\to$ sticks $\to$ crafting table $\to$ pickaxe) on the fly.
+- **Autonomous Smelting (`smartSmelt`)**: Places a furnace, fuels it with coal or wood, smelts ores or cooks meat, and recovers the furnace when done.
+- **Combat & Hunting**: Equips swords/axes, wields shields in the off-hand, hunts food animals when hungry, and defends against hostile mobs.
+
+### 🌌 Nether & End Progression (Phase 3 Complete)
+- **Nether Portal Construction (`build_nether_portal`)**: Gathers $\ge 10$ obsidian and flint & steel, finds a flat spot, constructs a vertical $4 \times 5$ frame with scaffolding, ignites the portal, and enters the Nether.
+- **Blaze Hunting & Stronghold Tracking (`throw_eye_of_ender`)**: Defeats Blazes, crafts blaze powder and Eyes of Ender, throws eyes into the sky, and calculates trajectory angle and coordinates to the Stronghold.
+- **End Portal Activation (`activate_end_portal`)**: Scans for 12 End portal frame blocks, inserts Eyes of Ender into empty sockets, and activates the End Portal.
+
+### 🛡️ Dimension Safety & Health Reflexes
+- **Exploding Bed Prevention**: Strictly forbids bed sleeping in `the_nether` and `the_end`, preventing catastrophic explosions.
+- **Emergency Reflexes**: Bypasses LLM cooldown instantly when health drops $\le 6$ HP or hunger drops $\le 4$.
+- **Anti-Stuck Protection**: Detects repetitive actions and pathfinding deadlocks, automatically triggering safe regroups.
+- **Durability Monitoring**: Alerts the team and preserves tools with $\le 5$ durability remaining.
+
+### 💾 Persistent SQLite World Memory
+- Saves landmark coordinates (`save_current_location`, e.g. base, iron mine, portal).
+- Tracks tech tree milestone progress across sessions.
+- Persists teammate tasks assigned by the player.
 
 ---
 
-## 🛠️ Kurulum
+## 🛠️ Installation & Setup
 
-### 1. Gereksinimler
-- Python 3.10+
-- Node.js 18+
-- [Ollama](https://ollama.ai) (ve kurulu bir model, örn: `ollama run qwen2.5:7b` veya `ollama run llama3.1:8b`)
+### 1. Prerequisites
+- **Python**: 3.10 or higher
+- **Node.js**: 18.0 or higher
+- **Ollama**: Installed and running ([ollama.com](https://ollama.com/))
+- **Minecraft**: Java Edition (1.20.x recommended) on LAN, local server, or Paper/Fabric server.
 
-### 2. Python Bağımlılıkları
+### 2. Pull the AI Model
 ```bash
+ollama pull qwen2.5:3b
+# Or for a stronger model if you have 8GB+ VRAM:
+# ollama pull qwen2.5:7b
+```
+
+### 3. Clone & Install Dependencies
+```bash
+# Clone the repository
+git clone https://github.com/OmerF-CS/MC_Local_AI_Bot.git
+cd MC_Local_AI_Bot
+
+# Install Python requirements
 pip install -r requirements.txt
-```
 
-### 3. Mineflayer (Node.js) Bağımlılıkları
-```bash
+# Install Node.js Mineflayer requirements
 cd minecraft_bot
 npm install
 cd ..
 ```
 
-### 4. Yapılandırma (.env)
-`.env.example` dosyasını `.env` olarak kopyalayın ve sunucu bilgilerinizi girin:
+### 4. Configuration
+Copy `.env.example` to `.env` and set your server details:
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
 ```env
+# Minecraft Server
 MINECRAFT_HOST=localhost
 MINECRAFT_PORT=25565
 MINECRAFT_USERNAME=AIAssistant
-BOT_OWNER=Omer
-OLLAMA_MODEL=qwen2.5:7b
+
+# Local AI (Ollama)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:3b
+
+# Teammate Settings
+BOT_NAME=AIAssistant
+BOT_OWNER=YourMinecraftUsername
 ```
 
-### 5. Başlatma
+### 5. Launch the Bot
 ```bash
 python main.py
 ```
-*(Node.js Mineflayer botu Python tarafından otomatik olarak başlatılır. Dilerseniz ayrı bir terminalde `node minecraft_bot/bot.js` olarak da çalıştırabilirsiniz).*
+*(The Python orchestrator automatically spawns and manages the Node.js Mineflayer worker process).*
+
+---
+
+## 💬 In-Game Player Commands
+
+You can talk to the bot normally in chat or use **instant shortcut commands** (0ms latency, bypasses LLM cooldown):
+
+| Command / Trigger | Action |
+|---|---|
+| `!mine <block> [count]` | Mines specified blocks (e.g. `!mine iron 5` or `!mine log 10`) |
+| `!craft <item> [count]` | Recursively crafts an item (e.g. `!craft iron_pickaxe 1` or `!craft shield`) |
+| `!smelt <item> [count]` | Smelts ores or cooks meat in a furnace |
+| `!hunt [animal]` | Hunts cows, pigs, sheep, or chickens for meat |
+| `!portal` | Constructs and ignites a Nether Portal frame with obsidian |
+| `!eye` | Throws an Eye of Ender and chats Stronghold coordinates |
+| `!end` | Activates nearby End Portal frames with Eyes of Ender |
+| `!follow` / `!come` | Follows the owner |
+| `!guard` | Defends the owner against hostile mobs |
+| `!status` | Reports current HP, hunger, coordinates, and inventory |
+| `!stop` | Immediately interrupts all actions and clears task queue |
+| `beat the game` | Activates autonomous speedrun progression mode |
+
+---
+
+## 🗺️ Tech Tree Progression Eras
+
+The bot autonomously progresses through 8 survival eras:
+
+```
+[WOOD]         Gather logs -> Craft wooden pickaxe
+  │
+[STONE]        Mine stone/deepslate -> Craft stone pickaxe
+  │
+[FURNACE]      Mine cobblestone -> Craft furnace
+  │
+[IRON_GEAR]    Mine iron ore -> Smelt ingots -> Craft iron pickaxe & shield
+  │
+[DIAMOND]      Descend to Y: -58 -> Mine diamonds -> Craft diamond pickaxe
+  │
+[NETHER]       Gather obsidian (10) -> Build Nether portal -> Hunt Blazes (6+ rods)
+  │
+[EYE_OF_ENDER] Craft blaze powder -> Combine with ender pearls -> Craft 12 Eyes
+  │
+[THE_END]      Track Stronghold -> Activate End Portal -> Slay Ender Dragon
+```
+
+Track detailed implementation status in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md).
+
+---
+
+## 🤝 Contributing
+
+Contributions, suggestions, and pull requests are very welcome!  
+If you find a bug or have an idea for new tactics:
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
