@@ -1,29 +1,37 @@
-# Environments
+# Gizli Dosyalar
 .env
 .env.local
 .env.*.local
+kick_tokens.json
+kick_tokens.json.backup
 
 # Python
 __pycache__/
 *.py[cod]
-*.class
+*.egg-info/
+dist/
+build/
 venv/
-env/
 .venv/
 
-# Databases
+# Veritabanı
 *.db
 *.sqlite
 *.sqlite3
 
-# Logs and Outputs
+# Loglar
 *.log
-out.txt
+logs/
 
-# IDEs
+# IDE
 .idea/
 .vscode/
+*.swp
+*.swo
 
-# Specific to this project
-kick_tokens.json
+# Node.js
+node_modules/
+package-lock.json
 
+# Çeşitli
+out.txt

@@ -1,0 +1,235 @@
+{
+  "version": "1.20.1",
+  "base_rules": {
+    "stone": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "wooden_pickaxe",
+      "drops_by_hand": false
+    },
+    "cobblestone": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "wooden_pickaxe",
+      "drops_by_hand": false
+    },
+    "deepslate": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "wooden_pickaxe",
+      "drops_by_hand": false
+    },
+    "coal_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "wooden_pickaxe",
+      "drops_by_hand": false
+    },
+    "iron_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "stone_pickaxe",
+      "drops_by_hand": false
+    },
+    "deepslate_iron_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "stone_pickaxe",
+      "drops_by_hand": false
+    },
+    "copper_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "stone_pickaxe",
+      "drops_by_hand": false
+    },
+    "lapis_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "stone_pickaxe",
+      "drops_by_hand": false
+    },
+    "gold_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "iron_pickaxe",
+      "drops_by_hand": false
+    },
+    "redstone_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "iron_pickaxe",
+      "drops_by_hand": false
+    },
+    "diamond_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "iron_pickaxe",
+      "drops_by_hand": false
+    },
+    "deepslate_diamond_ore": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "iron_pickaxe",
+      "drops_by_hand": false
+    },
+    "obsidian": {
+      "material": "mineable/pickaxe",
+      "requires_tool": true,
+      "min_tool": "diamond_pickaxe",
+      "drops_by_hand": false
+    },
+    "oak_log": {
+      "material": "mineable/axe",
+      "requires_tool": false,
+      "min_tool": "hand",
+      "optimal_tool": "axe",
+      "drops_by_hand": true
+    },
+    "dirt": {
+      "material": "mineable/shovel",
+      "requires_tool": false,
+      "min_tool": "hand",
+      "optimal_tool": "shovel",
+      "drops_by_hand": true
+    }
+  },
+  "experiences": [
+    {
+      "timestamp": "2026-10-03T19:11:04.811Z",
+      "block": "stone",
+      "tool_used": "wooden_pickaxe",
+      "duration_ms": 1200,
+      "success": true,
+      "items_gained": [
+        "cobblestone x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:15:33.857Z",
+      "block": "cherry_log",
+      "tool_used": "hand",
+      "duration_ms": 8558,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2",
+        "oak_planks x4"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:17:09.675Z",
+      "block": "stone",
+      "tool_used": "wooden_pickaxe",
+      "duration_ms": 8814,
+      "success": true,
+      "items_gained": [
+        "cobblestone x3"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:17:54.554Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 13183,
+      "success": true,
+      "items_gained": [
+        "cobblestone x3",
+        "dirt x5"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:18:05.642Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 10824,
+      "success": true,
+      "items_gained": [
+        "cobblestone x3",
+        "dirt x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:18:22.303Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 13948,
+      "success": true,
+      "items_gained": [
+        "cobblestone x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:18:40.804Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 5587,
+      "success": true,
+      "items_gained": [
+        "cobblestone x3"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:18:59.871Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 11098,
+      "success": true,
+      "items_gained": [
+        "cobblestone x5"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:19:26.871Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 11123,
+      "success": true,
+      "items_gained": [
+        "cobblestone x5"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:19:37.643Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 8481,
+      "success": true,
+      "items_gained": [
+        "cobblestone x4"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:20:05.948Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 9630,
+      "success": true,
+      "items_gained": [
+        "cobblestone x3"
+      ]
+    },
+    {
+      "timestamp": "2026-10-03T19:20:20.003Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 10085,
+      "success": true,
+      "items_gained": [
+        "cobblestone x4"
+      ]
+    }
+  ],
+  "learned_lessons": [
+    "Successfully harvested 'stone' using 'wooden_pickaxe' in 1.2s (Obtained: cobblestone x1).",
+    "Successfully harvested 'cherry_log' using 'hand' in 8.6s (Obtained: cherry_log x2, oak_planks x4).",
+    "Successfully harvested 'stone' using 'wooden_pickaxe' in 8.8s (Obtained: cobblestone x3).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 13.2s (Obtained: cobblestone x3, dirt x5).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 10.8s (Obtained: cobblestone x3, dirt x1).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 13.9s (Obtained: cobblestone x1).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 5.6s (Obtained: cobblestone x3).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 11.1s (Obtained: cobblestone x5).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 8.5s (Obtained: cobblestone x4).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 9.6s (Obtained: cobblestone x3).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 10.1s (Obtained: cobblestone x4)."
+  ]
+}

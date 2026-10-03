@@ -1,0 +1,175 @@
+"""Minecraft Universal Tech Tree & Tag-Aware Progression Engine in English.
+
+Resolves material equivalents (all wood species, all stone & deepslate variants,
+Nether blackstone, fuel sources) exactly as the Minecraft game engine does.
+"""
+from typing import Dict, Any, List, Optional
+
+# Equivalent Material Tags (Game-Engine Compatible)
+def count_equivalent_materials(tag_or_item: str, inventory: Dict[str, int]) -> int:
+    """Calculates total available quantity across all equivalent variants in inventory."""
+    if tag_or_item in ("planks", "wooden_planks"):
+        return sum(count for item, count in inventory.items() if "planks" in item)
+
+    if tag_or_item in ("log", "logs", "wood"):
+        return sum(count for item, count in inventory.items() if "log" in item or "stem" in item or "wood" in item)
+
+    if tag_or_item in ("stone", "cobblestone", "stone_tool_materials"):
+        return sum(count for item, count in inventory.items() if item in (
+            "cobblestone", "cobbled_deepslate", "blackstone", "stone", "deepslate"
+        ))
+
+    if tag_or_item in ("iron", "iron_materials"):
+        return inventory.get("iron_ingot", 0) + inventory.get("raw_iron", 0) + inventory.get("iron_ore", 0)
+
+    if tag_or_item in ("fuel", "smelting_fuel"):
+        return (
+            inventory.get("coal", 0) +
+            inventory.get("charcoal", 0) +
+            sum(c for i, c in inventory.items() if "planks" in i or "log" in i)
+        )
+
+    return inventory.get(tag_or_item, 0)
+
+# Complete Flexible Progression Tree
+TECH_TREE: Dict[str, Dict[str, Any]] = {
+    # --- WOODEN AGE ---
+    "crafting_table": {
+        "requires_tools": [],
+        "ingredients": {"planks": 4},
+        "description": "Essential 3x3 crafting grid. Works with any wood species."
+    },
+    "wooden_pickaxe": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"planks": 3, "stick": 2},
+        "description": "First mining tool to break stone, cobblestone, deepslate, and coal."
+    },
+
+    # --- STONE & DEEPSLATE AGE ---
+    "stone_pickaxe": {
+        "requires_tools": ["crafting_table", "wooden_pickaxe"],
+        "ingredients": {"stone_tool_materials": 3, "stick": 2},
+        "description": "Mines iron ore and lapis lazuli. Crafted with cobblestone, cobbled deepslate, or blackstone."
+    },
+    "furnace": {
+        "requires_tools": ["crafting_table", "wooden_pickaxe"],
+        "ingredients": {"stone_tool_materials": 8},
+        "description": "Smelts raw ores and cooks food. Crafted with cobblestone, cobbled deepslate, or blackstone."
+    },
+    "shield": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"planks": 6, "iron_ingot": 1},
+        "description": "Critical defense against creepers and skeletons. Works with any planks."
+    },
+
+    # --- IRON AGE ---
+    "iron_pickaxe": {
+        "requires_tools": ["crafting_table", "furnace", "stone_pickaxe"],
+        "ingredients": {"iron_ingot": 3, "stick": 2},
+        "description": "Mines gold, redstone, and diamond ore."
+    },
+    "bucket": {
+        "requires_tools": ["crafting_table", "furnace"],
+        "ingredients": {"iron_ingot": 3},
+        "description": "Crucial utility for water bucket drops (MLG) and building Nether portals with lava."
+    },
+
+    # --- DIAMOND & OBSIDIAN AGE ---
+    "diamond_pickaxe": {
+        "requires_tools": ["crafting_table", "iron_pickaxe"],
+        "ingredients": {"diamond": 3, "stick": 2},
+        "description": "Mines obsidian to build portals or enchantment tables."
+    },
+
+    # --- NETHER AGE ---
+    "nether_portal": {
+        "requires_tools": ["flint_and_steel"],
+        "ingredients": {"obsidian": 10},
+        "description": "Gateway to the Nether dimension."
+    },
+    "blaze_powder": {
+        "requires_tools": [],
+        "ingredients": {"blaze_rod": 1},
+        "description": "Crafted from blaze rods harvested in Nether fortresses."
+    },
+
+    # --- END & ENDER DRAGON AGE ---
+    "eye_of_ender": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"ender_pearl": 1, "blaze_powder": 1},
+        "description": "Locates the Stronghold and fills End Portal frames."
+    }
+}
+
+# Grand Progression Milestones
+MILESTONES = [
+    {
+        "stage": "WOOD",
+        "target": "wooden_pickaxe",
+        "check": lambda inv: any(p in inv for p in ("wooden_pickaxe", "stone_pickaxe", "iron_pickaxe", "diamond_pickaxe", "netherite_pickaxe")),
+        "next_hint": "Gather logs (any tree species), craft planks and sticks, then craft a wooden pickaxe."
+    },
+    {
+        "stage": "STONE",
+        "target": "stone_pickaxe",
+        "check": lambda inv: any(p in inv for p in ("stone_pickaxe", "iron_pickaxe", "diamond_pickaxe", "netherite_pickaxe")),
+        "next_hint": "Mine stone, cobblestone, or deepslate. Craft a stone pickaxe."
+    },
+    {
+        "stage": "FURNACE",
+        "target": "furnace",
+        "check": lambda inv: "furnace" in inv,
+        "next_hint": "Mine 8 cobblestone or cobbled deepslate and craft a furnace for smelting."
+    },
+    {
+        "stage": "IRON_GEAR",
+        "target": "iron_pickaxe",
+        "check": lambda inv: any(p in inv for p in ("iron_pickaxe", "diamond_pickaxe", "netherite_pickaxe")),
+        "next_hint": "Mine iron ore / deepslate iron ore in caves, smelt into ingots, and craft an iron pickaxe and shield."
+    },
+    {
+        "stage": "DIAMOND",
+        "target": "diamond_pickaxe",
+        "check": lambda inv: "diamond_pickaxe" in inv or "netherite_pickaxe" in inv,
+        "next_hint": "Descend to depth Y: -58. Mine diamond ore and craft a diamond pickaxe."
+    },
+    {
+        "stage": "NETHER",
+        "target": "nether_portal",
+        "check": lambda inv: inv.get("blaze_rod", 0) >= 6,
+        "next_hint": "Construct an obsidian portal or cast it with lava + water. In the Nether, defeat Blazes for 6+ rods."
+    },
+    {
+        "stage": "EYE_OF_ENDER",
+        "target": "eye_of_ender",
+        "check": lambda inv: inv.get("eye_of_ender", 0) >= 12,
+        "next_hint": "Combine Ender Pearls with Blaze Powder to craft 12 Eyes of Ender."
+    },
+    {
+        "stage": "THE_END",
+        "target": "ender_dragon",
+        "check": lambda inv: False,
+        "next_hint": "Toss Eyes of Ender to locate the Stronghold, activate the portal, destroy the End Crystals, and slay the Ender Dragon!"
+    }
+]
+
+def get_current_progression_goal(inventory: Dict[str, int]) -> Dict[str, Any]:
+    """Evaluates inventory and returns the active speedrun progression goal."""
+    for milestone in MILESTONES:
+        if not milestone["check"](inventory):
+            return milestone
+    return MILESTONES[-1]
+
+def resolve_missing_ingredients(target_item: str, inventory: Dict[str, int]) -> List[str]:
+    """Computes missing materials using universal tag equivalents (any wood, any stone)."""
+    recipe = TECH_TREE.get(target_item)
+    if not recipe:
+        return []
+
+    missing = []
+    for ing_tag, count in recipe["ingredients"].items():
+        available = count_equivalent_materials(ing_tag, inventory)
+        if available < count:
+            readable_tag = ing_tag.replace("_", " ")
+            missing.append(f"{count - available}x {readable_tag}")
+    return missing
