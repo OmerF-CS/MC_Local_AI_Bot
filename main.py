@@ -1,9 +1,10 @@
-"""Minecraft Autonomous AI Assistant and Speedrun Orchestrator - Production Hardened."""
 import asyncio
 import os
 import subprocess
 import signal
 import sys
+import threading
+from typing import Optional, Dict, Any, List
 
 from utils.config import Config
 from utils.logger import setup_logging, get_logger
@@ -118,16 +119,19 @@ class MinecraftAIBot:
             return True
 
         logger.info(f"⏳ Waiting for bot startup ({timeout}s timeout)...")
-        try:
-            await asyncio.wait_for(self._bot_ready.wait(), timeout=timeout)
-            logger.info("✅ Bot spawned successfully, starting autonomous progression loop.")
-            return True
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"⚠️ Bot did not spawn within {timeout}s. "
-                "Verify Minecraft server connection. Continuing anyway..."
-            )
-            return False
+        start_t = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start_t < timeout:
+            if self._bot_ready.is_set() or (self.bridge.latest_state and self.bridge.latest_state.get("health")):
+                logger.info("✅ Bot spawned and state available, startup complete.")
+                self._bot_ready.set()
+                return True
+            await asyncio.sleep(0.5)
+
+        logger.warning(
+            f"⚠️ Bot did not spawn within {timeout}s. "
+            "Verify Minecraft server connection. Continuing anyway..."
+        )
+        return False
 
     async def autonomous_progression_loop(self):
         """Player-like autonomous decision and action progression loop."""
@@ -223,31 +227,25 @@ class MinecraftAIBot:
             )
             logger.info(f"✅ Mineflayer process spawned with PID: {self.node_process.pid}.")
             
-            # Spawn real-time log reader task
-            asyncio.create_task(self._read_subprocess_logs())
+            # Spawn real-time log reader thread (avoids blocking asyncio event loop on Windows)
+            threading.Thread(target=self._read_subprocess_logs, daemon=True, name="MineflayerLogReader").start()
             return True
         except Exception as e:
             logger.error(f"❌ Failed to launch Mineflayer: {e}")
             return False
 
-    async def _read_subprocess_logs(self):
-        """Reads and logs Node.js worker output in real time."""
-        if not self.node_process:
+    def _read_subprocess_logs(self):
+        """Reads and logs Node.js worker output in real time from a dedicated daemon thread."""
+        if not self.node_process or not self.node_process.stdout:
             return
         
         try:
-            while self.node_process and self.node_process.poll() is None:
-                try:
-                    line = self.node_process.stdout.readline() if self.node_process.stdout else None
-                    if line:
-                        logger.info(f"[Node.js] {line.rstrip()}")
-                    else:
-                        await asyncio.sleep(0.1)
-                except Exception as e:
-                    logger.debug(f"Log read error: {e}")
-                    await asyncio.sleep(0.5)
+            for line in iter(self.node_process.stdout.readline, ""):
+                if not line:
+                    break
+                logger.info(f"[Node.js] {line.rstrip()}")
         except Exception as e:
-            logger.error(f"❌ Subprocess log reader error: {e}")
+            logger.debug(f"Subprocess log reader thread terminated: {e}")
 
     async def run(self):
         """Runs orchestrator lifecycle."""
@@ -312,6 +310,12 @@ class MinecraftAIBot:
             await self.bridge.stop()
         except Exception as e:
             logger.error(f"Bridge shutdown error: {e}")
+
+        # Close Ollama brain session
+        try:
+            await self.brain.close()
+        except Exception as e:
+            logger.debug(f"Brain session close error: {e}")
 
         # Terminate Node.js process
         if self.node_process:
