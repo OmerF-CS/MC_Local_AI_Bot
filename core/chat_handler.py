@@ -411,7 +411,7 @@ class MinecraftChatHandler:
                     item = str(goal).strip().lower()
             if not item:
                 logger.warning("⚠️ 'craft_item' called without item_name.")
-                return {"success": False, "error": "Missing item_name"}
+                return {"success": False, "error": f"Invalid arguments for 'craft_item': missing required parameter 'item_name', received: {list(args.keys())}"}
             validated_args["item_name"] = item
             count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
             validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
@@ -446,7 +446,7 @@ class MinecraftChatHandler:
                             break
             if not block or block == "auto":
                 logger.warning("⚠️ 'collect_block' called without block_name.")
-                return {"success": False, "error": "Missing block_name"}
+                return {"success": False, "error": f"Invalid arguments for 'collect_block': missing required parameter 'block_name', received: {list(args.keys())}"}
             validated_args["block_name"] = block
             count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
             validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
@@ -461,7 +461,7 @@ class MinecraftChatHandler:
             ).strip().lower()
             if not item:
                 logger.warning("⚠️ 'smelt_item' called without input_item.")
-                return {"success": False, "error": "Missing input_item"}
+                return {"success": False, "error": f"Invalid arguments for 'smelt_item': missing required parameter 'input_item', received: {list(args.keys())}"}
             validated_args["input_item"] = item
             count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
             validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
