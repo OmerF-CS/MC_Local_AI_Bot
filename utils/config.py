@@ -3,6 +3,18 @@ from dataclasses import dataclass, field
 from typing import List
 from dotenv import load_dotenv
 
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+def _safe_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 @dataclass
 class Config:
     # Minecraft Server Settings
@@ -35,7 +47,7 @@ class Config:
         
         return cls(
             MINECRAFT_HOST=os.getenv("MINECRAFT_HOST", "localhost"),
-            MINECRAFT_PORT=int(os.getenv("MINECRAFT_PORT", 25565)),
+            MINECRAFT_PORT=_safe_int(os.getenv("MINECRAFT_PORT"), 25565),
             MINECRAFT_USERNAME=os.getenv("MINECRAFT_USERNAME", "AIAssistant"),
             MINECRAFT_VERSION=os.getenv("MINECRAFT_VERSION", ""),
             
@@ -43,13 +55,13 @@ class Config:
             OLLAMA_MODEL=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
             
             BRIDGE_HOST=os.getenv("BRIDGE_HOST", "127.0.0.1"),
-            BRIDGE_PORT=int(os.getenv("BRIDGE_PORT", 8765)),
+            BRIDGE_PORT=_safe_int(os.getenv("BRIDGE_PORT"), 8765),
             
             BOT_NAME=os.getenv("BOT_NAME", "AIAssistant"),
             BOT_OWNER=os.getenv("BOT_OWNER", "Omer"),
             LOG_LEVEL=os.getenv("LOG_LEVEL", "INFO"),
             COMMAND_PREFIX=os.getenv("COMMAND_PREFIX", "!"),
-            COOLDOWN_SECONDS=float(os.getenv("COOLDOWN_SECONDS", 1.0))
+            COOLDOWN_SECONDS=_safe_float(os.getenv("COOLDOWN_SECONDS"), 1.0)
         )
     
     def validate(self) -> List[str]:

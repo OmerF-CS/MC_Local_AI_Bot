@@ -355,7 +355,7 @@ function antiStuckCheck() {
 
 // --- AUTONOMOUS SURVIVAL SYSTEMS ---
 async function autoEatCheck() {
-    if (!bot || !bot.entity || isEating || isBusy) return;
+    if (!bot || !bot.entity || isEating) return;
 
     if (bot.food < 16 || (bot.health < 20 && bot.food < 20)) {
         const foodItem = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
@@ -407,7 +407,7 @@ function guardLoop() {
 
 // --- AUTO-EQUIP ARMOR & OFFHAND SHIELD ---
 async function autoEquipGearCheck() {
-    if (!bot || !bot.entity || isBusy) return;
+    if (!bot || !bot.entity) return;
 
     const destinations = [
         { dest: 'head', keywords: ['helmet', 'cap'] },
@@ -462,7 +462,7 @@ async function autoTorchCheck() {
 
 // --- AUTO-SELF DEFENSE AGAINST SURROUNDING HOSTILE MOBS ---
 async function autoSelfDefenseCheck() {
-    if (!bot || !bot.entity || isBusy) return;
+    if (!bot || !bot.entity) return;
 
     // Detect hostile mobs dangerously close (< 6 blocks)
     const dangerMob = bot.nearestEntity(e => {
@@ -989,6 +989,9 @@ async function smartSmelt(bot, inputItemName, count = 1) {
             }
             if (!furnace.inputItem()) break;
         }
+    } catch (smeltErr) {
+        console.log(`[Minecraft] Smelting error: ${smeltErr.message}`);
+        return { success: false, error: smeltErr.message };
     } finally {
         furnace.close();
     }
@@ -1013,13 +1016,18 @@ async function collectNearbyDrops(bot, maxDistance = 12) {
             }
         }
     }
+    const { GoalBlock } = goals;
     for (const drop of drops) {
         if (!drop || !drop.isValid) continue;
         try {
-            const { GoalNear } = goals;
-            await bot.pathfinder.goto(new GoalNear(drop.position.x, drop.position.y, drop.position.z, 1));
-            await new Promise(r => setTimeout(r, 250));
-        } catch (_) {}
+            await Promise.race([
+                bot.pathfinder.goto(new GoalBlock(drop.position.x, drop.position.y, drop.position.z)),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Drop collection timeout')), 5000))
+            ]);
+        } catch (e) {
+            console.log(`[Minecraft] Skipping unreachable drop: ${e.message}`);
+            continue;
+        }
     }
 }
 
@@ -1063,7 +1071,12 @@ async function placeBlockDirect(bot, item, targetPos) {
     }
 
     await bot.equip(item, 'hand');
-    await bot.placeBlock(refBlock, faceVector);
+    try {
+        await bot.placeBlock(refBlock, faceVector);
+    } catch (placeErr) {
+        console.log(`[Minecraft] Block placement failed: ${placeErr.message}`);
+        return false;
+    }
     await new Promise(r => setTimeout(r, 250));
     return true;
 }
@@ -1382,7 +1395,7 @@ async function destroyEndCrystals(bot) {
 
 async function fightEnderDragon(bot, tactic = 'melee_sword') {
     if (!bot || !bot.entity) return false;
-    const { GoalNear } = goals;
+    const { GoalNear, GoalBlock } = goals;
 
     // Locate Ender Dragon entity
     let dragon = null;
@@ -1416,8 +1429,23 @@ async function fightEnderDragon(bot, tactic = 'melee_sword') {
             if (breathDist < 4) {
                 bot.chat("⚠️ Evading purple dragon breath cloud! 💨");
                 bot.setControlState('sprint', true);
-                const escapeGoal = bot.entity.position.offset(5, 0, 5);
-                await bot.pathfinder.goto(new GoalNear(escapeGoal.x, escapeGoal.y, escapeGoal.z, 1)).catch(() => {});
+                // Safe escape from dragon breath - validate ground exists
+                let escapePos = null;
+                const escapeOffsets = [
+                    [5, 0, 5], [-5, 0, 5], [5, 0, -5], [-5, 0, -5],
+                    [3, 0, 3], [-3, 0, 3], [3, 0, -3], [-3, 0, -3]
+                ];
+                for (const [dx, dy, dz] of escapeOffsets) {
+                    const candidate = bot.entity.position.offset(dx, dy, dz);
+                    const groundBlock = bot.blockAt(candidate.offset(0, -1, 0));
+                    if (groundBlock && groundBlock.name !== 'air' && groundBlock.name !== 'void_air') {
+                        escapePos = candidate;
+                        break;
+                    }
+                }
+                if (escapePos) {
+                    await bot.pathfinder.goto(new GoalBlock(escapePos.x, escapePos.y, escapePos.z)).catch(() => {});
+                }
                 bot.setControlState('sprint', false);
                 break;
             }
@@ -2028,12 +2056,21 @@ async function handleAction(action) {
     if (!bot) return;
 
     const { command, args } = action;
+    const actionId = action.action_id || null;
     let actionSuccess = true;
     let actionError = null;
 
     // Guard against action overlap if bot is already performing a critical multi-step action
     if (isBusy && command !== 'stop_actions' && command !== 'say_chat') {
         console.log(`⚠️ [Busy Guard] Bot currently busy with '${currentActionName}'. Postponing new action.`);
+        sendToPython({
+            type: 'action_completed',
+            command: command,
+            action_id: actionId,
+            success: false,
+            error: `Bot is busy with '${currentActionName}'`,
+            state: getBotState()
+        });
         return;
     }
 
@@ -2043,6 +2080,7 @@ async function handleAction(action) {
         sendToPython({
             type: 'action_started',
             command: command,
+            action_id: actionId,
             state: getBotState()
         });
     }
@@ -2538,6 +2576,7 @@ async function handleAction(action) {
         sendToPython({
             type: 'action_completed',
             command: command,
+            action_id: actionId,
             success: actionSuccess,
             error: actionError,
             state: getBotState()

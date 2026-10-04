@@ -105,7 +105,7 @@ def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic,
     
     vis_res = state.get("visible_resources", {})
     if vis_res:
-        res_list = [f"{k} ({v['total_found']}x, {v['visible_exposed']} exposed, {v['closest_distance']}m away)" for k, v in vis_res.items()]
+        res_list = [f"{k} ({v.get('total_found', 0)}x, {v.get('visible_exposed', 0)} exposed, {v.get('closest_distance', '?')}m away)" for k, v in vis_res.items()]
         res_str = ", ".join(res_list)
     else:
         res_str = "No key resources detected within 64m."

@@ -91,6 +91,13 @@ class MinecraftAIBot:
                 await self.bridge.send_action("say_chat", {
                     "message": f"📋 Starting next queued task: '{next_task['instruction']}'"
                 })
+                if next_task.get('primary_action'):
+                    await self.chat_handler._execute_tool(
+                        next_task['primary_action'],
+                        {'instruction': next_task['instruction']},
+                        state,
+                        self.config.BOT_OWNER
+                    )
 
     async def on_bot_spawn(self, state):
         """Called when the bot successfully spawns into the world."""

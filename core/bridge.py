@@ -1,6 +1,7 @@
 """Python <-> Mineflayer WebSocket Bridge Server."""
 import asyncio
 import json
+import uuid
 from typing import Callable, Optional, Dict, Any, Set
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -100,13 +101,14 @@ class MinecraftBridge:
 
         elif msg_type == "action_completed":
             cmd = data.get("command", "")
+            action_id = data.get("action_id", data.get("command", ""))
             success = data.get("success", True)
             error = data.get("error")
             res = {"success": success, "error": error, "command": cmd}
-            self._last_action_results[cmd] = res
+            self._last_action_results[action_id] = res
 
-            if cmd in self._pending_action_events:
-                self._pending_action_events[cmd].set()
+            if action_id in self._pending_action_events:
+                self._pending_action_events[action_id].set()
 
             if success:
                 logger.debug(f"✅ Bot action completed: {cmd}")
@@ -116,20 +118,24 @@ class MinecraftBridge:
             if self.on_action_completed_callback:
                 await self.on_action_completed_callback(cmd, success, error, self.latest_state)
 
-    async def send_action(self, command: str, args: Optional[Dict[str, Any]] = None):
+    async def send_action(self, command: str, args: Optional[Dict[str, Any]] = None, action_id: Optional[str] = None):
         """Sends an action command to Mineflayer bot (asynchronous / non-blocking)."""
         if not self.clients:
             logger.warning(f"⚠️ Cannot send action ({command}): Mineflayer worker not connected!")
             return
 
-        payload = json.dumps({
+        payload = {
             "command": command,
             "args": args or {}
-        })
+        }
+        if action_id:
+            payload["action_id"] = action_id
+        
+        payload_str = json.dumps(payload)
 
         for client in list(self.clients):
             try:
-                await client.send(payload)
+                await client.send(payload_str)
             except Exception as e:
                 logger.error(f"❌ Error sending action payload: {e}")
 
@@ -150,16 +156,17 @@ class MinecraftBridge:
             return {"success": True, "error": None}
 
         event = asyncio.Event()
-        self._pending_action_events[command] = event
-        self._last_action_results.pop(command, None)
+        action_id = str(uuid.uuid4())[:8]
+        self._pending_action_events[action_id] = event
+        self._last_action_results.pop(action_id, None)
 
-        await self.send_action(command, args)
+        await self.send_action(command, args, action_id=action_id)
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
-            return self._last_action_results.get(command, {"success": True, "error": None})
+            return self._last_action_results.get(action_id, {"success": True, "error": None})
         except asyncio.TimeoutError:
             logger.warning(f"⏱️ Action timed out ({command}) [{timeout}s].")
             return {"success": False, "error": f"Action timed out after {timeout}s"}
         finally:
-            self._pending_action_events.pop(command, None)
+            self._pending_action_events.pop(action_id, None)

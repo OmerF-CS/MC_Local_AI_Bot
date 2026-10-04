@@ -169,12 +169,18 @@ class Database:
     def update_task_status(self, task_id: int, status: str):
         """Updates task execution status."""
         with self.conn:
-            completed_clause = ", completed_at = datetime('now')" if status in ("completed", "cancelled") else ""
-            self.conn.execute(f"""
-                UPDATE task_queue
-                SET status = ? {completed_clause}
-                WHERE id = ?
-            """, (status, task_id))
+            if status in ("completed", "cancelled"):
+                self.conn.execute("""
+                    UPDATE task_queue
+                    SET status = ?, completed_at = datetime('now')
+                    WHERE id = ?
+                """, (status, task_id))
+            else:
+                self.conn.execute("""
+                    UPDATE task_queue
+                    SET status = ?
+                    WHERE id = ?
+                """, (status, task_id))
 
     def complete_task(self, task_id: int):
         """Marks a task as completed."""

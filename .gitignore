@@ -1,4 +1,4 @@
-# Gizli Dosyalar
+# Secret Files
 .env
 .env.local
 .env.*.local
@@ -14,7 +14,7 @@ build/
 venv/
 .venv/
 
-# Veritabanı
+# Database
 *.db
 *.sqlite
 *.sqlite3
@@ -33,6 +33,6 @@ logs/
 node_modules/
 package-lock.json
 
-# Çeşitli
+# Miscellaneous
 out.txt
 scratch/

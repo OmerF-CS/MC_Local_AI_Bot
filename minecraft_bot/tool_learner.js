@@ -63,12 +63,22 @@ function analyzeBlockHarvest(botVersion, blockName) {
         minTier = lowestTier;
     }
 
+    // Determine optimal tool from harvestTools
     let optimalCategory = 'hand';
-    if (b.material) {
-        if (b.material.includes('pickaxe')) optimalCategory = 'pickaxe';
-        else if (b.material.includes('axe')) optimalCategory = 'axe';
-        else if (b.material.includes('shovel')) optimalCategory = 'shovel';
-        else if (b.material.includes('hoe')) optimalCategory = 'hoe';
+    if (b.harvestTools) {
+        const toolIds = Object.keys(b.harvestTools).map(id => {
+            const item = mcData.items[parseInt(id)];
+            return item ? item.name : '';
+        });
+        if (toolIds.some(n => n.includes('pickaxe'))) optimalCategory = 'pickaxe';
+        else if (toolIds.some(n => n.includes('axe'))) optimalCategory = 'axe';
+        else if (toolIds.some(n => n.includes('shovel'))) optimalCategory = 'shovel';
+        else if (toolIds.some(n => n.includes('hoe'))) optimalCategory = 'hoe';
+    } else if (b.material) {
+        // Fallback to material-based heuristic
+        if (['rock', 'stone', 'metal', 'iron', 'ore'].some(m => b.material.includes(m))) optimalCategory = 'pickaxe';
+        else if (['wood', 'plant'].some(m => b.material.includes(m))) optimalCategory = 'axe';
+        else if (['dirt', 'sand', 'clay', 'gravel'].some(m => b.material.includes(m))) optimalCategory = 'shovel';
     }
 
     return {
@@ -188,12 +198,31 @@ async function prepareAndEquipToolForBlock(bot, blockName, smartCraftFn) {
     };
 }
 
+let _memoryCache = null;
+let _memorySaveTimer = null;
+function _debouncedSaveMemory() {
+    if (_memorySaveTimer) clearTimeout(_memorySaveTimer);
+    _memorySaveTimer = setTimeout(() => {
+        if (_memoryCache) {
+            const fs = require('fs');
+            fs.writeFile(MEMORY_FILE, JSON.stringify(_memoryCache, null, 2), (err) => {
+                if (err) console.log(`[ToolLearner] Memory save error: ${err.message}`);
+            });
+        }
+    }, 10000); // Save at most every 10 seconds
+}
+
 function recordExperience(blockName, toolUsed, durationMs, success, itemsGained = []) {
     try {
-        let memory = { experiences: [], learned_lessons: [] };
-        if (fs.existsSync(MEMORY_FILE)) {
-            memory = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
+        if (!_memoryCache) {
+            if (fs.existsSync(MEMORY_FILE)) {
+                _memoryCache = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
+            } else {
+                _memoryCache = { experiences: [], learned_lessons: [] };
+            }
         }
+        
+        let memory = _memoryCache;
 
         const lesson = success 
             ? `Successfully harvested '${blockName}' using '${toolUsed}' in ${(durationMs / 1000).toFixed(1)}s (Obtained: ${itemsGained.join(', ') || 'item'}).`
@@ -217,7 +246,7 @@ function recordExperience(blockName, toolUsed, durationMs, success, itemsGained 
             memory.experiences = memory.experiences.slice(-50);
         }
 
-        fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2), 'utf8');
+        _debouncedSaveMemory();
         return lesson;
     } catch (err) {
         console.warn(`[ToolLearner] Error recording experience: ${err.message}`);

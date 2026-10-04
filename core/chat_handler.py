@@ -239,8 +239,10 @@ class MinecraftChatHandler:
 
                 elif cmd_name in ("gpu", "vram", "donanim"):
                     import subprocess
+                    import asyncio
                     try:
-                        p = subprocess.run(
+                        p = await asyncio.to_thread(
+                            subprocess.run,
                             ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu", "--format=csv,noheader,nounits"],
                             capture_output=True, text=True, timeout=2
                         )

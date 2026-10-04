@@ -405,13 +405,13 @@ Decide and invoke a SINGLE appropriate tool call now!"""
             else:
                 return {"name": "build_shelter", "arguments": {"mode": "auto"}}
 
-        # 7. Tech tree progression milestones
+        # 8. Tech tree progression milestones
         target = goal.get("target")
         log_count = sum(c for i, c in inv.items() if "log" in i or "stem" in i)
         plank_count = sum(c for i, c in inv.items() if "planks" in i)
 
         if target == "wooden_pickaxe":
-            if log_count < 3 and plank_count < 4:
+            if (log_count * 4) + plank_count < 4:
                 return {"name": "collect_block", "arguments": {"block_name": "log", "count": 3}}
             return {"name": "craft_item", "arguments": {"item_name": "wooden_pickaxe", "count": 1}}
 

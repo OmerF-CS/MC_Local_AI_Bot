@@ -93,7 +93,7 @@ def calculate_missing_enchanting_materials(inventory: Dict[str, int], xp_level: 
             sugar_cane = inventory.get("sugar_cane", 0)
             paper = inventory.get("paper", 0)
             leather = inventory.get("leather", 0)
-            if paper < 3 and sugar_cane < 3:
+            if paper + sugar_cane < 3:
                 missing.append(f"{3 - paper}x paper (or {3 - sugar_cane}x sugar_cane)")
             if leather < 1:
                 missing.append("1x leather")
