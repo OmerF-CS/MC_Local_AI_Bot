@@ -296,14 +296,25 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                     ]
                 }
 
-            # Anti-repetition loop breaker - prevent repeating identical actions 3x
+            # Anti-repetition loop breaker - only trigger if identical action repeats 5 times without inventory progress
             if tool_calls:
-                first_cmd = tool_calls[0].get("name")
-                if first_cmd == self.last_action_command:
+                first_tc = tool_calls[0]
+                first_cmd = first_tc.get("name")
+                args_str = json.dumps(first_tc.get("arguments", {}), sort_keys=True)
+                action_sig = f"{first_cmd}:{args_str}"
+                current_inv = str(state.get("inventory_summary", ""))
+
+                # If inventory changed, progress was made - reset counter
+                if hasattr(self, "_last_inv_summary") and current_inv != self._last_inv_summary:
+                    self.consecutive_repeats = 0
+                self._last_inv_summary = current_inv
+
+                last_sig = getattr(self, "_last_action_sig", "")
+                if action_sig == last_sig:
                     self.consecutive_repeats += 1
-                    if self.consecutive_repeats >= 3:
+                    if self.consecutive_repeats >= 5:
                         logger.warning(
-                            f"⚠️ [Loop Break] Action '{first_cmd}' repeated 3 times. "
+                            f"⚠️ [Loop Break] Action '{first_cmd}' repeated {self.consecutive_repeats} times without progress. "
                             "Breaking loop by regrouping with partner..."
                         )
                         self.consecutive_repeats = 0
@@ -315,6 +326,8 @@ Decide and invoke a SINGLE appropriate tool call now!"""
                         }
                 else:
                     self.consecutive_repeats = 0
+
+                self._last_action_sig = action_sig
                 self.last_action_command = first_cmd
 
             return response

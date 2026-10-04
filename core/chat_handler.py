@@ -471,5 +471,16 @@ class MinecraftChatHandler:
             validated_args["player_name"] = player or sender
 
         # 3. Dispatch to Mineflayer Bridge
-        await self.bot.bridge.send_action(cmd, validated_args)
-        return {"success": True, "command": cmd, "args": validated_args}
+        if cmd in ("say_chat", "stop_actions", "guard_player", "follow_player"):
+            await self.bot.bridge.send_action(cmd, validated_args)
+            return {"success": True, "command": cmd, "args": validated_args}
+        else:
+            # Physical in-game action: lock state to busy and wait for completion
+            if self.bot.bridge.latest_state:
+                self.bot.bridge.latest_state["is_busy"] = True
+            try:
+                res = await self.bot.bridge.send_action_and_wait(cmd, validated_args, timeout=60.0)
+                return res
+            finally:
+                if self.bot.bridge.latest_state:
+                    self.bot.bridge.latest_state["is_busy"] = False
