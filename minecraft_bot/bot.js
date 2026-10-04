@@ -83,6 +83,93 @@ function sendToPython(payload) {
     }
 }
 
+// Round-Robin Resource Scanner State (Non-blocking background radar)
+const RESOURCE_CATEGORIES = [
+    'crafting_table', 'furnace', 'chest', 'bed',
+    'hay_block', 'wheat', 'carrots', 'potatoes', 'farmland',
+    'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'acacia_log', 'jungle_log', 'cherry_log',
+    'stone', 'cobblestone', 'deepslate', 'coal_ore', 'iron_ore', 'copper_ore', 'gold_ore', 'redstone_ore', 'lapis_ore', 'diamond_ore',
+    'water', 'lava'
+];
+const cachedVisibleResources = {};
+let scanRoundRobinIndex = 0;
+
+function tickResourceScanner() {
+    if (!bot || !bot.entity) return;
+    try {
+        const mcData = require('minecraft-data')(bot.version);
+        const bName = RESOURCE_CATEGORIES[scanRoundRobinIndex % RESOURCE_CATEGORIES.length];
+        scanRoundRobinIndex++;
+
+        const bType = mcData.blocksByName[bName];
+        if (!bType) return;
+
+        // Radius 32m (8x smaller volume than 64m), count 4
+        const found = bot.findBlocks({
+            matching: bType.id,
+            maxDistance: 32,
+            count: 4
+        });
+
+        if (found.length > 0) {
+            let exposedCount = 0;
+            let closestDist = 999;
+            for (const pos of found) {
+                const dist = Math.round(bot.entity.position.distanceTo(pos));
+                if (dist < closestDist) closestDist = dist;
+
+                const b = bot.blockAt(pos);
+                if (b) {
+                    const neighbors = [
+                        bot.blockAt(pos.offset(0, 1, 0)),
+                        bot.blockAt(pos.offset(0, -1, 0)),
+                        bot.blockAt(pos.offset(1, 0, 0)),
+                        bot.blockAt(pos.offset(-1, 0, 0)),
+                        bot.blockAt(pos.offset(0, 0, 1)),
+                        bot.blockAt(pos.offset(0, 0, -1))
+                    ];
+                    if (neighbors.some(n => n && (n.name === 'air' || n.name === 'cave_air'))) {
+                        exposedCount++;
+                    }
+                }
+            }
+            cachedVisibleResources[bName] = {
+                total_found: found.length,
+                visible_exposed: exposedCount,
+                closest_distance: closestDist
+            };
+        } else {
+            delete cachedVisibleResources[bName];
+        }
+    } catch (_) {}
+}
+
+function setMovementsForTask(taskType = 'walk') {
+    if (!bot) return;
+    try {
+        const mcData = require('minecraft-data')(bot.version);
+        const m = new Movements(bot, mcData);
+
+        if (taskType === 'mine' || taskType === 'dig') {
+            m.canDig = true;
+            m.allowSprinting = false;
+            m.allowParkour = true;
+            m.maxDropDown = 3;
+        } else {
+            // High-speed fluid traversal (walking, sprinting, following, fleeing, exploring)
+            m.canDig = false; // Fast A* search without evaluating block destruction
+            m.allowSprinting = true; // Sprints to destination
+            m.allowParkour = true; // Jumps 1-block gaps smoothly
+            m.maxDropDown = 4; // Safely drops down small ledges
+            m.scaffoldingBlocks = []; // Don't place random pillars/bridges while walking
+        }
+        defaultMovements = m;
+        bot.pathfinder.setMovements(m);
+    } catch (err) {
+        console.warn(`[Movements] Error updating movements: ${err.message}`);
+    }
+}
+
 // --- ADVANCED 3D SPATIAL PERCEPTION & VISION ENGINE ---
 function getBotState() {
     if (!bot || !bot.entity) return {};
@@ -97,61 +184,8 @@ function getBotState() {
     const currentY = Math.round(bot.entity.position.y);
     const altitudeZone = currentY < 0 ? 'Deepslate Core (Y < 0)' : currentY < 62 ? 'Underground Caves' : 'Surface / Overworld';
 
-    // 2. Visible & Air-Exposed Resource Scanning (Expanded to 64-block radius)
-    const visibleResources = {};
-    const keyCategories = [
-        'crafting_table', 'furnace', 'chest', 'bed',
-        'hay_block', 'wheat', 'carrots', 'potatoes', 'farmland',
-        'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'acacia_log', 'jungle_log', 'cherry_log',
-        'stone', 'cobblestone', 'deepslate', 'coal_ore', 'iron_ore', 'copper_ore', 'gold_ore', 'redstone_ore', 'lapis_ore', 'diamond_ore',
-        'water', 'lava'
-    ];
-
-    try {
-        const mcData = require('minecraft-data')(bot.version);
-        for (const bName of keyCategories) {
-            const bType = mcData.blocksByName[bName];
-            if (bType) {
-                // Search up to 64 blocks radius
-                const found = bot.findBlocks({
-                    matching: bType.id,
-                    maxDistance: 64,
-                    count: 6
-                });
-
-                if (found.length > 0) {
-                    // Check if at least one is exposed to air (visible line-of-sight)
-                    let exposedCount = 0;
-                    let closestDist = 999;
-                    for (const pos of found) {
-                        const dist = Math.round(bot.entity.position.distanceTo(pos));
-                        if (dist < closestDist) closestDist = dist;
-
-                        const b = bot.blockAt(pos);
-                        if (b) {
-                            // Check neighboring air
-                            const neighbors = [
-                                bot.blockAt(pos.offset(0, 1, 0)),
-                                bot.blockAt(pos.offset(0, -1, 0)),
-                                bot.blockAt(pos.offset(1, 0, 0)),
-                                bot.blockAt(pos.offset(-1, 0, 0)),
-                                bot.blockAt(pos.offset(0, 0, 1)),
-                                bot.blockAt(pos.offset(0, 0, -1))
-                            ];
-                            if (neighbors.some(n => n && (n.name === 'air' || n.name === 'cave_air'))) {
-                                exposedCount++;
-                            }
-                        }
-                    }
-                    visibleResources[bName] = {
-                        total_found: found.length,
-                        visible_exposed: exposedCount,
-                        closest_distance: closestDist
-                    };
-                }
-            }
-        }
-    } catch (_) {}
+    // 2. Visible & Air-Exposed Resource Scanning (Read from non-blocking round-robin background cache)
+    const visibleResources = { ...cachedVisibleResources };
 
     // 3. Multi-Category Entity & Threat Radar (32m Radius)
     const hostiles = [];
@@ -537,9 +571,10 @@ function createBot() {
 
     bot.once('spawn', () => {
         console.log('[Minecraft] 🌟 Bot successfully spawned into the world!');
-        const mcData = require('minecraft-data')(bot.version);
-        defaultMovements = new Movements(bot, mcData);
-        bot.pathfinder.setMovements(defaultMovements);
+        setMovementsForTask('walk');
+
+        // Round-robin background resource scanner (1 block category every 200ms, non-blocking)
+        setInterval(tickResourceScanner, 200);
 
         // High-frequency reactive maintenance loops (optimized for low latency)
         setInterval(autoEatCheck, 1500);          // Check hunger & health every 1.5s (was 6s)
@@ -2257,6 +2292,7 @@ async function handleAction(action) {
                 const invBefore = bot.inventory.items().map(i => ({ name: i.name, count: i.count }));
 
                 try {
+                    setMovementsForTask('mine');
                     await bot.collectBlock.collect(blocks);
                     const durationMs = Date.now() - startTime;
                     const invAfter = bot.inventory.items().map(i => ({ name: i.name, count: i.count }));
@@ -2284,6 +2320,8 @@ async function handleAction(action) {
                     }
                 } catch (cErr) {
                     bot.chat(`Mining interrupted: ${cErr.message}`);
+                } finally {
+                    setMovementsForTask('walk');
                 }
                 break;
             }
@@ -2633,6 +2671,7 @@ async function handleAction(action) {
     } finally {
         isBusy = false;
         currentActionName = 'idle';
+        setMovementsForTask('walk');
         sendToPython({
             type: 'action_completed',
             command: command,

@@ -255,6 +255,82 @@
       "items_gained": [
         "cobblestone x1"
       ]
+    },
+    {
+      "timestamp": "2026-10-04T13:03:40.748Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 68950,
+      "success": true,
+      "items_gained": []
+    },
+    {
+      "timestamp": "2026-10-04T13:08:08.194Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 114485,
+      "success": true,
+      "items_gained": [
+        "cherry_log x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:10:13.289Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 69657,
+      "success": true,
+      "items_gained": [
+        "cherry_log x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:11:41.331Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 94739,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:11:58.864Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 43075,
+      "success": true,
+      "items_gained": [
+        "cherry_log x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:14:06.345Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 96505,
+      "success": true,
+      "items_gained": [
+        "cherry_log x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:15:28.727Z",
+      "block": "cherry_log",
+      "tool_used": "cobblestone",
+      "duration_ms": 46886,
+      "success": true,
+      "items_gained": []
+    },
+    {
+      "timestamp": "2026-10-04T13:16:54.455Z",
+      "block": "cherry_log",
+      "tool_used": "cobblestone",
+      "duration_ms": 89485,
+      "success": true,
+      "items_gained": [
+        "cherry_log x1"
+      ]
     }
   ],
   "learned_lessons": [
@@ -272,6 +348,14 @@
     "Successfully harvested 'stone' using 'stone_pickaxe' in 57.2s (Obtained: item).",
     "Successfully harvested 'stone' using 'stone_pickaxe' in 32.1s (Obtained: cobblestone x1).",
     "Successfully harvested 'stone' using 'stone_pickaxe' in 52.4s (Obtained: cobblestone x1).",
-    "Successfully harvested 'stone' using 'stone_pickaxe' in 27.7s (Obtained: cobblestone x1)."
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 27.7s (Obtained: cobblestone x1).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 69.0s (Obtained: item).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 114.5s (Obtained: cherry_log x1).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 69.7s (Obtained: cherry_log x1).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 94.7s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 43.1s (Obtained: cherry_log x1).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 96.5s (Obtained: cherry_log x1).",
+    "Successfully harvested 'cherry_log' using 'cobblestone' in 46.9s (Obtained: item).",
+    "Successfully harvested 'cherry_log' using 'cobblestone' in 89.5s (Obtained: cherry_log x1)."
   ]
 }
