@@ -310,7 +310,20 @@ class MinecraftChatHandler:
             cmd = tc.get("name")
             args = tc.get("arguments", {})
             logger.info(f"⚡ Executing Action: {cmd} -> {args}")
-            await self._execute_tool(cmd, args, state, sender)
+            pre_snapshot = dict(state)
+            start_t = time.time()
+            exec_res = await self._execute_tool(cmd, args, state, sender)
+            dur_s = time.time() - start_t
+
+            if hasattr(self.bot, "dataset_collector") and self.bot.dataset_collector:
+                post_snapshot = dict(self.bot.bridge.latest_state or state)
+                self.bot.dataset_collector.record_step(
+                    pre_state=pre_snapshot,
+                    decision=tc,
+                    exec_result=exec_res or {},
+                    post_state=post_snapshot,
+                    duration_s=dur_s
+                )
             await asyncio.sleep(0.5)
 
         # Output response text if say_chat was not already emitted

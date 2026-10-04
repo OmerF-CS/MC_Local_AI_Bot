@@ -217,6 +217,44 @@
       "items_gained": [
         "cobblestone x4"
       ]
+    },
+    {
+      "timestamp": "2026-10-04T11:40:37.239Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 57196,
+      "success": true,
+      "items_gained": []
+    },
+    {
+      "timestamp": "2026-10-04T11:41:40.581Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 32079,
+      "success": true,
+      "items_gained": [
+        "cobblestone x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T11:43:08.234Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 52369,
+      "success": true,
+      "items_gained": [
+        "cobblestone x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T12:01:15.752Z",
+      "block": "stone",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 27738,
+      "success": true,
+      "items_gained": [
+        "cobblestone x1"
+      ]
     }
   ],
   "learned_lessons": [
@@ -230,6 +268,10 @@
     "Successfully harvested 'stone' using 'stone_pickaxe' in 11.1s (Obtained: cobblestone x5).",
     "Successfully harvested 'stone' using 'stone_pickaxe' in 8.5s (Obtained: cobblestone x4).",
     "Successfully harvested 'stone' using 'stone_pickaxe' in 9.6s (Obtained: cobblestone x3).",
-    "Successfully harvested 'stone' using 'stone_pickaxe' in 10.1s (Obtained: cobblestone x4)."
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 10.1s (Obtained: cobblestone x4).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 57.2s (Obtained: item).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 32.1s (Obtained: cobblestone x1).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 52.4s (Obtained: cobblestone x1).",
+    "Successfully harvested 'stone' using 'stone_pickaxe' in 27.7s (Obtained: cobblestone x1)."
   ]
 }

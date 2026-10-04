@@ -3,7 +3,6 @@ import asyncio
 import json
 from typing import Dict, Any, List, Optional
 from utils.logger import get_logger
-from ai.knowledge_base import get_relevant_tactic
 from ai.progression_tree import get_current_progression_goal, resolve_missing_ingredients
 
 logger = get_logger("AutonomousCoopBrain")
@@ -168,98 +167,23 @@ class AutonomousCoopBrain:
         missing_ingredients = resolve_missing_ingredients(goal["target"], inv_dict)
         missing_str = ", ".join(missing_ingredients) or "All materials ready for crafting!"
 
-        pro_tactic = get_relevant_tactic(state)
-
         if owner_info:
             dist = owner_info.get("distance", 0)
-            held = owner_info.get("held_item", "Empty hand")
-            owner_summary = f"{self.bot_owner} is {dist} blocks away, currently holding '{held}'."
+            owner_summary = f"{self.bot_owner} {dist}m away"
         else:
-            owner_summary = f"{self.bot_owner} is not currently within line of sight."
-
-        vision = state.get("vision_metrics", {})
-        light = vision.get("light_level", 15)
-        light_str = f"Pitch Dark ({light}/15 - Mobs will spawn!)" if light < 6 else f"Lit ({light}/15)"
-        altitude_zone = vision.get("altitude_zone", "Surface / Overworld")
-
-        vis_res = state.get("visible_resources", {})
-        if vis_res:
-            res_items = [
-                f"{name} ({data['total_found']}x total, {data['visible_exposed']} exposed, {data['closest_distance']}m away)"
-                for name, data in vis_res.items()
-            ]
-            vision_summary = ", ".join(res_items)
-        else:
-            vision_summary = "No key resources detected within 64m."
-
-        carried_tools = state.get("carried_tools", "None")
+            owner_summary = f"{self.bot_owner} out of sight"
 
         active_task = state.get("active_player_task")
         if active_task:
-            task_header = f"""🎯 ACTIVE TEAMMATE DIRECTIVE (Assigned by {active_task.get('assigned_by', self.bot_owner)}):
-- Instruction: \"{active_task.get('instruction')}\"
-- Status: In Progress ({active_task.get('primary_action', 'co-op task')})
-- YOUR TOP PRIORITY: Fulfill this mission for your partner immediately!"""
+            decision_prompt = (
+                f"Directive from {self.bot_owner}: '{active_task.get('instruction')}'. "
+                f"Target: {goal['target']}. Missing: {missing_str}. Decide 1 tool."
+            )
         else:
-            task_header = f"""🕹️ PROACTIVE AUTONOMOUS INITIATIVE (No active teammate mission):
-- You are free to advance your gear, prepare food, upgrade pickaxes, smelt ores, craft shields/armor, and stick close to {self.bot_owner}."""
-
-        decision_prompt = f"""[AUTONOMOUS CO-OP REASONING CYCLE]:
-You are an expert human-like co-op Minecraft partner playing with {self.bot_owner} to beat the game (defeat the Ender Dragon).
-Never stand idle like a mindless bot! Take proactive initiative and advance your gear and team.
-
-{task_header}
-
-🏆 STRATEGIC TECH-TREE MILESTONE:
-- Current Era: {goal['stage']}
-- Primary Progression Target: {goal['target']}
-- Missing Ingredients for Target: {missing_str}
-- Milestone Advice: {goal['next_hint']}
-
-❤️ BOT HEALTH & VITALS:
-- Health: {health}/20 HP ({hearts} Hearts) | Hunger: {food}/20
-- Guard Mode: {'Active (Guarding ' + self.bot_owner + ')' if state.get('is_guarding') else 'Autonomous'}
-
-🎒 INVENTORY & BACKPACK ITEMS:
-- Current Items: {inv_summary}
-
-⛏️ TOOL MASTERY & HARVESTING RULES:
-- Stone / Cobblestone / Coal Ore: Requires WOODEN PICKAXE or higher! (Bare hands drop 0 items!)
-- Iron Ore / Lapis / Copper: Requires STONE PICKAXE or higher!
-- Gold / Diamond / Redstone: Requires IRON PICKAXE or higher!
-- Obsidian: Requires DIAMOND PICKAXE or higher!
-- Wood / Logs: Harvest with AXE for 4x speed.
-- Your Active Tools: {carried_tools}
-
-🐾 SURROUNDING ENTITIES & THREAT RADAR (32m):
-- Detected Entities: {entities_summary}
-
-👁️ 3D ENVIRONMENTAL PERCEPTION (64-Block Radius):
-- Position: X: {pos.get('x', 0):.1f}, Y: {pos.get('y', 0):.1f}, Z: {pos.get('z', 0):.1f}
-- Altitude Zone: {altitude_zone}
-- Lighting Level: {light_str}
-- Biome: {biome} | Time of Day: {time_str}
-- Air-Exposed & Reachable Resources (within 64m): {vision_summary}
-
-👥 TEAM & PARTNER STATUS:
-- {owner_summary}
-
-💡 VETERAN TACTICAL TIP:
-\"{pro_tactic}\"
-
-YOUR TASK:
-Make a decisive, tactical choice to assist {self.bot_owner} and advance towards defeating the Ender Dragon:
-- If active teammate directive is present: focus on fulfilling it!
-- If hunger is low (< 16) and you have food: invoke `eat_food`.
-- If hunger is low (< 15) and you have NO food: invoke `hunt_food`.
-- If you have raw meat and fuel: invoke `smelt_item` to cook food.
-- If threatened by hostile mobs or {self.bot_owner} in danger: invoke `guard_player` or `attack_target`.
-- If {self.bot_owner} has moved far ahead (distance > 16 blocks): invoke `follow_player`.
-- If night has fallen and a bed is nearby: invoke `sleep_in_bed`.
-- If materials are missing for gear: invoke `collect_block` or `craft_item`.
-- Otherwise: stick close, guard your partner, or mine visible resources.
-
-Decide and invoke a SINGLE appropriate tool call now!"""
+            decision_prompt = (
+                f"Milestone: {goal['target']} ({goal['stage']}). Missing: {missing_str}. "
+                f"HP: {health}/20, Food: {food}/20. {owner_summary}. Decide 1 tool."
+            )
 
         try:
             logger.info(f"🎯 Milestone: {goal['target']} | Evaluating tactical action...")

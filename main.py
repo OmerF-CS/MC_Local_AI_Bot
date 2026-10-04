@@ -3,7 +3,7 @@ import os
 import subprocess
 import signal
 import sys
-import threading
+import time
 from typing import Optional, Dict, Any, List
 
 from utils.config import Config
@@ -13,6 +13,7 @@ from core.bridge import MinecraftBridge
 from core.chat_handler import MinecraftChatHandler
 from ai.ollama_client import OllamaBrain
 from ai.planner import AutonomousCoopBrain
+from ai.dataset_collector import DatasetCollector
 
 logger = get_logger("Main")
 
@@ -33,6 +34,7 @@ class MinecraftAIBot:
         )
 
         self.planner = AutonomousCoopBrain(self.brain, bot_owner=config.BOT_OWNER, db=self.db)
+        self.dataset_collector = DatasetCollector()
         self.chat_handler = MinecraftChatHandler(self)
         self.node_process: subprocess.Popen | None = None
         self.autonomous_mode = True
@@ -193,7 +195,18 @@ class MinecraftAIBot:
                     cmd = tc.get("name")
                     args = tc.get("arguments", {})
                     logger.info(f"⚡ [PROACTIVE INITIATIVE] Action: {cmd} -> {args}")
-                    await self.chat_handler._execute_tool(cmd, args, state, self.config.BOT_OWNER)
+                    pre_snapshot = dict(state)
+                    start_t = time.time()
+                    exec_res = await self.chat_handler._execute_tool(cmd, args, state, self.config.BOT_OWNER)
+                    dur_s = time.time() - start_t
+                    post_snapshot = dict(self.bridge.latest_state or state)
+                    self.dataset_collector.record_step(
+                        pre_state=pre_snapshot,
+                        decision=tc,
+                        exec_result=exec_res or {},
+                        post_state=post_snapshot,
+                        duration_s=dur_s
+                    )
                     await asyncio.sleep(0.1)
 
                 has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
