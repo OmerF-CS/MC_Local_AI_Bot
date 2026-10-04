@@ -385,30 +385,72 @@ class MinecraftChatHandler:
         # 2. Mineflayer Action Schema Validation
         validated_args = dict(args)
         if cmd == "craft_item":
-            item = str(validated_args.get("item_name", "")).strip().lower()
+            item = str(
+                validated_args.get("item_name")
+                or validated_args.get("material")
+                or validated_args.get("item")
+                or validated_args.get("target")
+                or ""
+            ).strip().lower()
+            if not item:
+                goal = state.get("goal_target") or state.get("target")
+                if goal:
+                    item = str(goal).strip().lower()
             if not item:
                 logger.warning("⚠️ 'craft_item' called without item_name.")
                 return {"success": False, "error": "Missing item_name"}
             validated_args["item_name"] = item
-            count = validated_args.get("count", 1)
+            count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
             validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
 
         elif cmd == "collect_block":
-            block = str(validated_args.get("block_name", "")).strip().lower()
-            if not block:
+            block = str(
+                validated_args.get("block_name")
+                or validated_args.get("wall_material")
+                or validated_args.get("material")
+                or validated_args.get("block")
+                or validated_args.get("target")
+                or ""
+            ).strip().lower()
+            if not block or block == "auto":
+                goal_target = state.get("goal_target") or ""
+                missing = state.get("goal_missing") or state.get("missing_ingredients") or []
+                if goal_target == "furnace":
+                    block = "stone"
+                elif goal_target == "wooden_pickaxe":
+                    block = "log"
+                elif goal_target == "stone_pickaxe":
+                    block = "stone"
+                elif "iron" in goal_target or goal_target in ("shield", "bucket"):
+                    block = "iron_ore"
+                elif "diamond" in goal_target:
+                    block = "diamond_ore"
+                elif missing and isinstance(missing, list) and len(missing) > 0:
+                    first_missing = str(missing[0]).lower()
+                    for cand in ("log", "stone", "cobblestone", "iron_ore", "coal_ore", "diamond_ore", "obsidian"):
+                        if cand in first_missing:
+                            block = cand
+                            break
+            if not block or block == "auto":
                 logger.warning("⚠️ 'collect_block' called without block_name.")
                 return {"success": False, "error": "Missing block_name"}
             validated_args["block_name"] = block
-            count = validated_args.get("count", 1)
+            count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
             validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
 
         elif cmd == "smelt_item":
-            item = str(validated_args.get("input_item", "")).strip().lower()
+            item = str(
+                validated_args.get("input_item")
+                or validated_args.get("item_name")
+                or validated_args.get("material")
+                or validated_args.get("item")
+                or ""
+            ).strip().lower()
             if not item:
                 logger.warning("⚠️ 'smelt_item' called without input_item.")
                 return {"success": False, "error": "Missing input_item"}
             validated_args["input_item"] = item
-            count = validated_args.get("count", 1)
+            count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
             validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
 
         elif cmd == "go_to_coordinates":

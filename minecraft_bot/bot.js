@@ -541,15 +541,15 @@ function createBot() {
         defaultMovements = new Movements(bot, mcData);
         bot.pathfinder.setMovements(defaultMovements);
 
-        // Periodic maintenance loops
-        setInterval(autoEatCheck, 6000);
-        setInterval(guardLoop, 1500);
-        setInterval(autoSelfDefenseCheck, 1500); // Proactive close-range threat defense
-        setInterval(antiStuckCheck, 3000); // Anti-stuck watchdog every 3s
-        setInterval(autoEquipGearCheck, 4000); // Armor & shield auto-equip every 4s
-        setInterval(autoTorchCheck, 8000); // Dark cave auto-torching
+        // High-frequency reactive maintenance loops (optimized for low latency)
+        setInterval(autoEatCheck, 1500);          // Check hunger & health every 1.5s (was 6s)
+        setInterval(guardLoop, 500);              // Guard tracking every 0.5s (was 1.5s)
+        setInterval(autoSelfDefenseCheck, 500);   // Proactive close-range threat defense every 0.5s (was 1.5s)
+        setInterval(antiStuckCheck, 1500);        // Anti-stuck watchdog every 1.5s (was 3s)
+        setInterval(autoEquipGearCheck, 1500);    // Armor & shield auto-equip every 1.5s (was 4s)
+        setInterval(autoTorchCheck, 5000);        // Dark cave auto-torching every 5s (was 8s)
 
-        // Live 2-second state synchronization heartbeat
+        // Live high-speed state synchronization heartbeat (500ms for instant telemetry)
         setInterval(() => {
             if (bot && bot.entity) {
                 sendToPython({
@@ -557,7 +557,7 @@ function createBot() {
                     state: getBotState()
                 });
             }
-        }, 2000);
+        }, 500);
 
         sendToPython({
             type: 'bot_spawned',

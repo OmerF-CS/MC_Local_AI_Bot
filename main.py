@@ -40,6 +40,7 @@ class MinecraftAIBot:
         self._loop_task: asyncio.Task | None = None
         self._bot_ready = asyncio.Event()
         self._shutdown_event = asyncio.Event()
+        self._loop_wakeup = asyncio.Event()
 
         # Wire up bridge callbacks
         self.bridge.on_chat_callback = self.chat_handler.handle_chat
@@ -99,6 +100,9 @@ class MinecraftAIBot:
                         self.config.BOT_OWNER
                     )
 
+        # Trigger immediate next decision cycle in autonomous loop
+        self._loop_wakeup.set()
+
     async def on_bot_spawn(self, state):
         """Called when the bot successfully spawns into the world."""
         logger.info(f"✨ {self.config.BOT_NAME} spawned into the world! Health: {state.get('health')}")
@@ -148,7 +152,12 @@ class MinecraftAIBot:
 
         while not self._shutdown_event.is_set():
             try:
-                await asyncio.sleep(2)
+                # Fast event-driven wakeup upon action completion, or periodic 0.5s check
+                try:
+                    await asyncio.wait_for(self._loop_wakeup.wait(), timeout=0.5)
+                    self._loop_wakeup.clear()
+                except asyncio.TimeoutError:
+                    pass
 
                 if not self.autonomous_mode:
                     continue
@@ -185,13 +194,13 @@ class MinecraftAIBot:
                     args = tc.get("arguments", {})
                     logger.info(f"⚡ [PROACTIVE INITIATIVE] Action: {cmd} -> {args}")
                     await self.chat_handler._execute_tool(cmd, args, state, self.config.BOT_OWNER)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.1)
 
                 has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
                 if response_text and not has_say_chat:
                     await self.bridge.send_action("say_chat", {"message": response_text})
 
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(0.3)
 
             except asyncio.CancelledError:
                 break

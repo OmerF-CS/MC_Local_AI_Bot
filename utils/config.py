@@ -38,7 +38,7 @@ class Config:
     COMMAND_PREFIX: str = "!"
     
     # Communication / Cooldown
-    COOLDOWN_SECONDS: float = 1.0
+    COOLDOWN_SECONDS: float = 0.2
 
     @classmethod
     def load_from_env(cls) -> "Config":
@@ -61,7 +61,7 @@ class Config:
             BOT_OWNER=os.getenv("BOT_OWNER", "Omer"),
             LOG_LEVEL=os.getenv("LOG_LEVEL", "INFO"),
             COMMAND_PREFIX=os.getenv("COMMAND_PREFIX", "!"),
-            COOLDOWN_SECONDS=_safe_float(os.getenv("COOLDOWN_SECONDS"), 1.0)
+            COOLDOWN_SECONDS=_safe_float(os.getenv("COOLDOWN_SECONDS"), 0.2)
         )
     
     def validate(self) -> List[str]:

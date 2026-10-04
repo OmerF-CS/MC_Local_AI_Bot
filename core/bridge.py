@@ -33,7 +33,13 @@ class MinecraftBridge:
     async def start(self):
         """Starts the WebSocket bridge server."""
         logger.info(f"🌐 WebSocket bridge starting at: ws://{self.host}:{self.port}")
-        self.server = await websockets.serve(self._handle_client, self.host, self.port)
+        self.server = await websockets.serve(
+            self._handle_client,
+            self.host,
+            self.port,
+            ping_interval=None,
+            ping_timeout=None
+        )
         logger.info("✅ WebSocket bridge ready, waiting for Mineflayer worker to connect...")
 
     async def stop(self):
