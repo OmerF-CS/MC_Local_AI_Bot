@@ -684,6 +684,13 @@ function normalizeCraftItemName(rawName, bot) {
     return name;
 }
 
+function withTimeout(promise, ms = 8000, desc = 'Action') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${desc} timed out after ${ms}ms`)), ms))
+    ]);
+}
+
 function findPlacementLocation(bot) {
     const botPos = bot.entity.position;
     for (let dy of [-1, 0]) {
@@ -728,8 +735,13 @@ async function ensurePlanks(bot, neededPlankCount) {
     if (recipes.length === 0) return false;
 
     bot.chat(`Crafting ${craftsNeeded * 4}x ${plankName} from logs...`);
-    await bot.craft(recipes[0], craftsNeeded, null);
-    return true;
+    try {
+        await withTimeout(bot.craft(recipes[0], craftsNeeded, null), 6000, 'Craft planks');
+        return true;
+    } catch (err) {
+        console.warn(`[Crafting] Error crafting planks: ${err.message}`);
+        return false;
+    }
 }
 
 async function ensureSticks(bot, neededStickCount) {
@@ -750,8 +762,13 @@ async function ensureSticks(bot, neededStickCount) {
     if (recipes.length === 0) return false;
 
     bot.chat(`Crafting ${stickCraftsNeeded * 4}x sticks...`);
-    await bot.craft(recipes[0], stickCraftsNeeded, null);
-    return true;
+    try {
+        await withTimeout(bot.craft(recipes[0], stickCraftsNeeded, null), 6000, 'Craft sticks');
+        return true;
+    } catch (err) {
+        console.warn(`[Crafting] Error crafting sticks: ${err.message}`);
+        return false;
+    }
 }
 
 async function retrieveBlock(bot, block) {
@@ -759,8 +776,8 @@ async function retrieveBlock(bot, block) {
     try {
         await toolLearner.prepareAndEquipToolForBlock(bot, block.name, null);
         const pos = block.position.clone();
-        await bot.dig(block);
-        await bot.waitForTicks(10);
+        await withTimeout(bot.dig(block), 6000, 'Dig placed block');
+        await bot.waitForTicks(5);
         await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 0.5)).catch(() => {});
     } catch (err) {
         console.warn(`[Cleanup] Error retrieving block: ${err.message}`);
@@ -807,7 +824,12 @@ async function ensureCraftingTableInWorld(bot) {
         }
 
         bot.chat("Crafting a crafting table...");
-        await bot.craft(recipes[0], 1, null);
+        try {
+            await withTimeout(bot.craft(recipes[0], 1, null), 6000, 'Craft table item');
+        } catch (err) {
+            console.warn(`[Crafting] Error crafting table item: ${err.message}`);
+            return { tableBlock: null, placedByMe: false };
+        }
         tableItem = bot.inventory.items().find(i => i.name === 'crafting_table');
     }
 
@@ -820,10 +842,15 @@ async function ensureCraftingTableInWorld(bot) {
     }
 
     bot.chat("Placing crafting table...");
-    await bot.equip(tableItem, 'hand');
-    await bot.placeBlock(loc.referenceBlock, loc.faceVector);
-    tableBlock = bot.blockAt(loc.placedPos);
-    return { tableBlock, placedByMe: true };
+    try {
+        await withTimeout(bot.equip(tableItem, 'hand'), 3000, 'Equip crafting table');
+        await withTimeout(bot.placeBlock(loc.referenceBlock, loc.faceVector), 5000, 'Place crafting table');
+        tableBlock = bot.blockAt(loc.placedPos);
+        return { tableBlock, placedByMe: true };
+    } catch (err) {
+        console.warn(`[Crafting] Error placing table block: ${err.message}`);
+        return { tableBlock: null, placedByMe: false };
+    }
 }
 
 async function smartCraft(bot, rawItemName, count = 1) {
@@ -889,18 +916,42 @@ async function smartCraft(bot, rawItemName, count = 1) {
     if (recipes.length === 0) {
         bot.chat(`Missing materials to craft ${itemName}.`);
         if (placedByMe && tableBlock) {
-            await retrieveBlock(bot, tableBlock);
+            try { await withTimeout(retrieveBlock(bot, tableBlock), 5000, 'Retrieve table'); } catch (_) {}
         }
         return false;
     }
 
     const recipe = recipes[0];
-    await bot.craft(recipe, count, tableBlock);
-    bot.chat(`Successfully crafted ${count}x ${itemName}! ✨`);
+    if (tableBlock) {
+        if (bot.entity.position.distanceTo(tableBlock.position) > 3.0) {
+            try {
+                await withTimeout(bot.pathfinder.goto(new goals.GoalNear(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 2)), 4000, 'Approach table');
+            } catch (_) {}
+        }
+        try {
+            await bot.lookAt(tableBlock.position.offset(0.5, 0.5, 0.5));
+        } catch (_) {}
+    }
+
+    try {
+        await withTimeout(bot.craft(recipe, count, tableBlock), 8000, `Craft ${itemName}`);
+        bot.chat(`Successfully crafted ${count}x ${itemName}! ✨`);
+    } catch (craftErr) {
+        console.warn(`[Crafting] Error crafting ${itemName}: ${craftErr.message}`);
+        if (bot.currentWindow) {
+            try { bot.closeWindow(bot.currentWindow); } catch (_) {}
+        }
+        if (placedByMe && tableBlock) {
+            try { await withTimeout(retrieveBlock(bot, tableBlock), 5000, 'Retrieve table'); } catch (_) {}
+        }
+        return false;
+    }
 
     // Step 5: Clean-up placed table
     if (placedByMe && tableBlock) {
-        await retrieveBlock(bot, tableBlock);
+        try {
+            await withTimeout(retrieveBlock(bot, tableBlock), 5000, 'Retrieve table');
+        } catch (_) {}
     }
 
     return true;

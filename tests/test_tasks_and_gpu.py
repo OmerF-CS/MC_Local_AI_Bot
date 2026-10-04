@@ -52,11 +52,33 @@ class TestTasksAndGPU(unittest.TestCase):
         self.db.clear_pending_tasks()
         self.assertEqual(len(self.db.get_pending_tasks()), 0)
 
-    def test_ollama_gpu_payload_configuration(self):
-        """Verify Ollama brain explicitly passes num_gpu=999 for 100% RTX 3060 CUDA offloading."""
-        brain = OllamaBrain(model="qwen2.5:3b")
-        # Ensure brain parameters use 3B model
-        self.assertEqual(brain.model, "qwen2.5:3b")
+    def test_chat_handler_scoping_and_dispatch(self):
+        """Verify chat handler runs without UnboundLocalError for asyncio or subprocess."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from core.chat_handler import MinecraftChatHandler
+
+        bot = MagicMock()
+        bot.config.BOT_NAME = "AIAssistant"
+        bot.config.MINECRAFT_USERNAME = "AIAssistant"
+        bot.config.BOT_OWNER = "Schizo_D"
+        bot.config.COOLDOWN_SECONDS = 0.0
+        bot.config.OLLAMA_MODEL = "qwen2.5:3b"
+        bot.db = self.db
+        bot.bridge = MagicMock()
+        bot.bridge.send_action = AsyncMock()
+        bot.bridge.latest_state = {}
+        bot.brain = MagicMock()
+        bot.brain.process_chat = AsyncMock(return_value={
+            "text": "Understood",
+            "tool_calls": [{"name": "say_chat", "arguments": {"message": "Understood"}}]
+        })
+
+        handler = MinecraftChatHandler(bot)
+        asyncio.run(handler.handle_chat("Schizo_D", "Set own game mode to Spectator Mode", {}))
+        self.assertTrue(bot.bridge.send_action.called)
+
 
 if __name__ == "__main__":
     unittest.main()
+

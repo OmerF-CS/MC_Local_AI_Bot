@@ -1,10 +1,12 @@
 """Minecraft Chat and Action Dispatcher - Production hardened emergency handling."""
 import asyncio
+import subprocess
 import time
 from typing import Dict, Any
 
 from utils.logger import get_logger
 from ai.minecraft_registry import lookup_component_data
+from ai.progression_tree import resolve_missing_ingredients
 
 logger = get_logger("MinecraftChatHandler")
 
@@ -237,8 +239,6 @@ class MinecraftChatHandler:
                     return
 
                 elif cmd_name in ("gpu", "vram", "hardware"):
-                    import subprocess
-                    import asyncio
                     try:
                         p = await asyncio.to_thread(
                             subprocess.run,
@@ -413,7 +413,6 @@ class MinecraftChatHandler:
                 return {"success": False, "error": f"Invalid arguments for 'craft_item': missing required parameter 'item_name', received: {list(args.keys())}"}
 
             # Fast inventory pre-check against tech tree recipes
-            from ai.progression_tree import resolve_missing_ingredients
             inv_dict = {}
             for itm in state.get("inventory_items", []):
                 inv_dict[itm.get("name", "")] = itm.get("count", 0)
