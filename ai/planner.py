@@ -226,7 +226,16 @@ class AutonomousCoopBrain:
                 for tc in tool_calls:
                     c_name = tc.get("name")
                     c_args = tc.get("arguments", {})
-                    if c_name == "craft_item":
+                    if c_name == "collect_block":
+                        b_name = str(c_args.get("block_name", "")).lower()
+                        if "plank" in b_name:
+                            logger.info(f"🔄 Remapping model action collect_block('{b_name}') -> 'log'.")
+                            c_args["block_name"] = "log"
+                    elif c_name in ("list_saved_locations", "stop_actions") and not state.get("active_player_task"):
+                        logger.info(f"ℹ️ Model called idle action '{c_name}' in autonomous mode. Substituting milestone action: {milestone_action.get('name')}.")
+                        sanitized_calls.append(milestone_action)
+                        continue
+                    elif c_name == "craft_item":
                         target_craft = c_args.get("item_name") or goal.get("target")
                         if target_craft:
                             missing_for_item = resolve_missing_ingredients(target_craft, inv_dict)

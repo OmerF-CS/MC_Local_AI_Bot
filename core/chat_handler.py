@@ -494,6 +494,10 @@ class MinecraftChatHandler:
                         if cand in first_missing:
                             block = cand
                             break
+            if "plank" in block:
+                logger.info(f"🔄 Remapping collect_block('{block}') -> 'log' (planks must be crafted from logs).")
+                block = "log"
+
             if not block or block == "auto":
                 logger.warning("⚠️ 'collect_block' called without block_name.")
                 return {"success": False, "error": f"Invalid arguments for 'collect_block': missing required parameter 'block_name', received: {list(args.keys())}"}

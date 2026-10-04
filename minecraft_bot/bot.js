@@ -639,11 +639,21 @@ function createBot() {
         console.log('[Minecraft] 💀 Bot died!');
         isGuarding = false;
         isBusy = false;
+        isSheltered = false;
         currentActionName = 'idle';
         sendToPython({
             type: 'bot_death',
             state: getBotState()
         });
+    });
+
+    bot.on('respawn', () => {
+        console.log('[Minecraft] 🔄 Bot respawned into the world!');
+        isGuarding = false;
+        isBusy = false;
+        isSheltered = false;
+        currentActionName = 'idle';
+        setMovementsForTask('walk');
     });
 
     bot.on('kicked', (reason) => {

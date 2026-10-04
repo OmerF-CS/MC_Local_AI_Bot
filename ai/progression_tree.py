@@ -8,11 +8,20 @@ from typing import Dict, Any, List, Optional
 # Equivalent Material Tags (Game-Engine Compatible)
 def count_equivalent_materials(tag_or_item: str, inventory: Dict[str, int]) -> int:
     """Calculates total available quantity across all equivalent variants in inventory."""
+    log_count = sum(count for item, count in inventory.items() if "log" in item or "stem" in item or "wood" in item)
+    plank_count = sum(count for item, count in inventory.items() if "planks" in item)
+    direct_sticks = inventory.get("stick", 0)
+
+    # 1 log crafts into 4 planks
     if tag_or_item in ("planks", "wooden_planks"):
-        return sum(count for item, count in inventory.items() if "planks" in item)
+        return plank_count + (log_count * 4)
+
+    # 1 plank crafts into 2 sticks, 1 log crafts into 8 sticks
+    if tag_or_item in ("stick", "sticks"):
+        return direct_sticks + (plank_count * 2) + (log_count * 8)
 
     if tag_or_item in ("log", "logs", "wood"):
-        return sum(count for item, count in inventory.items() if "log" in item or "stem" in item or "wood" in item)
+        return log_count
 
     if tag_or_item in ("stone", "cobblestone", "stone_tool_materials"):
         return sum(count for item, count in inventory.items() if item in (
@@ -215,9 +224,15 @@ def resolve_missing_ingredients(target_item: str, inventory: Dict[str, int]) -> 
         return []
 
     missing = []
+    wood_deficit_reported = False
     for ing_tag, count in recipe["ingredients"].items():
         available = count_equivalent_materials(ing_tag, inventory)
         if available < count:
-            readable_tag = ing_tag.replace("_", " ")
-            missing.append(f"{count - available}x {readable_tag}")
+            if ing_tag in ("planks", "wooden_planks", "stick", "sticks"):
+                if not wood_deficit_reported:
+                    missing.append("3x wood log")
+                    wood_deficit_reported = True
+            else:
+                readable_tag = ing_tag.replace("_", " ")
+                missing.append(f"{count - available}x {readable_tag}")
     return missing

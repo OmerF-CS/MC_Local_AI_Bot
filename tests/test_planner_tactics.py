@@ -61,6 +61,77 @@ class TestPlannerTactics(unittest.TestCase):
         self.assertEqual(substituted_action["name"], "collect_block")
         self.assertEqual(substituted_action["arguments"]["block_name"], "iron")
 
+    def test_wood_logs_satisfy_wooden_pickaxe_crafting(self):
+        """Verify wood logs (e.g. cherry_log) count towards planks and sticks so craft_item is allowed."""
+        from ai.progression_tree import resolve_missing_ingredients, count_equivalent_materials
+
+        # With 4 cherry logs, planks and sticks are satisfied
+        inv_with_logs = {"cherry_log": 4}
+        self.assertGreaterEqual(count_equivalent_materials("planks", inv_with_logs), 4)
+        self.assertGreaterEqual(count_equivalent_materials("stick", inv_with_logs), 2)
+        missing = resolve_missing_ingredients("wooden_pickaxe", inv_with_logs)
+        self.assertEqual(missing, [], "4 cherry logs must satisfy wooden_pickaxe crafting!")
+
+        # With 0 wood, missing items should request wood logs, NOT unminable planks
+        missing_empty = resolve_missing_ingredients("wooden_pickaxe", {})
+        self.assertEqual(missing_empty, ["3x wood log"])
+
+    def test_plank_collection_remapped_to_log(self):
+        """Verify collect_block for planks is automatically remapped to log."""
+        mock_ollama = MagicMock()
+        mock_ollama.process_chat = AsyncMock(return_value={
+            "text": "Collecting planks",
+            "tool_calls": [
+                {"name": "collect_block", "arguments": {"block_name": "planks", "count": 3}}
+            ]
+        })
+
+        brain = AutonomousCoopBrain(ollama_brain=mock_ollama, bot_owner="Omer")
+        state = {
+            "health": 20,
+            "food": 20,
+            "inventory_items": [],
+            "inventory_summary": "Empty",
+            "is_day": True,
+            "dimension": "overworld",
+            "nearby_hostiles": []
+        }
+
+        decision = asyncio.run(brain.decide_next_action(state))
+        self.assertIsNotNone(decision)
+        tool_call = decision["tool_calls"][0]
+        self.assertEqual(tool_call["name"], "collect_block")
+        self.assertEqual(tool_call["arguments"]["block_name"], "log")
+
+    def test_idle_utility_tool_substituted_in_autonomous_mode(self):
+        """Verify idle utility tools like list_saved_locations are replaced with milestone action."""
+        mock_ollama = MagicMock()
+        mock_ollama.process_chat = AsyncMock(return_value={
+            "text": "Listing locations",
+            "tool_calls": [
+                {"name": "list_saved_locations", "arguments": {}}
+            ]
+        })
+
+        brain = AutonomousCoopBrain(ollama_brain=mock_ollama, bot_owner="Omer")
+        state = {
+            "health": 20,
+            "food": 20,
+            "inventory_items": [],
+            "inventory_summary": "Empty",
+            "is_day": True,
+            "dimension": "overworld",
+            "nearby_hostiles": []
+        }
+
+        decision = asyncio.run(brain.decide_next_action(state))
+        self.assertIsNotNone(decision)
+        tool_call = decision["tool_calls"][0]
+        # Should be substituted with milestone action (collect_block log for wooden_pickaxe)
+        self.assertEqual(tool_call["name"], "collect_block")
+        self.assertEqual(tool_call["arguments"]["block_name"], "log")
+
 
 if __name__ == "__main__":
     unittest.main()
+
