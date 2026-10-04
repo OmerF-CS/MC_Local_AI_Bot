@@ -12,6 +12,8 @@ CORE RULES:
 - Progress gear towards Target using Missing materials
 - Mine resources, craft items, smelt ores, and progress completely independently
 - NEVER call craft_item if missing raw ingredients. Mine or smelt first.
+- In autonomous mode, NEVER call give_item_to_player. Keep all items for yourself.
+- NEVER call craft_item for iron_ingot or gold_ingot. Smelt them in furnace using smelt_item.
 
 EXAMPLES:
 Target: wooden_pickaxe | Missing: 3 oak_log -> collect_block(block_name="oak_log", count=3)

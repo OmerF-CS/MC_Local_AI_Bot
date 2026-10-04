@@ -105,6 +105,51 @@ class TestTasksAndGPU(unittest.TestCase):
         self.assertFalse(bot.bridge.send_action.called)
         self.assertFalse(bot.brain.process_chat.called)
 
+    def test_give_item_to_player_invalid_target_rejected(self):
+        """Verify give_item_to_player rejects fake/system targets without dispatching to bridge."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from core.chat_handler import MinecraftChatHandler
+
+        bot = MagicMock()
+        bot.config.BOT_NAME = "AIAssistant"
+        bot.config.BOT_OWNER = "Schizo_D"
+        bot.bridge = MagicMock()
+        bot.bridge.send_action_and_wait = AsyncMock()
+
+        handler = MinecraftChatHandler(bot)
+        # Calling with player_name "system" must be rejected
+        res = asyncio.run(handler._execute_tool("give_item_to_player", {"player_name": "system", "item_name": "iron_ingot"}, {}, "Schizo_D"))
+        self.assertFalse(res.get("success"))
+        self.assertIn("not a valid player", res.get("error", ""))
+        self.assertFalse(bot.bridge.send_action_and_wait.called)
+
+    def test_craft_item_converts_smeltable_ingots(self):
+        """Verify craft_item for iron_ingot converts to smelt_item or collect_block."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from core.chat_handler import MinecraftChatHandler
+
+        bot = MagicMock()
+        bot.config.BOT_NAME = "AIAssistant"
+        bot.config.BOT_OWNER = "Schizo_D"
+        bot.bridge = MagicMock()
+        bot.bridge.send_action_and_wait = AsyncMock(return_value={"success": True})
+        bot.bridge.latest_state = {}
+
+        handler = MinecraftChatHandler(bot)
+
+        # 1. With raw iron -> smelt_item
+        state_with_raw = {"inventory_items": [{"name": "raw_iron", "count": 3}]}
+        asyncio.run(handler._execute_tool("craft_item", {"item_name": "iron_ingot", "count": 2}, state_with_raw, "Schizo_D"))
+        bot.bridge.send_action_and_wait.assert_called_with("smelt_item", {"input_item": "raw_iron", "count": 2}, timeout=60.0)
+
+        # 2. Without raw iron -> collect_block iron
+        bot.bridge.send_action_and_wait.reset_mock()
+        state_empty = {"inventory_items": []}
+        asyncio.run(handler._execute_tool("craft_item", {"item_name": "iron_ingot", "count": 3}, state_empty, "Schizo_D"))
+        bot.bridge.send_action_and_wait.assert_called_with("collect_block", {"block_name": "iron", "count": 3}, timeout=60.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -452,19 +452,52 @@ class MinecraftChatHandler:
                 logger.warning("⚠️ 'craft_item' called without item_name.")
                 return {"success": False, "error": f"Invalid arguments for 'craft_item': missing required parameter 'item_name', received: {list(args.keys())}"}
 
-            # Fast inventory pre-check against tech tree recipes
             inv_dict = {}
             for itm in state.get("inventory_items", []):
                 inv_dict[itm.get("name", "")] = itm.get("count", 0)
-            missing_mat = resolve_missing_ingredients(item, inv_dict)
-            if missing_mat:
-                missing_str = ", ".join(missing_mat)
-                logger.info(f"ℹ️ Pre-craft check: cannot craft '{item}', missing: {missing_str}")
-                return {"success": False, "error": f"Cannot craft '{item}': missing required materials ({missing_str})"}
 
-            validated_args["item_name"] = item
-            count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
-            validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
+            # Fast conversion for smeltable ingots/charcoal mistakenly called with craft_item
+            if item in ("iron_ingot", "iron"):
+                inv_raw = inv_dict.get("raw_iron", 0) + inv_dict.get("iron_ore", 0)
+                if inv_raw > 0:
+                    logger.info("🔄 Converting craft_item('iron_ingot') -> smelt_item('raw_iron').")
+                    cmd = "smelt_item"
+                    validated_args = {"input_item": "raw_iron", "count": max(1, int(validated_args.get("count", 1)))}
+                else:
+                    logger.info("🔄 Converting craft_item('iron_ingot') -> collect_block('iron').")
+                    cmd = "collect_block"
+                    validated_args = {"block_name": "iron", "count": max(1, int(validated_args.get("count", 3)))}
+            elif item in ("gold_ingot", "gold"):
+                inv_raw = inv_dict.get("raw_gold", 0) + inv_dict.get("gold_ore", 0)
+                if inv_raw > 0:
+                    logger.info("🔄 Converting craft_item('gold_ingot') -> smelt_item('raw_gold').")
+                    cmd = "smelt_item"
+                    validated_args = {"input_item": "raw_gold", "count": max(1, int(validated_args.get("count", 1)))}
+                else:
+                    cmd = "collect_block"
+                    validated_args = {"block_name": "gold_ore", "count": max(1, int(validated_args.get("count", 3)))}
+            elif item in ("copper_ingot", "copper"):
+                inv_raw = inv_dict.get("raw_copper", 0) + inv_dict.get("copper_ore", 0)
+                if inv_raw > 0:
+                    cmd = "smelt_item"
+                    validated_args = {"input_item": "raw_copper", "count": max(1, int(validated_args.get("count", 1)))}
+                else:
+                    cmd = "collect_block"
+                    validated_args = {"block_name": "copper_ore", "count": max(1, int(validated_args.get("count", 3)))}
+            elif item == "charcoal":
+                cmd = "smelt_item"
+                validated_args = {"input_item": "log", "count": max(1, int(validated_args.get("count", 2)))}
+            else:
+                # Fast inventory pre-check against tech tree recipes
+                missing_mat = resolve_missing_ingredients(item, inv_dict)
+                if missing_mat:
+                    missing_str = ", ".join(missing_mat)
+                    logger.info(f"ℹ️ Pre-craft check: cannot craft '{item}', missing: {missing_str}")
+                    return {"success": False, "error": f"Cannot craft '{item}': missing required materials ({missing_str})"}
+
+                validated_args["item_name"] = item
+                count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
+                validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
 
         elif cmd == "collect_block":
             block = str(
@@ -518,6 +551,24 @@ class MinecraftChatHandler:
                 return {"success": False, "error": f"Invalid arguments for 'smelt_item': missing required parameter 'input_item', received: {list(args.keys())}"}
             validated_args["input_item"] = item
             count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
+            validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
+
+        elif cmd == "give_item_to_player":
+            player = str(validated_args.get("player_name", "")).strip().lower()
+            if not player or player in ("system", "autonomous", "server", "none", "bot", "aiassistant"):
+                logger.warning(f"⚠️ Invalid target player '{player}' for give_item_to_player. Rejecting action.")
+                return {"success": False, "error": f"Cannot give item to '{player}': not a valid player."}
+            nearby = [p.lower() for p in state.get("nearby_players", [])]
+            owner = getattr(self.bot, "bot_owner", "Omer").lower()
+            if player != owner and not any(player in p for p in nearby):
+                logger.warning(f"⚠️ Target player '{player}' not found nearby.")
+                return {"success": False, "error": f"Player '{player}' is not in game or nearby."}
+            validated_args["player_name"] = player
+            item = str(validated_args.get("item_name", "")).strip().lower()
+            if not item:
+                return {"success": False, "error": "Missing item_name for give_item_to_player"}
+            validated_args["item_name"] = item
+            count = validated_args.get("count") or 1
             validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)
 
         elif cmd == "go_to_coordinates":

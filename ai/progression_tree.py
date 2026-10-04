@@ -31,6 +31,12 @@ def count_equivalent_materials(tag_or_item: str, inventory: Dict[str, int]) -> i
     if tag_or_item in ("iron", "iron_materials"):
         return inventory.get("iron_ingot", 0) + inventory.get("raw_iron", 0) + inventory.get("iron_ore", 0)
 
+    if tag_or_item in ("raw_iron", "raw_iron_materials"):
+        return inventory.get("raw_iron", 0) + inventory.get("iron_ore", 0)
+
+    if tag_or_item in ("raw_gold", "raw_gold_materials"):
+        return inventory.get("raw_gold", 0) + inventory.get("gold_ore", 0)
+
     if tag_or_item in ("fuel", "smelting_fuel"):
         return (
             inventory.get("coal", 0) +
@@ -42,6 +48,17 @@ def count_equivalent_materials(tag_or_item: str, inventory: Dict[str, int]) -> i
 
 # Complete Flexible Progression Tree
 TECH_TREE: Dict[str, Dict[str, Any]] = {
+    # --- SMELTED INGOTS (FURNACE) ---
+    "iron_ingot": {
+        "requires_tools": ["furnace"],
+        "ingredients": {"raw_iron": 1, "fuel": 1},
+        "description": "Smelted from raw iron or iron ore inside a furnace using coal or wood fuel."
+    },
+    "gold_ingot": {
+        "requires_tools": ["furnace"],
+        "ingredients": {"raw_gold": 1, "fuel": 1},
+        "description": "Smelted from raw gold or gold ore inside a furnace using coal or wood fuel."
+    },
     # --- WOODEN AGE ---
     "crafting_table": {
         "requires_tools": [],

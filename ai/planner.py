@@ -1,6 +1,8 @@
 """Autonomous human-like Minecraft co-op partner brain - Production hardened."""
 import asyncio
 import json
+import math
+import random
 import time
 from typing import Dict, Any, List, Optional
 from utils.logger import get_logger
@@ -18,6 +20,8 @@ class AutonomousCoopBrain:
         self.db = db
         self.last_action_command = None
         self.consecutive_repeats = 0
+        self.consecutive_hunt_failures = 0
+        self._tried_emergency_farm = False
         self.fallback_consecutive_count = 0
         self.last_llm_failure_time = 0
         self.last_goal_target = None
@@ -56,7 +60,27 @@ class AutonomousCoopBrain:
                         "text": "Resting safely inside my shelter and eating food to heal.",
                         "tool_calls": [{"name": "eat_food", "arguments": {}}]
                     }
-                return None
+                # Check for bed to skip night
+                vis_res = state.get("visible_resources", {})
+                if vis_res.get("bed") or any("bed" in i for i in (inv or {})):
+                    return {
+                        "text": "Sleeping safely inside my shelter to skip the night.",
+                        "tool_calls": [{"name": "sleep_in_bed", "arguments": {}}]
+                    }
+                # Check if hostile mob is inside or touching bunker (< 2.5m)
+                for h in nearby_hostiles:
+                    if any(d in h for d in ["(1m away)", "(2m away)"]):
+                        mob_name = h.split()[0]
+                        logger.warning(f"⚔️ Mob {mob_name} within 2m inside bunker! Defending immediately.")
+                        return {
+                            "text": f"Defending against {mob_name} inside bunker!",
+                            "tool_calls": [{"name": "attack_target", "arguments": {"target_name": mob_name}}]
+                        }
+                # Safe inside shelter: stay sheltered and wait, do not run outdoor progression
+                return {
+                    "text": "Remaining safely inside shelter until hostiles clear and daylight arrives.",
+                    "tool_calls": [{"name": "say_chat", "arguments": {"message": "Safe inside bunker. Waiting for threats to pass..."}}]
+                }
 
         # 1. Critical health (<= 6 HP / 3 hearts) with nearby hostile mobs -> build emergency shelter
         if health <= 6 and nearby_hostiles:
@@ -76,6 +100,8 @@ class AutonomousCoopBrain:
 
             now = time.time()
             if has_food:
+                self.consecutive_hunt_failures = 0
+                self._tried_emergency_farm = False
                 if now - getattr(self, "last_eat_emergency_time", 0.0) >= 3.0:
                     self.last_eat_emergency_time = now
                     logger.warning(f"🍽️ [EMERGENCY] Starvation ({food}/20)! Eating immediately.")
@@ -94,9 +120,41 @@ class AutonomousCoopBrain:
                         "tool_calls": [farm_plan]
                     }
 
-                if now - getattr(self, "last_hunt_emergency_time", 0.0) >= 10.0:
+                # Check if passives are actually visible nearby
+                nearby_passives = state.get("nearby_passives", [])
+                has_nearby_animals = any(
+                    any(a in p.lower() for a in ["cow", "pig", "sheep", "chicken"])
+                    for p in nearby_passives
+                )
+
+                # Stuck hunt loop breaker: if 3 consecutive hunts produced no food, switch strategy
+                hunt_failures = getattr(self, "consecutive_hunt_failures", 0)
+                if hunt_failures >= 3:
+                    if not getattr(self, "_tried_emergency_farm", False):
+                        self._tried_emergency_farm = True
+                        logger.warning(f"⚠️ [STUCK LOOP BREAK] 3 consecutive hunts failed! Shifting to crop harvesting.")
+                        return {
+                            "text": "No animals found after 3 hunts! Harvesting any available crops for food.",
+                            "tool_calls": [{"name": "farm_crops", "arguments": {"crop_type": "all"}}]
+                        }
+                    else:
+                        self._tried_emergency_farm = False
+                        self.consecutive_hunt_failures = 0
+                        logger.warning(f"⚠️ [STUCK LOOP BREAK] Starvation hunt loop broken! Relocating 45 blocks to find food.")
+                        pos = state.get("position", {"x": 0, "y": 64, "z": 0})
+                        angle = random.random() * 2 * math.pi
+                        target_x = pos.get("x", 0) + math.cos(angle) * 45
+                        target_z = pos.get("z", 0) + math.sin(angle) * 45
+                        return {
+                            "text": "Starvation area exhausted. Relocating to new territory for food.",
+                            "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": round(target_x), "y": pos.get("y", 64), "z": round(target_z)}}]
+                        }
+
+                cooldown = 15.0 if not has_nearby_animals else 8.0
+                if now - getattr(self, "last_hunt_emergency_time", 0.0) >= cooldown:
                     self.last_hunt_emergency_time = now
-                    logger.warning(f"🍽️ [EMERGENCY] Starvation ({food}/20)! Hunting for meat.")
+                    self.consecutive_hunt_failures = hunt_failures + 1
+                    logger.warning(f"🍽️ [EMERGENCY] Starvation ({food}/20)! Hunting for meat (attempt {self.consecutive_hunt_failures}).")
                     return {
                         "text": "I'm STARVING and have NO food! Hunting for meat NOW!",
                         "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
@@ -200,14 +258,14 @@ class AutonomousCoopBrain:
 
         try:
             logger.info(f"🎯 Milestone: {goal['target']} | Evaluating tactical action...")
-            response = await self.brain.process_chat(
+            raw_response = await self.brain.process_chat(
                 sender="System/Autonomous",
                 message=decision_prompt,
                 state=state
             )
+            response = dict(raw_response or {})
+            tool_calls = [dict(tc) for tc in response.get("tool_calls", [])]
 
-            tool_calls = response.get("tool_calls", [])
-            
             # If LLM returned no tool calls, trigger fallback heuristics
             if not tool_calls:
                 logger.info("ℹ️ LLM produced 0 tool calls. Using fallback heuristic action.")
@@ -235,8 +293,42 @@ class AutonomousCoopBrain:
                         logger.info(f"ℹ️ Model called idle action '{c_name}' in autonomous mode. Substituting milestone action: {milestone_action.get('name')}.")
                         sanitized_calls.append(milestone_action)
                         continue
+                    elif c_name == "give_item_to_player":
+                        target_p = str(c_args.get("player_name", "")).strip().lower()
+                        if not state.get("active_player_task") or target_p in ("system", "autonomous", "server", "none", "bot", "aiassistant", ""):
+                            logger.info(f"ℹ️ Model called give_item_to_player('{target_p}') in autonomous mode. Substituting milestone action: {milestone_action.get('name')}.")
+                            sanitized_calls.append(milestone_action)
+                            continue
                     elif c_name == "craft_item":
-                        target_craft = c_args.get("item_name") or goal.get("target")
+                        target_craft = str(c_args.get("item_name") or goal.get("target") or "").lower()
+                        # Intercept smeltable materials mistakenly passed to craft_item
+                        if target_craft in ("iron_ingot", "iron"):
+                            if inv_dict.get("raw_iron", 0) > 0 or inv_dict.get("iron_ore", 0) > 0:
+                                logger.info(f"🔄 Converting craft_item('{target_craft}') -> smelt_item('raw_iron').")
+                                sanitized_calls.append({"name": "smelt_item", "arguments": {"input_item": "raw_iron", "count": c_args.get("count", 1)}})
+                                continue
+                            else:
+                                logger.info(f"🔄 Converting craft_item('{target_craft}') -> collect_block('iron').")
+                                sanitized_calls.append({"name": "collect_block", "arguments": {"block_name": "iron", "count": max(1, int(c_args.get("count", 3)))}})
+                                continue
+                        elif target_craft in ("gold_ingot", "gold"):
+                            if inv_dict.get("raw_gold", 0) > 0 or inv_dict.get("gold_ore", 0) > 0:
+                                sanitized_calls.append({"name": "smelt_item", "arguments": {"input_item": "raw_gold", "count": c_args.get("count", 1)}})
+                                continue
+                            else:
+                                sanitized_calls.append({"name": "collect_block", "arguments": {"block_name": "gold_ore", "count": max(1, int(c_args.get("count", 3)))}})
+                                continue
+                        elif target_craft in ("copper_ingot", "copper"):
+                            if inv_dict.get("raw_copper", 0) > 0 or inv_dict.get("copper_ore", 0) > 0:
+                                sanitized_calls.append({"name": "smelt_item", "arguments": {"input_item": "raw_copper", "count": c_args.get("count", 1)}})
+                                continue
+                            else:
+                                sanitized_calls.append({"name": "collect_block", "arguments": {"block_name": "copper_ore", "count": max(1, int(c_args.get("count", 3)))}})
+                                continue
+                        elif target_craft == "charcoal":
+                            sanitized_calls.append({"name": "smelt_item", "arguments": {"input_item": "log", "count": max(1, int(c_args.get("count", 2)))}})
+                            continue
+
                         if target_craft:
                             missing_for_item = resolve_missing_ingredients(target_craft, inv_dict)
                             if missing_for_item:
@@ -262,7 +354,7 @@ class AutonomousCoopBrain:
                     ]
                 }
 
-            # Anti-repetition loop breaker - only trigger if identical action repeats 5 times without inventory progress
+            # Anti-repetition loop breaker - only trigger if identical action repeats 3 times without inventory progress
             if tool_calls:
                 first_tc = tool_calls[0]
                 first_cmd = first_tc.get("name")
@@ -278,19 +370,46 @@ class AutonomousCoopBrain:
                 last_sig = getattr(self, "_last_action_sig", "")
                 if action_sig == last_sig:
                     self.consecutive_repeats += 1
-                    if self.consecutive_repeats >= 5:
+                    if self.consecutive_repeats >= 2:
                         logger.warning(
-                            f"⚠️ [Loop Break] Action '{first_cmd}' repeated {self.consecutive_repeats} times without progress. "
-                            "Breaking loop by shifting focus..."
+                            f"⚠️ [Loop Break] Action '{first_cmd}' repeated {self.consecutive_repeats + 1} times without progress. "
+                            "Breaking loop by shifting strategy..."
                         )
                         self.consecutive_repeats = 0
-                        alt_target = "stone" if "log" in str(args_str) else "log"
-                        return {
-                            "text": "Switching focus to gather different resources.",
-                            "tool_calls": [
-                                {"name": "collect_block", "arguments": {"block_name": alt_target, "count": 2}}
-                            ]
-                        }
+                        if first_cmd == "collect_block":
+                            target = str(first_tc.get("arguments", {}).get("block_name", ""))
+                            alt_target = "stone" if "log" in target else "log"
+                            return {
+                                "text": f"Cannot collect {target} here. Switching focus to {alt_target}.",
+                                "tool_calls": [
+                                    {"name": "collect_block", "arguments": {"block_name": alt_target, "count": 2}}
+                                ]
+                            }
+                        elif first_cmd == "hunt_food":
+                            return {
+                                "text": "Repeated hunting produced no meat. Harvesting crops.",
+                                "tool_calls": [
+                                    {"name": "farm_crops", "arguments": {"crop_type": "all"}}
+                                ]
+                            }
+                        elif first_cmd == "craft_item":
+                            return {
+                                "text": "Prerequisites missing for craft. Gathering baseline resources.",
+                                "tool_calls": [
+                                    {"name": "collect_block", "arguments": {"block_name": "log", "count": 2}}
+                                ]
+                            }
+                        else:
+                            pos = state.get("position", {"x": 0, "y": 64, "z": 0})
+                            angle = random.random() * 2 * math.pi
+                            tx = pos.get("x", 0) + math.cos(angle) * 35
+                            tz = pos.get("z", 0) + math.sin(angle) * 35
+                            return {
+                                "text": "Action stalled. Relocating to a better position.",
+                                "tool_calls": [
+                                    {"name": "go_to_coordinates", "arguments": {"x": round(tx), "y": pos.get("y", 64), "z": round(tz)}}
+                                ]
+                            }
                 else:
                     self.consecutive_repeats = 0
 

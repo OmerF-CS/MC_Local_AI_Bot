@@ -2491,16 +2491,40 @@ async function handleAction(action) {
             }
 
             case 'give_item_to_player': {
-                const playerName = args.player_name;
-                const itemName = args.item_name;
+                const playerName = (args.player_name || '').toLowerCase().trim();
+                const itemName = (args.item_name || '').toLowerCase().trim();
                 const count = args.count || 1;
-                const item = bot.inventory.items().find(i => i.name.includes(itemName));
-                const player = bot.players[playerName]?.entity;
 
-                if (item && player) {
+                if (!playerName || ['system', 'autonomous', 'server', 'none', 'bot', bot.username.toLowerCase()].includes(playerName)) {
+                    bot.chat(`Cannot give items: invalid target player '${args.player_name}'.`);
+                    break;
+                }
+
+                const item = bot.inventory.items().find(i => i.name.toLowerCase().includes(itemName));
+                if (!item) {
+                    bot.chat(`I don't have '${itemName}' to give.`);
+                    break;
+                }
+
+                const targetPlayerObj = Object.values(bot.players).find(p => p.username && p.username.toLowerCase() === playerName);
+                const playerEntity = targetPlayerObj?.entity;
+
+                if (!playerEntity) {
+                    bot.chat(`Player '${args.player_name}' is not nearby to give items to.`);
+                    break;
+                }
+
+                isBusy = true;
+                currentActionName = `give_${itemName}`;
+                try {
                     const { GoalNear } = goals;
-                    await bot.pathfinder.goto(new GoalNear(player.position.x, player.position.y, player.position.z, 2));
+                    await bot.pathfinder.goto(new GoalNear(playerEntity.position.x, playerEntity.position.y, playerEntity.position.z, 2));
                     await bot.toss(item.type, null, count);
+                    bot.chat(`Gave ${count}x ${item.name} to ${targetPlayerObj.username}! 🎁`);
+                } catch (gErr) {
+                    bot.chat(`Could not deliver item: ${gErr.message}`);
+                } finally {
+                    isBusy = false;
                 }
                 break;
             }
