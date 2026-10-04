@@ -412,6 +412,18 @@ class MinecraftChatHandler:
             if not item:
                 logger.warning("⚠️ 'craft_item' called without item_name.")
                 return {"success": False, "error": f"Invalid arguments for 'craft_item': missing required parameter 'item_name', received: {list(args.keys())}"}
+
+            # Fast inventory pre-check against tech tree recipes
+            from ai.progression_tree import resolve_missing_ingredients
+            inv_dict = {}
+            for itm in state.get("inventory_items", []):
+                inv_dict[itm.get("name", "")] = itm.get("count", 0)
+            missing_mat = resolve_missing_ingredients(item, inv_dict)
+            if missing_mat:
+                missing_str = ", ".join(missing_mat)
+                logger.info(f"ℹ️ Pre-craft check: cannot craft '{item}', missing: {missing_str}")
+                return {"success": False, "error": f"Cannot craft '{item}': missing required materials ({missing_str})"}
+
             validated_args["item_name"] = item
             count = validated_args.get("count") or validated_args.get("quantity") or validated_args.get("amount") or 1
             validated_args["count"] = max(1, int(count) if isinstance(count, (int, str)) and str(count).isdigit() else 1)

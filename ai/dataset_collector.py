@@ -327,7 +327,8 @@ class DatasetCollector:
             self._bucket_counts[bucket_key] = current_count + 1
 
             # Prepare structured record
-            pos = pre_state.get("position", {"x": 0, "y": 0, "z": 0})
+            pos = pre_state.get("position") or {"x": 0, "y": 0, "z": 0}
+            owner_info = pre_state.get("owner_info") or {}
             record = {
                 "timestamp": round(time.time(), 3),
                 "milestone": {
@@ -346,7 +347,7 @@ class DatasetCollector:
                     },
                     "inventory": pre_inv,
                     "nearby_hostiles": pre_state.get("nearby_hostiles", []),
-                    "owner_distance": round(pre_state.get("owner_info", {}).get("distance", 0), 1),
+                    "owner_distance": round(owner_info.get("distance", 0), 1),
                     "carried_tools": pre_state.get("carried_tools", "None"),
                 },
                 "decision": {

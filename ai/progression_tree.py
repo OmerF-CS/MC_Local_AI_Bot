@@ -48,12 +48,12 @@ TECH_TREE: Dict[str, Dict[str, Any]] = {
     # --- STONE & DEEPSLATE AGE ---
     "stone_pickaxe": {
         "requires_tools": ["crafting_table", "wooden_pickaxe"],
-        "ingredients": {"stone_tool_materials": 3, "stick": 2},
+        "ingredients": {"cobblestone": 3, "stick": 2},
         "description": "Mines iron ore and lapis lazuli. Crafted with cobblestone, cobbled deepslate, or blackstone."
     },
     "furnace": {
         "requires_tools": ["crafting_table", "wooden_pickaxe"],
-        "ingredients": {"stone_tool_materials": 8},
+        "ingredients": {"cobblestone": 8},
         "description": "Smelts raw ores and cooks food. Crafted with cobblestone, cobbled deepslate, or blackstone."
     },
     "shield": {

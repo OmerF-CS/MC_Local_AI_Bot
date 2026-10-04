@@ -160,6 +160,32 @@ class TestDatasetAndPrompt(unittest.TestCase):
         if os.path.exists(tmp_file):
             os.remove(tmp_file)
 
+    def test_record_step_none_safety(self):
+        """Verify record_step handles None values for owner_info and position without crashing."""
+        tmp_file = os.path.join(tempfile.gettempdir(), f"test_none_{os.getpid()}.jsonl")
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
+
+        collector = DatasetCollector(output_path=tmp_file)
+        none_state = {
+            "health": 20,
+            "food": 20,
+            "owner_info": None,
+            "position": None,
+            "inventory_items": [],
+            "target": "furnace"
+        }
+        decision = {"name": "craft_item", "arguments": {"item_name": "iron_pickaxe", "count": 1}}
+        exec_res = {"success": False, "error": "Timed out"}
+
+        rec = collector.record_step(none_state, decision, exec_res, none_state)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["state"]["owner_distance"], 0)
+        self.assertEqual(rec["state"]["position"]["x"], 0)
+
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
+
 
 if __name__ == "__main__":
     unittest.main()

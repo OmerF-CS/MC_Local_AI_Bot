@@ -779,9 +779,14 @@ async function ensureCraftingTableInWorld(bot) {
     const distantTable = bot.findBlock({ matching: tableBlockId, maxDistance: 16 });
     if (distantTable) {
         try {
-            await bot.pathfinder.goto(new goals.GoalNear(distantTable.position.x, distantTable.position.y, distantTable.position.z, 2));
+            await Promise.race([
+                bot.pathfinder.goto(new goals.GoalNear(distantTable.position.x, distantTable.position.y, distantTable.position.z, 2)),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Pathfinder timeout to table')), 6000))
+            ]);
             return { tableBlock: distantTable, placedByMe: false };
-        } catch (_) {}
+        } catch (_) {
+            try { bot.pathfinder.stop(); } catch (_) {}
+        }
     }
 
     // 3. Need to place one. Check if in inventory
@@ -2098,7 +2103,11 @@ async function handleAction(action) {
                 currentActionName = `craft_${args.item_name}`;
                 const itemName = args.item_name;
                 const count = args.count || 1;
-                await smartCraft(bot, itemName, count);
+                const ok = await smartCraft(bot, itemName, count);
+                if (!ok) {
+                    actionSuccess = false;
+                    actionError = `Failed to craft ${itemName}: missing materials or recipe`;
+                }
                 break;
             }
 
