@@ -182,7 +182,7 @@ class AutonomousCoopBrain:
         else:
             decision_prompt = (
                 f"Milestone: {goal['target']} ({goal['stage']}). Missing: {missing_str}. "
-                f"HP: {health}/20, Food: {food}/20. {owner_summary}. Decide 1 tool."
+                f"HP: {health}/20, Food: {food}/20. Decide 1 tool to progress."
             )
 
         try:
@@ -208,16 +208,13 @@ class AutonomousCoopBrain:
             else:
                 self.fallback_consecutive_count = 0
 
-            # If too many consecutive fallbacks occurred, activate safe regroup
+            # If too many consecutive fallbacks occurred, gather baseline resources
             if self.fallback_consecutive_count >= 3:
-                logger.warning(
-                    "⚠️ Too many consecutive fallback actions required. "
-                    "Activating safe teammate regroup mode."
-                )
+                logger.info("ℹ️ Consecutive fallbacks: gathering baseline resources (wood).")
                 return {
-                    "text": "I'm regrouping and staying close to you for safety.",
+                    "text": "Gathering baseline resources to advance.",
                     "tool_calls": [
-                        {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
+                        {"name": "collect_block", "arguments": {"block_name": "log", "count": 2}}
                     ]
                 }
 
@@ -240,13 +237,14 @@ class AutonomousCoopBrain:
                     if self.consecutive_repeats >= 5:
                         logger.warning(
                             f"⚠️ [Loop Break] Action '{first_cmd}' repeated {self.consecutive_repeats} times without progress. "
-                            "Breaking loop by regrouping with partner..."
+                            "Breaking loop by shifting focus..."
                         )
                         self.consecutive_repeats = 0
+                        alt_target = "stone" if "log" in str(args_str) else "log"
                         return {
-                            "text": "Regrouping with you!",
+                            "text": "Switching focus to gather different resources.",
                             "tool_calls": [
-                                {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
+                                {"name": "collect_block", "arguments": {"block_name": alt_target, "count": 2}}
                             ]
                         }
                 else:
@@ -290,10 +288,6 @@ class AutonomousCoopBrain:
                 return {"name": "hunt_food", "arguments": {"animal_type": "any"}}
             if any(w in instruction for w in ["sleep", "bed", "uyu"]):
                 return {"name": "sleep_in_bed", "arguments": {}}
-
-        # 2. Partner distance check - regroup if too far
-        if isinstance(owner_info, dict) and owner_info.get("distance", 0) > 16:
-            return {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
 
         # 3. Hunger check - consume food if hungry
         food_level = state.get("food", 20)
