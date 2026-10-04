@@ -1,5 +1,6 @@
 """Autonomous human-like Minecraft co-op partner brain - Production hardened."""
 import asyncio
+import json
 from typing import Dict, Any, List, Optional
 from utils.logger import get_logger
 from ai.knowledge_base import get_relevant_tactic
