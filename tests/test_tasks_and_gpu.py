@@ -75,8 +75,35 @@ class TestTasksAndGPU(unittest.TestCase):
         })
 
         handler = MinecraftChatHandler(bot)
-        asyncio.run(handler.handle_chat("Schizo_D", "Set own game mode to Spectator Mode", {}))
+        asyncio.run(handler.handle_chat("Schizo_D", "Please craft an iron pickaxe", {}))
         self.assertTrue(bot.bridge.send_action.called)
+
+    def test_system_broadcast_ignored(self):
+        """Verify server command broadcasts (e.g. /tp, /gamemode) are discarded without action dispatch."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from core.chat_handler import MinecraftChatHandler
+
+        bot = MagicMock()
+        bot.config.BOT_NAME = "AIAssistant"
+        bot.config.MINECRAFT_USERNAME = "AIAssistant"
+        bot.config.BOT_OWNER = "Schizo_D"
+        bot.config.COOLDOWN_SECONDS = 0.0
+        bot.bridge = MagicMock()
+        bot.bridge.send_action = AsyncMock()
+        bot.brain = MagicMock()
+
+        handler = MinecraftChatHandler(bot)
+
+        # Test teleport broadcast
+        asyncio.run(handler.handle_chat("Schizo_D", "Teleported Schizo_D to AIAssistant]", {}))
+        self.assertFalse(bot.bridge.send_action.called)
+        self.assertFalse(bot.brain.process_chat.called)
+
+        # Test gamemode broadcast
+        asyncio.run(handler.handle_chat("Schizo_D", "Set own game mode to Spectator Mode", {}))
+        self.assertFalse(bot.bridge.send_action.called)
+        self.assertFalse(bot.brain.process_chat.called)
 
 
 if __name__ == "__main__":

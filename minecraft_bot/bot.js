@@ -2430,7 +2430,12 @@ async function handleAction(action) {
                     const exploreZ = Math.round(bot.entity.position.z + Math.sin(angle) * 35);
                     const exploreY = Math.round(bot.entity.position.y);
                     const { GoalNear } = goals;
-                    bot.pathfinder.setGoal(new GoalNear(exploreX, exploreY, exploreZ, 2));
+                    try {
+                        await Promise.race([
+                            bot.pathfinder.goto(new GoalNear(exploreX, exploreY, exploreZ, 2)),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Explore timeout')), 8000))
+                        ]);
+                    } catch (_) {}
                     break;
                 }
 

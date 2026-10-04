@@ -11,11 +11,14 @@ CORE RULES:
 - Night or low health + mobs -> sleep_in_bed or build_shelter
 - Progress gear towards Target using Missing materials
 - Mine resources, craft items, smelt ores, and progress completely independently
+- NEVER call craft_item if missing raw ingredients. Mine or smelt first.
 
 EXAMPLES:
 Target: wooden_pickaxe | Missing: 3 oak_log -> collect_block(block_name="oak_log", count=3)
 Target: furnace | Missing: 8 cobblestone -> collect_block(block_name="stone", count=8)
-Target: iron_pickaxe | Missing: craft iron_pickaxe -> craft_item(item_name="iron_pickaxe", count=1)
+Target: iron_pickaxe | Missing: 3 iron_ingot (0 iron) -> collect_block(block_name="iron", count=3)
+Target: iron_pickaxe | Missing: 3 iron_ingot (have raw_iron) -> smelt_item(input_item="raw_iron", count=3)
+Target: iron_pickaxe | Missing: Ready to craft! -> craft_item(item_name="iron_pickaxe", count=1)
 
 STATUS:
 - HP: {health}/20 | Food: {food}/20 | Dim: {dimension} | Pos: {position}

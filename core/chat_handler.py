@@ -46,6 +46,46 @@ class MinecraftChatHandler:
         if not clean_message:
             return
 
+        msg_lower = clean_message.lower()
+
+        # Ignore server broadcasts and system command feedback (e.g. /tp, /gamemode)
+        server_senders = ("server", "rcon")
+        system_patterns = (
+            "teleported ",
+            "set own game mode",
+            "set game mode",
+            "game mode set to",
+            "gamemode",
+            "given [",
+            "giving [",
+            "set time to",
+            "changed the time",
+            "set the weather",
+            "weather has been",
+            "joined the game",
+            "left the game",
+            "has made the advancement",
+            "has completed the challenge",
+            "has reached the goal",
+            "was slain by",
+            "was shot by",
+            "fell from a high place",
+            "hit the ground too hard",
+            "drowned",
+            "burned to death",
+            "blew up",
+            "suffocated in a wall",
+            "tried to swim in lava",
+            "experienced kinetic energy",
+        )
+        if (
+            sender.lower() in server_senders
+            or clean_message.startswith("[Server")
+            or any(p in msg_lower for p in system_patterns)
+        ):
+            logger.info(f"🔇 Ignored server broadcast/system message: [{sender}] {clean_message}")
+            return
+
         # Save to database
         if hasattr(self.bot, "db"):
             self.bot.db.log_chat(sender, clean_message, role="player")
