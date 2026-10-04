@@ -65,7 +65,7 @@ class MinecraftChatHandler:
         if any(
             w in msg_lower for w in [
                 "beat the game", "beat game", "start auto", "autonomous on",
-                "play solo", "advance", "start", "oyunu bitir", "otonom mod aç"
+                "play solo", "advance", "start"
             ]
         ):
             self.bot.autonomous_mode = True
@@ -76,7 +76,7 @@ class MinecraftChatHandler:
         # AUTONOMOUS MODE DEACTIVATION
         if any(
             w in msg_lower for w in [
-                "stop auto", "autonomous off", "halt auto", "otonom dur", "otonom mod kapat"
+                "stop auto", "autonomous off", "halt auto"
             ]
         ):
             self.bot.autonomous_mode = False
@@ -87,9 +87,8 @@ class MinecraftChatHandler:
         # STOP ACTIONS - EMERGENCY COMMAND (Cooldown bypass)
         if any(
             w in msg_lower for w in [
-                "stop actions", "cancel task", "stop task", "dur", "iptal",
-                "tamam", "thanks", "devam et", "resume", "carry on", "never mind",
-                "stop", "cancel", "halt"
+                "stop actions", "cancel task", "stop task", "thanks", "resume",
+                "carry on", "never mind", "stop", "cancel", "halt"
             ]
         ):
             self.bot.active_player_task = None
@@ -158,7 +157,7 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("say_chat", {"message": "Stopped actions. Standing by."})
                     return
 
-                elif cmd_name in ("clear", "clear_tasks", "iptal_et"):
+                elif cmd_name in ("clear", "clear_tasks"):
                     if hasattr(self.bot, "db") and self.bot.db:
                         self.bot.db.clear_pending_tasks()
                     self.bot.active_player_task = None
@@ -201,17 +200,17 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("farm_crops", {"action_type": "auto"})
                     return
 
-                elif cmd_name in ("shelter", "bunker", "box", "hide", "burrow", "siginak"):
+                elif cmd_name in ("shelter", "bunker", "box", "hide", "burrow"):
                     self._assign_task(clean_message, "build_shelter", sender)
                     await self.bot.bridge.send_action("build_shelter", {"mode": "auto"})
                     return
 
-                elif cmd_name in ("unbunker", "unshelter", "cikis", "break_out"):
+                elif cmd_name in ("unbunker", "unshelter", "break_out", "exit_shelter"):
                     self._assign_task(clean_message, "break_out_shelter", sender)
                     await self.bot.bridge.send_action("break_out_shelter", {})
                     return
 
-                elif cmd_name in ("enchant", "buyu", "büyü"):
+                elif cmd_name in ("enchant", "enchantment"):
                     self._assign_task(clean_message, "enchant_gear", sender)
                     gear = cmd_args[0] if cmd_args else "auto"
                     await self.bot.bridge.send_action("enchant_gear", {"gear_type": gear, "target_level": 15})
@@ -223,13 +222,13 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("build_nether_outpost", {"wall_material": mat})
                     return
 
-                elif cmd_name in ("bridge", "kopru", "köprü"):
+                elif cmd_name in ("bridge", "bridge_chasm"):
                     dist = int(cmd_args[0]) if cmd_args and cmd_args[0].isdigit() else 5
                     self._assign_task(clean_message, "bridge_chasm", sender)
                     await self.bot.bridge.send_action("bridge_chasm", {"direction": "forward", "distance": dist})
                     return
 
-                elif cmd_name in ("tasks", "queue", "gorevler", "gorev"):
+                elif cmd_name in ("tasks", "queue", "task_list"):
                     active = self.bot.active_player_task
                     pending = self.bot.db.get_pending_tasks() if hasattr(self.bot, "db") and self.bot.db else []
                     active_txt = f"Active: '{active.get('instruction')}'" if active else "Active: None (Speedrun/Idle)"
@@ -237,7 +236,7 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("say_chat", {"message": msg})
                     return
 
-                elif cmd_name in ("gpu", "vram", "donanim"):
+                elif cmd_name in ("gpu", "vram", "hardware"):
                     import subprocess
                     import asyncio
                     try:
