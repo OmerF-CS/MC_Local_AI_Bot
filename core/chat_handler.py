@@ -453,8 +453,11 @@ class MinecraftChatHandler:
                 return {"success": False, "error": f"Invalid arguments for 'craft_item': missing required parameter 'item_name', received: {list(args.keys())}"}
 
             inv_dict = {}
-            for itm in state.get("inventory_items", []):
-                inv_dict[itm.get("name", "")] = itm.get("count", 0)
+            for itm in (state.get("inventory_items") or []):
+                if isinstance(itm, dict):
+                    inv_dict[itm.get("name", "")] = int(itm.get("count", 0))
+            if not inv_dict and isinstance(state.get("inventory"), dict):
+                inv_dict = {str(k): int(v) for k, v in state["inventory"].items() if isinstance(v, (int, float, str)) and str(v).isdigit()}
 
             # Fast conversion for smeltable ingots/charcoal mistakenly called with craft_item
             if item in ("iron_ingot", "iron"):

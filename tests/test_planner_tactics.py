@@ -76,6 +76,21 @@ class TestPlannerTactics(unittest.TestCase):
         missing_empty = resolve_missing_ingredients("wooden_pickaxe", {})
         self.assertEqual(missing_empty, ["3x wood log"])
 
+    def test_chat_handler_craft_precheck_with_inventory_dict_and_cherry_log(self):
+        """Verify chat_handler accepts craft_item when state has inventory dict and inventory_items is None."""
+        from core.chat_handler import MinecraftChatHandler
+        mock_bot = MagicMock()
+        mock_bot.bridge.send_action_and_wait = AsyncMock(return_value={"success": True})
+        handler = MinecraftChatHandler(mock_bot)
+
+        # State with null inventory_items but populated inventory dict (as seen in Decision 87 log)
+        state_with_dict_only = {
+            "inventory": {"cherry_log": 4, "dirt": 3},
+            "inventory_items": None
+        }
+        res = asyncio.run(handler._execute_tool("craft_item", {"item_name": "wooden_pickaxe", "count": 1}, state_with_dict_only, "Omer"))
+        self.assertTrue(res.get("success"), f"Expected success with cherry_log inventory dict, got: {res}")
+
     def test_plank_collection_remapped_to_log(self):
         """Verify collect_block for planks is automatically remapped to log."""
         mock_ollama = MagicMock()

@@ -331,6 +331,220 @@
       "items_gained": [
         "cherry_log x1"
       ]
+    },
+    {
+      "timestamp": "2026-10-04T13:20:51.605Z",
+      "block": "cherry_log",
+      "tool_used": "cobblestone",
+      "duration_ms": 86128,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:25:43.597Z",
+      "block": "cherry_log",
+      "tool_used": "wooden_pickaxe",
+      "duration_ms": 28511,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2",
+        "cherry_sapling x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:27:23.685Z",
+      "block": "cherry_log",
+      "tool_used": "cobblestone",
+      "duration_ms": 36993,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:28:04.833Z",
+      "block": "cherry_log",
+      "tool_used": "cobblestone",
+      "duration_ms": 20178,
+      "success": true,
+      "items_gained": [
+        "cherry_log x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:28:45.337Z",
+      "block": "cherry_log",
+      "tool_used": "cobblestone",
+      "duration_ms": 19678,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:31:13.842Z",
+      "block": "cherry_log",
+      "tool_used": "stone_pickaxe",
+      "duration_ms": 24668,
+      "success": true,
+      "items_gained": [
+        "cherry_log x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:32:56.283Z",
+      "block": "cherry_log",
+      "tool_used": "hand",
+      "duration_ms": 24939,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:33:17.923Z",
+      "block": "cherry_log",
+      "tool_used": "cherry_log",
+      "duration_ms": 8410,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:33:41.894Z",
+      "block": "cherry_log",
+      "tool_used": "cherry_log",
+      "duration_ms": 10731,
+      "success": true,
+      "items_gained": []
+    },
+    {
+      "timestamp": "2026-10-04T13:41:28.034Z",
+      "block": "cherry_log",
+      "tool_used": "rotten_flesh",
+      "duration_ms": 32339,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:42:58.492Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 8212,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:45:11.708Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 14901,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:46:52.938Z",
+      "block": "cherry_log",
+      "tool_used": "rotten_flesh",
+      "duration_ms": 28398,
+      "success": true,
+      "items_gained": [
+        "cherry_log x3"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:47:19.093Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 10832,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:48:13.595Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 34536,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:49:31.405Z",
+      "block": "cherry_log",
+      "tool_used": "rotten_flesh",
+      "duration_ms": 13082,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:49:53.193Z",
+      "block": "cherry_log",
+      "tool_used": "rotten_flesh",
+      "duration_ms": 12695,
+      "success": true,
+      "items_gained": [
+        "cherry_log x1"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:50:27.472Z",
+      "block": "cherry_log",
+      "tool_used": "hand",
+      "duration_ms": 22378,
+      "success": true,
+      "items_gained": [
+        "cherry_log x2"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:51:17.593Z",
+      "block": "cherry_log",
+      "tool_used": "rotten_flesh",
+      "duration_ms": 36894,
+      "success": true,
+      "items_gained": [
+        "cherry_sapling x1",
+        "cherry_log x3"
+      ]
+    },
+    {
+      "timestamp": "2026-10-04T13:51:51.085Z",
+      "block": "cherry_log",
+      "tool_used": "rotten_flesh",
+      "duration_ms": 7334,
+      "success": true,
+      "items_gained": []
+    },
+    {
+      "timestamp": "2026-10-04T13:52:11.434Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 7190,
+      "success": true,
+      "items_gained": []
+    },
+    {
+      "timestamp": "2026-10-04T13:52:32.230Z",
+      "block": "cherry_log",
+      "tool_used": "dirt",
+      "duration_ms": 7110,
+      "success": true,
+      "items_gained": []
     }
   ],
   "learned_lessons": [
@@ -356,6 +570,28 @@
     "Successfully harvested 'cherry_log' using 'dirt' in 43.1s (Obtained: cherry_log x1).",
     "Successfully harvested 'cherry_log' using 'dirt' in 96.5s (Obtained: cherry_log x1).",
     "Successfully harvested 'cherry_log' using 'cobblestone' in 46.9s (Obtained: item).",
-    "Successfully harvested 'cherry_log' using 'cobblestone' in 89.5s (Obtained: cherry_log x1)."
+    "Successfully harvested 'cherry_log' using 'cobblestone' in 89.5s (Obtained: cherry_log x1).",
+    "Successfully harvested 'cherry_log' using 'cobblestone' in 86.1s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'wooden_pickaxe' in 28.5s (Obtained: cherry_log x2, cherry_sapling x2).",
+    "Successfully harvested 'cherry_log' using 'cobblestone' in 37.0s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'cobblestone' in 20.2s (Obtained: cherry_log x1).",
+    "Successfully harvested 'cherry_log' using 'cobblestone' in 19.7s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'stone_pickaxe' in 24.7s (Obtained: cherry_log x1).",
+    "Successfully harvested 'cherry_log' using 'hand' in 24.9s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'cherry_log' in 8.4s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'cherry_log' in 10.7s (Obtained: item).",
+    "Successfully harvested 'cherry_log' using 'rotten_flesh' in 32.3s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 8.2s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 14.9s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'rotten_flesh' in 28.4s (Obtained: cherry_log x3).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 10.8s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 34.5s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'rotten_flesh' in 13.1s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'rotten_flesh' in 12.7s (Obtained: cherry_log x1).",
+    "Successfully harvested 'cherry_log' using 'hand' in 22.4s (Obtained: cherry_log x2).",
+    "Successfully harvested 'cherry_log' using 'rotten_flesh' in 36.9s (Obtained: cherry_sapling x1, cherry_log x3).",
+    "Successfully harvested 'cherry_log' using 'rotten_flesh' in 7.3s (Obtained: item).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 7.2s (Obtained: item).",
+    "Successfully harvested 'cherry_log' using 'dirt' in 7.1s (Obtained: item)."
   ]
 }

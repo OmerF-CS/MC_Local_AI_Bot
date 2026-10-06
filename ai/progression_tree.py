@@ -8,9 +8,10 @@ from typing import Dict, Any, List, Optional
 # Equivalent Material Tags (Game-Engine Compatible)
 def count_equivalent_materials(tag_or_item: str, inventory: Dict[str, int]) -> int:
     """Calculates total available quantity across all equivalent variants in inventory."""
-    log_count = sum(count for item, count in inventory.items() if "log" in item or "stem" in item or "wood" in item)
-    plank_count = sum(count for item, count in inventory.items() if "planks" in item)
-    direct_sticks = inventory.get("stick", 0)
+    clean_inv = {str(k).lower().strip(): int(v) for k, v in inventory.items() if isinstance(v, (int, float, str)) and str(v).isdigit()}
+    log_count = sum(count for item, count in clean_inv.items() if any(k in item for k in ("log", "stem", "wood", "hyphae")))
+    plank_count = sum(count for item, count in clean_inv.items() if "plank" in item)
+    direct_sticks = clean_inv.get("stick", 0)
 
     # 1 log crafts into 4 planks
     if tag_or_item in ("planks", "wooden_planks"):
