@@ -38,6 +38,7 @@ out.txt
 scratch/
 
 # Fine-Tuning Models & Binaries
-models/
 *.gguf
+models/*
+!models/Modelfile
 
