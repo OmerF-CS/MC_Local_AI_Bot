@@ -225,6 +225,43 @@ You can talk to the bot normally in chat or use **instant shortcut commands** (0
 
 ---
 
+## 🎯 Fine-Tuning with Unsloth (Phases 5 & 6)
+
+The bot learns directly from its gameplay experience. Every in-game action, state delta, and milestone is logged to `data/minecraft_decisions.jsonl`.
+
+### 1. View Decision Logs
+Inspect real-time AI decisions, progress checks, and errors in an interactive Markdown table:
+```bash
+python show_decisions.py --limit 15
+```
+
+### 2. Export & Curate SFT Dataset
+Cleans real game decisions, deduplicates loops, teacher-corrects edge cases, and synthesizes complete golden speedrun milestones (350+ clean samples in ChatML format):
+```bash
+python export_sft_dataset.py --min-samples 350
+```
+This produces `data/sft_train.jsonl` and `data/sft_val.jsonl`.
+
+### 3. Fine-Tune with Unsloth QLoRA
+Fine-tune **Qwen 2.5 3B Instruct** with 4-bit QLoRA optimized specifically for **RTX 3060 6 GB VRAM** (~3.4 GB peak VRAM):
+```bash
+python train_unsloth_lora.py --epochs 3 --batch-size 1 --grad-accum 4
+```
+*Alternatively, open and run `train_colab.ipynb` in Google Colab (Free T4 GPU) to train in 3–5 minutes with zero local VRAM usage.*
+
+### 4. Register & Serve with Ollama
+The script automatically exports the fine-tuned model to 4-bit GGUF (`q4_k_m`) and builds `models/Modelfile`:
+```bash
+# Register with Ollama
+ollama create mc-qwen:3b -f models/Modelfile
+
+# Update .env to use the fine-tuned model
+OLLAMA_MODEL=mc-qwen:3b
+```
+
+
+---
+
 ## 🗺️ Tech Tree Progression Eras
 
 The bot autonomously progresses through 8 survival eras:

@@ -36,3 +36,8 @@ package-lock.json
 # Miscellaneous
 out.txt
 scratch/
+
+# Fine-Tuning Models & Binaries
+models/
+*.gguf
+
