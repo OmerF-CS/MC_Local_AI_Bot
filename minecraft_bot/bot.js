@@ -150,21 +150,25 @@ function setMovementsForTask(taskType = 'walk') {
         const mcData = require('minecraft-data')(bot.version);
         const m = new Movements(bot, mcData);
 
+        // Fluid Human-Like Movement Profile
+        m.allowSprinting = true; // Enables smooth continuous sprinting instead of rigid 1-block steps
+        m.allowParkour = true;   // Smoothly jumps 1-block gaps without stopping
+        m.canOpenDoors = true;   // Traverses buildings and doors without getting stuck
+
         if (taskType === 'mine' || taskType === 'dig') {
             m.canDig = true;
-            m.allowSprinting = false;
-            m.allowParkour = true;
-            m.maxDropDown = 3;
+            m.maxDropDown = 4;
         } else {
             // High-speed fluid traversal (walking, sprinting, following, fleeing, exploring)
             m.canDig = false; // Fast A* search without evaluating block destruction
-            m.allowSprinting = true; // Sprints to destination
-            m.allowParkour = true; // Jumps 1-block gaps smoothly
             m.maxDropDown = 4; // Safely drops down small ledges
             m.scaffoldingBlocks = []; // Don't place random pillars/bridges while walking
         }
         defaultMovements = m;
         bot.pathfinder.setMovements(m);
+        if (bot.pathfinder) {
+            bot.pathfinder.thinkTimeout = 5000;
+        }
     } catch (err) {
         console.warn(`[Movements] Error updating movements: ${err.message}`);
     }
