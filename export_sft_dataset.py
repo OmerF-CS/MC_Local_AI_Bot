@@ -439,7 +439,7 @@ def generate_speedrun_golden_samples(bot_name: str = "AIAssistant", bot_owner: s
             "hp": 20, "food": 18, "dim": "overworld",
             "inv": {"stone_pickaxe": 1},
             "pos": {"x": 10, "y": 64, "z": 20}, "hostiles": [],
-            "user_chat": f"[{bot_owner}]: yanıma gel",
+            "user_chat": f"[{bot_owner}]: come to me",
             "task": {"instruction": "follow Omer"},
             "action": ("follow_player", {"player_name": bot_owner}),
             "missing": []
@@ -449,7 +449,7 @@ def generate_speedrun_golden_samples(bot_name: str = "AIAssistant", bot_owner: s
             "hp": 20, "food": 18, "dim": "overworld",
             "inv": {"oak_log": 12, "stone_pickaxe": 1},
             "pos": {"x": 11, "y": 64, "z": 21}, "hostiles": [],
-            "user_chat": f"[{bot_owner}]: bana 5 odun ver",
+            "user_chat": f"[{bot_owner}]: give me 5 logs",
             "task": {"instruction": "give 5 log to Omer"},
             "action": ("give_item_to_player", {"player_name": bot_owner, "item_name": "oak_log", "count": 5}),
             "missing": []
@@ -459,7 +459,7 @@ def generate_speedrun_golden_samples(bot_name: str = "AIAssistant", bot_owner: s
             "hp": 20, "food": 18, "dim": "overworld",
             "inv": {"iron_sword": 1, "shield": 1},
             "pos": {"x": 12, "y": 64, "z": 22}, "hostiles": ["zombie (14m away)"],
-            "user_chat": f"[{bot_owner}]: beni koru",
+            "user_chat": f"[{bot_owner}]: protect me",
             "task": {"instruction": "guard Omer"},
             "action": ("guard_player", {"player_name": bot_owner}),
             "missing": []

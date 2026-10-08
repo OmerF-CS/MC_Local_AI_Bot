@@ -289,9 +289,13 @@ function getBotState() {
 
     let hasNearbyBrewingStand = false;
     let hasNearbyAnvil = false;
+    let hasNearbyBastion = false;
+    let hasNearbyFortress = false;
     try {
         hasNearbyBrewingStand = Boolean(bot.findBlock({ matching: b => b.name === 'brewing_stand', maxDistance: 12 }));
         hasNearbyAnvil = Boolean(bot.findBlock({ matching: b => b.name.includes('anvil'), maxDistance: 12 }));
+        hasNearbyBastion = Boolean(bot.findBlock({ matching: b => ['gilded_blackstone', 'polished_blackstone_bricks'].includes(b.name), maxDistance: 32 }));
+        hasNearbyFortress = Boolean(bot.findBlock({ matching: b => ['nether_bricks', 'spawner'].includes(b.name), maxDistance: 32 }));
     } catch (_) {}
 
     let isGearLowDurability = false;
@@ -436,7 +440,10 @@ function getBotState() {
         nearby_blazes_count: blazesCount,
         nearby_brewing_stand: hasNearbyBrewingStand,
         nearby_anvil: hasNearbyAnvil,
+        nearby_bastion: hasNearbyBastion,
+        nearby_fortress: hasNearbyFortress,
         low_durability_gear: isGearLowDurability,
+        is_falling: Boolean(bot.entity && bot.entity.velocity && bot.entity.velocity.y < -0.6),
         fire_resistance_active: Boolean(bot.entity && bot.entity.effects && bot.entity.effects[12])
     };
 }
@@ -921,14 +928,20 @@ async function autoSelfDefenseCheck() {
         // 0. Ghast Fireball Deflection: Reverse projectile velocity back at Ghast!
         for (const id in bot.entities) {
             const ent = bot.entities[id];
-            if (ent && ent.name && (ent.name.includes('fireball') || ent.name.includes('large_fireball'))) {
+            if (ent && ent.name && (ent.name.includes('fireball') || ent.name.includes('large_fireball') || ent.name.includes('small_fireball') || ent.name.includes('dragon_fireball'))) {
                 const fbDist = ent.position.distanceTo(bot.entity.position);
-                if (fbDist < 6.0) {
-                    console.log(`🔥 [Combat Engine] Deflecting incoming Ghast fireball at ${fbDist.toFixed(1)}m!`);
+                if (fbDist < 7.0) {
+                    console.log(`🔥 [Combat Engine] Incoming fireball detected at ${fbDist.toFixed(1)}m!`);
                     await bot.lookAt(ent.position, true);
-                    lowerShield(bot);
-                    await equipBestWeapon(bot);
-                    bot.attack(ent);
+                    if (fbDist <= 5.5 && fbDist >= 1.2) {
+                        lowerShield(bot);
+                        await equipBestWeapon(bot);
+                        bot.attack(ent);
+                        await new Promise(r => setTimeout(r, 100));
+                        raiseShield(bot);
+                    } else if (fbDist < 1.2) {
+                        raiseShield(bot);
+                    }
                     return;
                 }
             }
@@ -1038,14 +1051,14 @@ async function autoSelfDefenseCheck() {
         // 3.4: SKELETON TACTIC: Shield sprint gap-close with cover / LOS break
         if (mobName.includes('skeleton') || mobName.includes('stray')) {
             if (dist > 3.5) {
-                // If far (> 8m) and lacking shield or low HP, seek solid block cover to break LOS
-                if (dist > 8.0 && (!bot.inventory.slots[45] || bot.health <= 10)) {
+                // If far (> 7.5m), seek solid block cover to break LOS and force skeleton into melee
+                if (dist > 7.5) {
                     const coverBlock = bot.findBlock({
-                        matching: b => b && b.boundingBox === 'block' && b.name !== 'air' && b.position.distanceTo(bot.entity.position) <= 5,
-                        maxDistance: 6
+                        matching: b => b && b.boundingBox === 'block' && b.name !== 'air' && b.position.distanceTo(bot.entity.position) <= 8 && b.position.distanceTo(dangerMob.position) >= 3,
+                        maxDistance: 8
                     });
                     if (coverBlock) {
-                        console.log("🏹 [Skeleton Combat] Taking cover behind solid block to break line of sight!");
+                        console.log("🏹 [Skeleton Combat] Moving behind solid cover block to break line of sight!");
                         try {
                             const { GoalNear } = goals;
                             bot.pathfinder.setGoal(new GoalNear(coverBlock.position.x, coverBlock.position.y, coverBlock.position.z, 1));
@@ -1067,6 +1080,7 @@ async function autoSelfDefenseCheck() {
                 await equipBestWeapon(bot);
                 await performChargedAttack(bot, dangerMob);
                 raiseShield(bot);
+                await new Promise(r => setTimeout(r, 300));
                 return;
             }
         }
@@ -1102,12 +1116,32 @@ async function autoSelfDefenseCheck() {
             await new Promise(r => setTimeout(r, 450));
             bot.setControlState('back', false);
             bot.setControlState('sprint', false);
+
+            // Funnel barrier: Place a waist-high block barrier between bot and swarm
+            const buildBlock = bot.inventory.items().find(i => ['cobblestone', 'dirt', 'stone', 'deepslate', 'planks', 'netherrack'].some(b => i.name.includes(b)));
+            if (buildBlock) {
+                const groundBlock = bot.blockAt(bot.entity.position.offset(0, -1, 0));
+                if (groundBlock && groundBlock.name !== 'air') {
+                    try {
+                        await bot.equip(buildBlock, 'hand');
+                        await bot.placeBlock(groundBlock, new Vec3(0, 1, 0));
+                        console.log("🧱 [Combat Funnel] Placed tactical barrier block to bottleneck hostile swarm!");
+                    } catch (_) {}
+                }
+            }
         }
 
         // 3.7: GENERAL CLOSE QUARTERS COMBAT (Zombies, Spiders, etc.)
         await equipBestWeapon(bot);
-        lowerShield(bot);
-        await performChargedAttack(bot, dangerMob);
+        if (bot.inventory.slots[45] && bot.inventory.slots[45].name.includes('shield')) {
+            lowerShield(bot);
+            await performChargedAttack(bot, dangerMob);
+            raiseShield(bot);
+            await new Promise(r => setTimeout(r, 350));
+        } else {
+            lowerShield(bot);
+            await performChargedAttack(bot, dangerMob);
+        }
 
     } finally {
         isDefending = false;
@@ -3190,6 +3224,163 @@ async function eatChorusFruit(bot) {
     }
 }
 
+// --- NETHER FORTRESS EXPLORATION ENGINE (F4) ---
+async function exploreNetherFortress(bot, targetResource = 'explore') {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    bot.chat("Searching for Nether Fortress structure (nether bricks, blaze spawners, nether wart)... 🏰🔥");
+
+    // Scan for fortress blocks within 64m
+    const fortressBlock = bot.findBlock({
+        matching: b => b && [
+            'nether_bricks', 'nether_brick_fence', 'nether_brick_stairs',
+            'spawner', 'nether_wart'
+        ].includes(b.name),
+        maxDistance: 64
+    });
+
+    if (fortressBlock) {
+        bot.chat(`🏰 Nether Fortress component (${fortressBlock.name}) located at (${fortressBlock.position.x}, ${fortressBlock.position.y}, ${fortressBlock.position.z})!`);
+        try {
+            await bot.pathfinder.goto(new GoalNear(fortressBlock.position.x, fortressBlock.position.y, fortressBlock.position.z, 2));
+        } catch (_) {}
+
+        // If target was blaze_spawner, look specifically for spawner or blaze
+        if (targetResource === 'blaze_spawner') {
+            const spawner = bot.findBlock({
+                matching: b => b && b.name === 'spawner',
+                maxDistance: 32
+            });
+            if (spawner) {
+                bot.chat(`🔥 Blaze Spawner confirmed at (${spawner.position.x}, ${spawner.position.y}, ${spawner.position.z})!`);
+                return { success: true, reason: 'blaze_spawner_found', position: spawner.position };
+            }
+        }
+
+        // If target was nether_wart, harvest wart
+        if (targetResource === 'nether_wart') {
+            const wart = bot.findBlock({
+                matching: b => b && b.name === 'nether_wart',
+                maxDistance: 32
+            });
+            if (wart) {
+                try {
+                    await bot.dig(wart);
+                    await collectNearbyDrops(bot, 5);
+                } catch (_) {}
+                return { success: true, reason: 'nether_wart_harvested', position: wart.position };
+            }
+        }
+
+        return { success: true, reason: 'fortress_explored', position: fortressBlock.position };
+    }
+
+    bot.chat("No fortress blocks detected within 64m. Scouting forward along Nether bridges... 🔍");
+    const scoutVec = bot.entity.position.offset(30, 0, 30);
+    try {
+        await bot.pathfinder.goto(new GoalNear(scoutVec.x, scoutVec.y, scoutVec.z, 3));
+    } catch (_) {}
+
+    return { success: true, reason: 'fortress_scouted' };
+}
+
+// --- BASTION REMNANT EXPLORATION ENGINE (F4) ---
+async function exploreBastion(bot, actionMode = 'explore') {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    bot.chat("Searching for Bastion Remnant structure (blackstone, piglin brutes, treasure chests)... 🏛️🐷");
+
+    // Equip gold armor piece to stay neutral with common Piglins
+    const goldArmor = bot.inventory.items().find(i => i.name && i.name.startsWith('golden_') && (i.name.includes('boots') || i.name.includes('helmet') || i.name.includes('leggings') || i.name.includes('chestplate')));
+    if (goldArmor) {
+        try {
+            await bot.equip(goldArmor, 'torso');
+        } catch (_) {}
+    }
+
+    // Scan for Bastion blocks
+    const bastionBlock = bot.findBlock({
+        matching: b => b && [
+            'gilded_blackstone', 'polished_blackstone_bricks', 'chiseled_polished_blackstone',
+            'crying_obsidian', 'gold_block'
+        ].includes(b.name),
+        maxDistance: 64
+    });
+
+    if (bastionBlock) {
+        bot.chat(`🏛️ Bastion Remnant block (${bastionBlock.name}) found at (${bastionBlock.position.x}, ${bastionBlock.position.y}, ${bastionBlock.position.z})!`);
+        try {
+            await bot.pathfinder.goto(new GoalNear(bastionBlock.position.x, bastionBlock.position.y, bastionBlock.position.z, 2));
+        } catch (_) {}
+
+        // Check for loot chests in the bastion
+        const chest = bot.findBlock({
+            matching: b => b && b.name === 'chest',
+            maxDistance: 24
+        });
+        if (chest && (actionMode === 'loot_chests' || actionMode === 'explore')) {
+            bot.chat("Looting Bastion treasure chest... 💎📦");
+            try {
+                await bot.pathfinder.goto(new GoalNear(chest.position.x, chest.position.y, chest.position.z, 2));
+                const chestWindow = await bot.openContainer(chest);
+                for (const item of chestWindow.containerItems()) {
+                    if (['ancient_debris', 'netherite_upgrade_smithing_template', 'gold_ingot', 'diamond', 'enchanted_golden_apple'].some(val => item.name.includes(val))) {
+                        await chestWindow.withdraw(item.type, null, item.count);
+                    }
+                }
+                chestWindow.close();
+                bot.chat("Claimed Bastion treasure loot! 🏆✨");
+            } catch (_) {}
+        }
+
+        return { success: true, reason: 'bastion_explored', position: bastionBlock.position };
+    }
+
+    bot.chat("No Bastion structures visible in immediate radius. Scouting ahead... 🧭");
+    return { success: true, reason: 'bastion_scouted' };
+}
+
+// --- ELYTRA FLIGHT ENGINE (F5) ---
+async function flyWithElytra(bot, targetX, targetY, targetZ) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+
+    const elytra = bot.inventory.items().find(i => i.name === 'elytra');
+    if (!elytra) {
+        bot.chat("No Elytra in inventory to initiate flight! 🪽❌");
+        return { success: false, reason: 'no_elytra' };
+    }
+
+    bot.chat(`🪽 Equipping Elytra and initiating flight towards (${targetX}, ${targetY}, ${targetZ})! 🚀`);
+    try {
+        await bot.equip(elytra, 'torso');
+    } catch (eErr) {
+        return { success: false, reason: eErr.message };
+    }
+
+    const fireworks = bot.inventory.items().find(i => i.name === 'firework_rocket');
+    if (fireworks) {
+        try {
+            await bot.equip(fireworks, 'hand');
+            await bot.lookAt(new Vec3(targetX, targetY + 15, targetZ));
+            bot.setControlState('jump', true);
+            await new Promise(r => setTimeout(r, 200));
+            bot.setControlState('jump', false);
+            bot.activateItem();
+            await new Promise(r => setTimeout(r, 600));
+            bot.chat("🚀 Rocket propulsion engaged! Gliding smoothly towards target...");
+        } catch (_) {}
+    } else {
+        await bot.lookAt(new Vec3(targetX, targetY, targetZ));
+        bot.setControlState('forward', true);
+        await new Promise(r => setTimeout(r, 1000));
+        bot.setControlState('forward', false);
+    }
+
+    return { success: true, reason: 'elytra_flight_performed' };
+}
+
 async function buildShelter(bot, mode = 'auto') {
     if (!bot || !bot.entity) return false;
     const { GoalNear } = goals;
@@ -4372,6 +4563,38 @@ async function handleAction(action) {
                 isBusy = true;
                 currentActionName = 'eating_chorus_fruit';
                 const res = await eatChorusFruit(bot);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'explore_nether_fortress': {
+                isBusy = true;
+                currentActionName = 'exploring_nether_fortress';
+                const targetRes = args.target_resource || 'explore';
+                const res = await exploreNetherFortress(bot, targetRes);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'explore_bastion': {
+                isBusy = true;
+                currentActionName = 'exploring_bastion';
+                const mode = args.action_mode || 'explore';
+                const res = await exploreBastion(bot, mode);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'fly_with_elytra': {
+                isBusy = true;
+                currentActionName = 'flying_with_elytra';
+                const targetX = Number(args.x || 0);
+                const targetY = Number(args.y || 100);
+                const targetZ = Number(args.z || 0);
+                const res = await flyWithElytra(bot, targetX, targetY, targetZ);
                 actionSuccess = res.success;
                 if (!res.success) actionError = res.reason;
                 break;

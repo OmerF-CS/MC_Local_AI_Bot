@@ -2,6 +2,7 @@
 Persistent Ore Map, Monotonic Checkpoints, Chest Recovery, and Combat Tuning.
 """
 import asyncio
+import json
 import os
 import tempfile
 import unittest
@@ -279,8 +280,90 @@ class TestV2Phase2And3Features(unittest.TestCase):
         self.assertIn("setupRespawnAnchor", code)
         self.assertIn("exploreEndCity", code)
         self.assertIn("eatChorusFruit", code)
+        self.assertIn("exploreNetherFortress", code)
+        self.assertIn("exploreBastion", code)
+        self.assertIn("flyWithElytra", code)
+        self.assertIn("Combat Funnel", code)
+
+    def test_spare_tools_and_fortress_bastion_elytra_in_planner(self):
+        """Verify spare tool logic, Nether fortress, bastion, and Elytra flight triggers in planner."""
+        mock_brain = MagicMock()
+        brain = AutonomousCoopBrain(mock_brain, bot_owner="Omer", db=self.db)
+
+        # 1. Spare iron pickaxe craft trigger when only 1 pickaxe and surplus iron
+        state_gear = {"health": 20, "food": 20, "dimension": "overworld"}
+        inv_spare = {"shield": 1, "iron_pickaxe": 1, "iron_ingot": 4, "stick": 3}
+        desc_spare, act_spare = brain.get_milestone_action({"target": "diamond_pickaxe"}, inv_spare, state_gear)
+        self.assertEqual(act_spare["name"], "craft_item")
+        self.assertEqual(act_spare["arguments"]["item_name"], "iron_pickaxe")
+
+        # 2. Nether Fortress exploration trigger when blaze rods missing
+        state_nether = {
+            "health": 20, "food": 20, "dimension": "the_nether",
+            "nearby_blazes_count": 0, "fortress_found": False
+        }
+        inv_nether = {"iron_pickaxe": 2, "gold_ingot": 0, "blaze_rod": 0}
+        desc_fortress, act_fortress = brain.get_milestone_action({"target": "nether_portal"}, inv_nether, state_nether)
+        self.assertEqual(act_fortress["name"], "explore_nether_fortress")
+
+        # 3. Bastion Remnant exploration trigger when bastion detected
+        state_bastion = {
+            "health": 20, "food": 20, "dimension": "the_nether",
+            "nearby_bastion": True
+        }
+        desc_bastion, act_bastion = brain.get_milestone_action({"target": "nether_portal"}, inv_nether, state_bastion)
+        self.assertEqual(act_bastion["name"], "explore_bastion")
+
+        # 4. Elytra flight trigger after acquiring Elytra and having firework rockets
+        state_elytra = {
+            "health": 20, "food": 20, "dimension": "the_end",
+            "dragon_defeated": True, "elytra_acquired": True,
+            "travel_target": {"x": 500, "y": 80, "z": -300}
+        }
+        inv_elytra = {"elytra": 1, "firework_rocket": 12}
+        desc_fly, act_fly = brain.get_milestone_action({"target": "enter_exit_portal"}, inv_elytra, state_elytra)
+        self.assertEqual(act_fly["name"], "fly_with_elytra")
+        self.assertEqual(act_fly["arguments"]["x"], 500)
+
+        # 5. Emergency Chorus fruit fallback when falling
+        state_falling = {
+            "health": 20, "food": 20, "dimension": "the_end",
+            "is_falling": True
+        }
+        fallback_act = brain.generate_fallback_action({"target": "ender_dragon"}, {"chorus_fruit": 5}, None, state_falling)
+        self.assertIsNotNone(fallback_act)
+        self.assertEqual(fallback_act["name"], "eat_chorus_fruit")
+
+    def test_benchmark_models_engine(self):
+        """Verify the 3B vs 7B benchmark engine, JSON format validation, and schema compliance."""
+        from scripts.benchmark_models import validate_model_response, benchmark_model, BENCHMARK_PROMPTS
+
+        # 1. Valid JSON and tool call schema
+        sample_valid = json.dumps({
+            "text": "Crafting shield for protection",
+            "tool_calls": [{"name": "craft_item", "arguments": {"item_name": "shield"}}]
+        })
+        is_json, is_schema, is_acc, call = validate_model_response(sample_valid, "craft_item")
+        self.assertTrue(is_json)
+        self.assertTrue(is_schema)
+        self.assertTrue(is_acc)
+        self.assertEqual(call["name"], "craft_item")
+
+        # 2. Invalid non-JSON text
+        is_json_inv, is_schema_inv, is_acc_inv, _ = validate_model_response("I will go mine some trees now without JSON", "collect_block")
+        self.assertFalse(is_json_inv)
+        self.assertFalse(is_schema_inv)
+        self.assertFalse(is_acc_inv)
+
+        # 3. Model Benchmark in simulated mock mode
+        result_3b = benchmark_model("qwen2.5:3b", BENCHMARK_PROMPTS[:4], is_mock=True)
+        self.assertEqual(result_3b["json_validity_pct"], 100.0)
+        self.assertEqual(result_3b["schema_compliance_pct"], 100.0)
+        self.assertEqual(result_3b["milestone_accuracy_pct"], 100.0)
+        self.assertGreater(result_3b["avg_latency_ms"], 0)
 
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -547,6 +547,11 @@ class AutonomousCoopBrain:
             if any(w in instruction for w in ["sleep", "bed", "uyu"]):
                 return {"name": "sleep_in_bed", "arguments": {}}
 
+        # 2. Emergency tactical Chorus Fruit teleport (F5)
+        if inv.get("chorus_fruit", 0) > 0:
+            if state.get("is_falling", False) or (state.get("health", 20) <= 6 and state.get("nearby_hostiles_count", 0) >= 2):
+                return {"name": "eat_chorus_fruit", "arguments": {}}
+
         # 3. Hunger check - consume food if hungry
         food_level = state.get("food", 20)
         has_eatable = any(
@@ -555,8 +560,11 @@ class AutonomousCoopBrain:
                 "cooked_chicken", "cooked_mutton", "baked_potato"
             ]
         )
-        if food_level < 15 and has_eatable:
-            return {"name": "eat_food", "arguments": {}}
+        if food_level < 15:
+            if has_eatable:
+                return {"name": "eat_food", "arguments": {}}
+            elif inv.get("chorus_fruit", 0) > 0:
+                return {"name": "eat_chorus_fruit", "arguments": {}}
 
         # 4. Smelt raw meats if food level dropping and fuel is available
         raw_meats = [
@@ -657,13 +665,21 @@ class AutonomousCoopBrain:
         if low_durability:
             if "anvil" in inv or state.get("nearby_anvil", False):
                 return "Repair damaged gear at anvil", {"name": "repair_gear_anvil", "arguments": {"target_item": "auto"}}
-            elif inv.get("iron_ingot", 0) >= 3 and inv.get("stick", 0) >= 2 and target == "iron_pickaxe":
-                return "Craft spare iron pickaxe before tool breaks", {"name": "craft_item", "arguments": {"item_name": "iron_pickaxe", "count": 1}}
 
         # Tactical Gear Buff: Village trading when villagers are nearby (F2)
         nearby_villagers = state.get("nearby_villagers_count", 0)
         if nearby_villagers > 0 and (inv.get("emerald", 0) > 0 or inv.get("wheat", 0) >= 20 or inv.get("raw_iron", 0) >= 15):
             return "Trade with nearby village villager for provisions and gear", {"name": "trade_with_villager", "arguments": {"trade_item": "auto", "count": 1}}
+
+        # Tactical Gear Buff: Spare tool check (F2)
+        total_pickaxes = inv.get("iron_pickaxe", 0) + inv.get("diamond_pickaxe", 0)
+        has_spare_iron = inv.get("iron_ingot", 0) >= 3 and inv.get("stick", 0) >= 2
+        if (low_durability or total_pickaxes < 2) and has_spare_iron and target not in ("wooden_pickaxe", "stone_pickaxe"):
+            return "Craft spare iron pickaxe for exploration safety", {"name": "craft_item", "arguments": {"item_name": "iron_pickaxe", "count": 1}}
+
+        has_sword = "iron_sword" in inv or "diamond_sword" in inv
+        if not has_sword and inv.get("iron_ingot", 0) >= 2 and inv.get("stick", 0) >= 1 and target not in ("wooden_pickaxe", "stone_pickaxe"):
+            return "Craft iron sword for combat readiness", {"name": "craft_item", "arguments": {"item_name": "iron_sword", "count": 1}}
 
         # Tactical Gear Buff: Potion brewing before Nether or Dragon (F2)
         has_brewing_stand = "brewing_stand" in inv or state.get("nearby_brewing_stand", False)
@@ -743,6 +759,15 @@ class AutonomousCoopBrain:
                 if inv.get("gold_ingot", 0) >= 1 and inv.get("ender_pearl", 0) < 12 and state.get("nearby_piglins_count", 0) > 0:
                     return "Barter gold ingots with Piglin for Ender Pearls and potions", {"name": "barter_with_piglins", "arguments": {"count": min(inv.get("gold_ingot", 0), 4)}}
 
+                # 5. Bastion Remnant exploration for ancient debris, gold, and upgrade templates
+                if state.get("nearby_bastion", False) or (state.get("nearby_piglins_count", 0) >= 4 and inv.get("crying_obsidian", 0) < 6):
+                    return "Explore Bastion Remnant for treasure and upgrade materials", {"name": "explore_bastion", "arguments": {"action_mode": "loot_chests"}}
+
+                # 6. Nether Fortress search if Blaze rods missing (< 7) and no fortress found yet
+                blaze_rods = inv.get("blaze_rod", 0)
+                if blaze_rods < 7 and not state.get("nearby_blazes_count", 0) and not state.get("fortress_found", False):
+                    return "Explore and locate Nether Fortress for Blaze spawners and nether wart", {"name": "explore_nether_fortress", "arguments": {"target_resource": "blaze_spawner"}}
+
                 return "Hunt Blazes in fortress", {"name": "attack_target", "arguments": {"target_name": "blaze"}}
 
             obsidian_count = inv.get("obsidian", 0)
@@ -787,17 +812,26 @@ class AutonomousCoopBrain:
 
             if blaze_rods < 1 and blaze_powders < 1:
                 if "nether" in dimension:
+                    if not state.get("nearby_blazes_count", 0) and not state.get("fortress_found", False):
+                        return "Explore and locate Nether Fortress for Blaze spawners", {"name": "explore_nether_fortress", "arguments": {"target_resource": "blaze_spawner"}}
                     return "Hunt Blazes for rods", {"name": "attack_target", "arguments": {"target_name": "blaze"}}
                 return "Build Nether portal for rods", {"name": "build_nether_portal", "arguments": {}}
 
         # Phase 3 & 4: The End & Ender Dragon Slaying (F5)
         if target in ("ender_dragon", "fight_ender_dragon", "end_crystal", "enter_exit_portal"):
             if "end" in dimension:
+                # Emergency Chorus Fruit teleport if falling into void or high altitude
+                if inv.get("chorus_fruit", 0) > 0 and state.get("is_falling", False):
+                    return "Eat chorus fruit to escape lethal void fall", {"name": "eat_chorus_fruit", "arguments": {}}
+
                 dragon_defeated = state.get("dragon_defeated", False)
                 if dragon_defeated or target == "enter_exit_portal":
                     # F5: Outer End Islands exploration for Elytra & Shulker Boxes
                     if inv.get("ender_pearl", 0) >= 1 and not state.get("elytra_acquired", False):
                         return "Explore End Gateway towards End City for Elytra and Shulker Shells", {"name": "explore_end_city", "arguments": {}}
+                    if state.get("elytra_acquired", False) and inv.get("firework_rocket", 0) >= 1 and state.get("travel_target"):
+                        tt = state["travel_target"]
+                        return "Fly with Elytra using rocket boost", {"name": "fly_with_elytra", "arguments": {"x": tt.get("x", 0), "y": tt.get("y", 100), "z": tt.get("z", 0)}}
                     return "Enter exit portal to beat game", {"name": "enter_exit_portal", "arguments": {}}
 
                 crystals_count = state.get("end_crystals_count", 0)

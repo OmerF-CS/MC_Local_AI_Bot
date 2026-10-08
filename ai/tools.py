@@ -744,5 +744,59 @@ MINECRAFT_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "explore_nether_fortress",
+            "description": "Locate and explore Nether Fortress structure. Searches for Nether Bricks, Blaze spawners, and Nether Wart corridors, registering fortress coordinates to spatial memory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_resource": {
+                        "type": "string",
+                        "description": "Target fortress component: 'blaze_spawner', 'nether_wart', 'chest', or 'explore'.",
+                        "enum": ["blaze_spawner", "nether_wart", "chest", "explore"],
+                        "default": "explore"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "explore_bastion",
+            "description": "Locate and explore Bastion Remnant structure. Searches for gilded blackstone, piglin brutes, and treasure chests, looting high-value materials (ancient debris, gold, upgrade templates).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action_mode": {
+                        "type": "string",
+                        "description": "Action mode: 'loot_chests' or 'explore'.",
+                        "enum": ["loot_chests", "explore"],
+                        "default": "explore"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fly_with_elytra",
+            "description": "Equip Elytra and perform rocket-propelled flight towards destination coordinates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "number", "description": "Target X coordinate"},
+                    "y": {"type": "number", "description": "Target Y coordinate"},
+                    "z": {"type": "number", "description": "Target Z coordinate"}
+                },
+                "required": ["x", "y", "z"]
+            }
+        }
     }
 ]
