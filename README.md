@@ -14,9 +14,10 @@
 > [!NOTE]
 > ### 🚧 Project Status: Active Beta (v0.8.0) - Work in Progress
 > **MC Local AI Bot is an ambitious ongoing AI research & development project.**  
-> - **Current State:** Core architecture (Python orchestrator, Mineflayer worker, Ollama LLM, SQLite memory, and 53 unit tests) is operational.
+> - **Current State:** Core architecture (Python orchestrator, Mineflayer worker, Ollama LLM, SQLite memory, and 63 unit tests) is operational.
+> - **V2 Updates:** Phase 0 (Death recovery, structured results, checkpoint loading) and Phase 1 (Beds, breeding, fishing, chests, phantoms) fully active.
 > - **In Active Testing:** Real-world in-game edge cases (terrain navigation, tree variants, biome obstacles, combat reflexes).
-> - **Next Horizons:** Continuous gameplay dataset collection, custom Unsloth QLoRA fine-tuning for zero-shot decision making, and extended survival speedruns.
+> - **Next Horizons:** Phase 2 (Y-level ore mining, persistent ore map) and Phase 3 (Combat v2 attack cooldowns, mob-specific AI).
 > Contributions, feedback, and bug reports are warmly welcomed!
 
 ---
@@ -97,6 +98,14 @@ The bot uses an asynchronous decoupled architecture separating high-level strate
 ### 🌾 Sustainable Farming & Bread Engine
 - **Hay Bale Harvesting (`farm_crops`)**: Rapidly scans villages and plains for `hay_block`s. Automatically converts 1 hay bale into 9 wheat $\to$ 3 loaves of fresh bread (providing 60+ loaves in minutes).
 - **Crop Lifecycle & Farmland**: Harvests mature wheat, carrots, and potatoes, replants seeds on farmland, and tills dirt near water with hoes.
+- **Bone Meal Acceleration**: Automatically crafts bone meal from skeleton bones and accelerates immature crops.
+
+### 🛏️ Life Cycle, Breeding & Storage Mastery (V2 Active)
+- **Corpse Recovery & Loot Retrieval**: Exact coordinates and item snapshots are preserved in SQLite upon death. Automatically executes a priority corpse expedition post-respawn before drops despawn (~5m).
+- **Smart Bed Placement & Spawn Points**: Sets spawn points during the day (1.20 Java right-click behavior) and sleeps through the night to reset phantom insomnia timers. Automatically crafts and places beds when needed.
+- **Animal Breeding (`breed_animals`)**: Breeds cows, sheep, chickens, and pigs with appropriate foods (`!breed`), farming leather, food, and experience points.
+- **Autonomous Fishing (`catch_fish`)**: Crafts fishing rods from sticks and string and fishes from open water bodies (`!fish`).
+- **Chest Storage Management (`manage_chest`)**: Automatically crafts/places chests, deposits surplus building materials when inventory exceeds 32 slots, and supports withdrawing items (`!chest`, `!withdraw`).
 
 ### 🏰 Universal Emergency Shelter & Burrowing
 - **Universal Solid Block Support (`build_shelter`)**: Constructs 360-degree protective bunkers using **ANY solid block** in Minecraft (cobblestone, deepslate, dirt, sandstone, tuff, planks, netherrack, etc.).
