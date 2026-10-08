@@ -52,6 +52,7 @@ class MinecraftAIBot:
         self.bridge.on_game_won_callback = self.on_game_won
         self.bridge.on_action_completed_callback = self.on_action_completed
         self.bridge.on_bed_used_callback = self.on_bed_used
+        self.bridge.on_chest_used_callback = self.on_chest_used
         
         # Signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -189,6 +190,24 @@ class MinecraftAIBot:
                 is_spawn=True
             )
             logger.info(f"🛏️ [Bed Memory] Recorded spawn bed at ({bed_pos.get('x')}, {bed_pos.get('y')}, {bed_pos.get('z')}) in {dim} to database!")
+
+    async def on_chest_used(self, data: Dict[str, Any]):
+        """Called when the bot interacts with a chest to store or withdraw items."""
+        chest_pos = data.get("chest_pos")
+        dim = data.get("dimension", "overworld")
+        items = data.get("items", [])
+        if chest_pos and hasattr(self, "db") and self.db:
+            self.db.save_chest_location(
+                dim=dim,
+                x=chest_pos.get("x", 0.0),
+                y=chest_pos.get("y", 0.0),
+                z=chest_pos.get("z", 0.0),
+                items=items
+            )
+            logger.info(
+                f"📦 [Chest Memory] Recorded chest at ({chest_pos.get('x')}, {chest_pos.get('y')}, {chest_pos.get('z')}) "
+                f"in {dim} with {len(items)} stored item types!"
+            )
 
     async def on_game_won(self, data):
         """Called when the Ender Dragon is defeated and the exit portal is entered."""

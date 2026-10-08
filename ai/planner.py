@@ -53,6 +53,8 @@ class AutonomousCoopBrain:
         food = state.get("food", 20)
         nearby_hostiles = state.get("nearby_hostiles", [])
         is_day = state.get("is_day", True)
+        now = time.time()
+        inv_map = inv or {}
 
         # 0. If currently sheltered inside a bunker: check if it's safe to break out!
         if state.get("is_sheltered"):
@@ -204,6 +206,38 @@ class AutonomousCoopBrain:
                     "tool_calls": [
                         {"name": "build_shelter", "arguments": {"mode": "auto"}}
                     ]
+                }
+
+        # 4. Phantom insomnia prevention & Night sleep routine (F1.6 & F1.7)
+        dimension = str(state.get("dimension", "overworld")).lower()
+        if "overworld" in dimension and not state.get("is_guarding") and not state.get("active_player_task"):
+            phantom_risk = state.get("phantom_risk", False)
+            should_sleep = state.get("should_sleep", False)
+            if phantom_risk or should_sleep:
+                has_bed = any("bed" in k for k in inv_map.keys()) or bool(state.get("visible_resources", {}).get("bed"))
+                wool_cnt = sum(cnt for k, cnt in inv_map.items() if "wool" in k)
+                plank_cnt = sum(cnt for k, cnt in inv_map.items() if "plank" in k)
+                can_craft_bed = (wool_cnt >= 3 and plank_cnt >= 3)
+
+                if has_bed or can_craft_bed:
+                    if now - getattr(self, "last_sleep_try_time", 0.0) >= 30.0:
+                        self.last_sleep_try_time = now
+                        reason = "Insomnia phantom risk" if phantom_risk else "Nighttime safety"
+                        logger.info(f"🛏️ [Life Cycle Routine] {reason}! Sleeping in bed to skip night and reset phantoms.")
+                        return {
+                            "text": f"{reason}! Sleeping in bed to skip night and reset phantoms.",
+                            "tool_calls": [{"name": "sleep_in_bed", "arguments": {}}]
+                        }
+
+        # 5. Inventory storage management (F1.5)
+        items_list = state.get("inventory_items", [])
+        if len(items_list) >= 32 and not nearby_hostiles and not state.get("active_player_task"):
+            if now - getattr(self, "last_chest_try_time", 0.0) >= 60.0:
+                self.last_chest_try_time = now
+                logger.info("📦 [Inventory Full] Inventory capacity reached (>32 slots)! Storing surplus materials in chest.")
+                return {
+                    "text": "Inventory is almost full! Storing surplus materials in chest storage.",
+                    "tool_calls": [{"name": "manage_chest", "arguments": {"action_type": "deposit_surplus"}}]
                 }
 
         return None

@@ -89,6 +89,19 @@ class Database:
                 )
             """)
 
+            # Chest Storage (F1.5)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS chests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dim TEXT DEFAULT 'overworld',
+                    x REAL,
+                    y REAL,
+                    z REAL,
+                    items_json TEXT DEFAULT '[]',
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Task Queue
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS task_queue (
@@ -298,6 +311,40 @@ class Database:
         """, (dim,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+    # --- CHESTS & INVENTORY STORAGE (F1.5) ---
+
+    def save_chest_location(self, dim: str, x: float, y: float, z: float, items: Optional[List[Dict[str, Any]]] = None) -> int:
+        """Saves or updates a chest location and snapshot of contents."""
+        items_str = json.dumps(items or [])
+        with self.conn:
+            cur = self.conn.execute("""
+                INSERT INTO chests (dim, x, y, z, items_json)
+                VALUES (?, ?, ?, ?, ?)
+            """, (dim, x, y, z, items_str))
+            return cur.lastrowid
+
+    def get_nearby_chests(self, dim: str = "overworld", x: float = 0.0, y: float = 0.0, z: float = 0.0, max_dist: float = 48.0) -> List[Dict[str, Any]]:
+        """Returns chests located within max_dist blocks of given coordinates."""
+        cur = self.conn.cursor()
+        cur.execute("""
+            SELECT * FROM chests
+            WHERE dim = ?
+            ORDER BY id DESC
+        """, (dim,))
+        nearby = []
+        for row in cur.fetchall():
+            c = dict(row)
+            dist = ((c["x"] - x)**2 + (c["y"] - y)**2 + (c["z"] - z)**2) ** 0.5
+            if dist <= max_dist:
+                c["distance"] = dist
+                try:
+                    c["items"] = json.loads(c.get("items_json", "[]"))
+                except Exception:
+                    c["items"] = []
+                nearby.append(c)
+        nearby.sort(key=lambda item: item["distance"])
+        return nearby
 
     def close(self):
         """Closes the underlying SQLite database connection."""

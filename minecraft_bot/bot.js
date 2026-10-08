@@ -93,6 +93,8 @@ const RESOURCE_CATEGORIES = [
 ];
 const cachedVisibleResources = {};
 let scanRoundRobinIndex = 0;
+let botCreatedTime = Date.now();
+let lastSleepTime = Date.now();
 
 function tickResourceScanner() {
     if (!bot || !bot.entity) return;
@@ -348,6 +350,9 @@ function getBotState() {
         is_raining: Boolean(bot.isRaining),
         is_thundering: Boolean(bot.thunderState > 0),
         time_of_day: bot.time ? bot.time.timeOfDay : 0,
+        time_since_sleep_seconds: Math.floor((Date.now() - lastSleepTime) / 1000),
+        phantom_risk: ((Date.now() - lastSleepTime) > 2400000),
+        should_sleep: (!bot.time || !bot.time.isDay || Boolean(bot.isRaining) || Boolean(bot.thunderState > 0)),
         food_saturation: bot.foodSaturation != null ? Math.round(bot.foodSaturation * 10) / 10 : 5,
         oxygen_level: bot.oxygenLevel != null ? bot.oxygenLevel : 20,
         armor_equipped: {
@@ -868,12 +873,18 @@ function createBot() {
         });
     });
 
+    bot.on('sleep', () => {
+        console.log('[Minecraft] 💤 Bot fell asleep in bed! Phantom insomnia timer reset.');
+        lastSleepTime = Date.now();
+    });
+
     bot.on('respawn', () => {
         console.log('[Minecraft] 🔄 Bot respawned into the world!');
         isGuarding = false;
         isBusy = false;
         isSheltered = false;
         currentActionName = 'idle';
+        lastSleepTime = Date.now();
         setMovementsForTask('walk');
     });
 
@@ -1977,6 +1988,37 @@ async function farmCrops(bot, actionType = 'auto') {
         }
     }
 
+    // 1.5 Bone Meal Acceleration: Fertilize immature crops with bone meal
+    const boneItem = bot.inventory.items().find(i => i.name === 'bone');
+    let boneMealItem = bot.inventory.items().find(i => i.name === 'bone_meal');
+    if (!boneMealItem && boneItem && boneItem.count > 0) {
+        try {
+            await smartCraft(bot, 'bone_meal', boneItem.count * 3);
+            boneMealItem = bot.inventory.items().find(i => i.name === 'bone_meal');
+        } catch (_) {}
+    }
+
+    if (boneMealItem && boneMealItem.count > 0) {
+        const cropBlockNames = ['wheat', 'carrots', 'potatoes', 'beetroots'];
+        const cropBlockIds = cropBlockNames.map(name => mcData.blocksByName[name]?.id).filter(Boolean);
+        const nearCrops = bot.findBlocks({ matching: cropBlockIds, maxDistance: 16, count: 6 });
+        for (const pos of nearCrops) {
+            const b = bot.blockAt(pos);
+            if (!b) continue;
+            const isRipe = (b.metadata === 7 && ['wheat', 'carrots', 'potatoes'].includes(b.name)) ||
+                           (b.metadata === 3 && b.name === 'beetroots');
+            if (!isRipe && boneMealItem && boneMealItem.count > 0) {
+                try {
+                    await bot.pathfinder.goto(new GoalNear(pos.x, pos.y, pos.z, 2.5));
+                    await bot.equip(boneMealItem, 'hand');
+                    await bot.activateBlock(b);
+                    await new Promise(r => setTimeout(r, 200));
+                    boneMealItem = bot.inventory.items().find(i => i.name === 'bone_meal');
+                } catch (_) {}
+            }
+        }
+    }
+
     // 2. Harvest Ripe Crops (wheat age 7, carrots age 7, potatoes age 7, beetroots age 3)
     const cropNames = ['wheat', 'carrots', 'potatoes', 'beetroots'];
     const cropIds = cropNames.map(name => mcData.blocksByName[name]?.id).filter(Boolean);
@@ -2072,6 +2114,309 @@ async function farmCrops(bot, actionType = 'auto') {
 
     bot.chat("No harvestable crops, hay bales, or tilling spots found nearby. 🌾");
     return true;
+}
+
+// --- LIFE CYCLE ENGINES: BEDS, BREEDING, FISHING, CHESTS (F1.3-F1.7) ---
+
+async function smartPlaceBed(bot) {
+    if (!bot || !bot.entity) return null;
+    let bedItem = bot.inventory.items().find(i => i.name.endsWith('_bed') || i.name === 'bed');
+    if (!bedItem) {
+        const woolCount = bot.inventory.items().filter(i => i.name.endsWith('_wool')).reduce((s, i) => s + i.count, 0);
+        const plankCount = bot.inventory.items().filter(i => i.name.endsWith('_planks')).reduce((s, i) => s + i.count, 0);
+        if (woolCount >= 3 && plankCount >= 3) {
+            bot.chat("🛏️ Crafting bed from wool and planks...");
+            try {
+                await smartCraft(bot, 'white_bed', 1);
+                bedItem = bot.inventory.items().find(i => i.name.endsWith('_bed') || i.name === 'bed');
+            } catch (_) {}
+        }
+    }
+
+    if (!bedItem) return null;
+
+    const curPos = bot.entity.position.floored();
+    const candidateOffsets = [
+        new Vec3(1, 0, 0),
+        new Vec3(-1, 0, 0),
+        new Vec3(0, 0, 1),
+        new Vec3(0, 0, -1)
+    ];
+
+    for (const off of candidateOffsets) {
+        const footGround = bot.blockAt(curPos.offset(off.x, -1, off.z));
+        const footAir = bot.blockAt(curPos.offset(off.x, 0, off.z));
+        const headGround = bot.blockAt(curPos.offset(off.x * 2, -1, off.z * 2));
+        const headAir = bot.blockAt(curPos.offset(off.x * 2, 0, off.z * 2));
+
+        if (footGround && footGround.boundingBox === 'block' &&
+            headGround && headGround.boundingBox === 'block' &&
+            footAir && footAir.name === 'air' &&
+            headAir && headAir.name === 'air') {
+            try {
+                await bot.equip(bedItem, 'hand');
+                await bot.lookAt(footAir.position);
+                await bot.placeBlock(footGround, new Vec3(0, 1, 0));
+                await new Promise(r => setTimeout(r, 400));
+                const placed = bot.findBlock({ matching: b => b.name.includes('bed'), maxDistance: 6 });
+                if (placed) {
+                    bot.chat("🛏️ Successfully placed bed on ground!");
+                    return placed;
+                }
+            } catch (err) {
+                console.warn(`[PlaceBed] Placement error: ${err.message}`);
+            }
+        }
+    }
+    return null;
+}
+
+async function breedAnimals(bot, animalType = 'any') {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    const BREEDING_FOODS = {
+        cow: ['wheat'],
+        sheep: ['wheat'],
+        chicken: ['wheat_seeds', 'beetroot_seeds', 'melon_seeds', 'pumpkin_seeds'],
+        pig: ['carrot', 'potato', 'beetroot']
+    };
+
+    const targetTypes = (animalType && animalType !== 'any') ? [animalType.toLowerCase()] : ['cow', 'sheep', 'chicken', 'pig'];
+
+    let targetSpecies = null;
+    let foodItem = null;
+    let adults = [];
+
+    for (const species of targetTypes) {
+        const acceptableFoods = BREEDING_FOODS[species] || [];
+        const availableFood = bot.inventory.items().find(i => acceptableFoods.includes(i.name) && i.count >= 2);
+        if (!availableFood) continue;
+
+        const candidateAdults = [];
+        for (const id in bot.entities) {
+            const e = bot.entities[id];
+            if (e && e.name && e.name.toLowerCase() === species && e.position.distanceTo(bot.entity.position) <= 24) {
+                const isBaby = Boolean(e.metadata && (e.metadata[16] === true || (typeof e.metadata[16] === 'number' && e.metadata[16] < 0)));
+                if (!isBaby) {
+                    candidateAdults.push(e);
+                }
+            }
+        }
+
+        if (candidateAdults.length >= 2) {
+            targetSpecies = species;
+            foodItem = availableFood;
+            adults = candidateAdults.slice(0, 2);
+            break;
+        }
+    }
+
+    if (!targetSpecies || adults.length < 2) {
+        const reasons = [];
+        if (!foodItem) reasons.push("lacking 2+ suitable breeding food");
+        if (adults.length < 2) reasons.push("fewer than 2 adult animals nearby");
+        bot.chat(`Cannot breed animals: ${reasons.join(', ')} 🌾`);
+        return { success: false, reason: reasons.join('; ') || 'insufficient_animals_or_food' };
+    }
+
+    bot.chat(`❤️ Breeding 2 ${targetSpecies}s using ${foodItem.name}...`);
+    try {
+        await bot.equip(foodItem, 'hand');
+
+        // Feed first animal
+        await bot.pathfinder.goto(new GoalNear(adults[0].position.x, adults[0].position.y, adults[0].position.z, 2));
+        await bot.lookAt(adults[0].position.offset(0, adults[0].height * 0.8, 0));
+        await bot.activateEntity(adults[0]);
+        await new Promise(r => setTimeout(r, 400));
+
+        // Re-equip in case slot changed
+        const currentFood = bot.inventory.items().find(i => (BREEDING_FOODS[targetSpecies] || []).includes(i.name));
+        if (currentFood) await bot.equip(currentFood, 'hand');
+
+        // Feed second animal
+        await bot.pathfinder.goto(new GoalNear(adults[1].position.x, adults[1].position.y, adults[1].position.z, 2));
+        await bot.lookAt(adults[1].position.offset(0, adults[1].height * 0.8, 0));
+        await bot.activateEntity(adults[1]);
+        await new Promise(r => setTimeout(r, 600));
+
+        bot.chat(`✨ Successfully bred pair of ${targetSpecies}s! XP and baby produced! 🎉`);
+        return { success: true, species: targetSpecies, count: 2 };
+    } catch (bErr) {
+        console.warn(`[Breeding] Error: ${bErr.message}`);
+        return { success: false, reason: `breeding_error: ${bErr.message}` };
+    }
+}
+
+async function catchFish(bot, maxAttempts = 3) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+    const mcData = require('minecraft-data')(bot.version);
+
+    let rod = bot.inventory.items().find(i => i.name === 'fishing_rod');
+    if (!rod) {
+        const stickCount = bot.inventory.items().find(i => i.name === 'stick')?.count || 0;
+        const stringCount = bot.inventory.items().find(i => i.name === 'string')?.count || 0;
+        if (stickCount >= 3 && stringCount >= 2) {
+            bot.chat("🎣 Crafting a fishing rod from sticks and string...");
+            try {
+                await smartCraft(bot, 'fishing_rod', 1);
+                rod = bot.inventory.items().find(i => i.name === 'fishing_rod');
+            } catch (_) {}
+        }
+    }
+
+    if (!rod) {
+        bot.chat("No fishing rod found and insufficient materials (need 3 sticks + 2 string)!");
+        return { success: false, reason: 'missing_fishing_rod' };
+    }
+
+    const waterId = mcData.blocksByName['water']?.id;
+    if (!waterId) return { success: false, reason: 'water_block_unknown' };
+
+    const waterBlocks = bot.findBlocks({ matching: waterId, maxDistance: 20, count: 12 });
+    let targetWater = null;
+    for (const pos of waterBlocks) {
+        const above = bot.blockAt(pos.offset(0, 1, 0));
+        if (above && (above.name === 'air' || above.name === 'cave_air')) {
+            targetWater = pos;
+            break;
+        }
+    }
+
+    if (!targetWater) {
+        bot.chat("No open water source found within 20m for fishing.");
+        return { success: false, reason: 'no_water_source_nearby' };
+    }
+
+    try {
+        await bot.pathfinder.goto(new GoalNear(targetWater.x, targetWater.y + 1, targetWater.z, 3));
+    } catch (_) {}
+
+    await bot.equip(rod, 'hand');
+    await bot.lookAt(new Vec3(targetWater.x + 0.5, targetWater.y + 0.5, targetWater.z + 0.5));
+
+    bot.chat("🎣 Casting fishing rod into water...");
+    let caughtCount = 0;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+            await Promise.race([
+                bot.fish(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('fish_timeout')), 25000))
+            ]);
+            caughtCount++;
+            bot.chat(`🐟 Reeled in a catch! (Attempt ${attempt + 1}/${maxAttempts})`);
+            await new Promise(r => setTimeout(r, 600));
+            await collectNearbyDrops(bot, 6);
+        } catch (fErr) {
+            console.warn(`[Fishing] Attempt ${attempt + 1} ended: ${fErr.message}`);
+            break;
+        }
+    }
+
+    return {
+        success: caughtCount > 0,
+        caught_count: caughtCount,
+        reason: caughtCount > 0 ? undefined : 'no_fish_caught_in_attempts'
+    };
+}
+
+async function manageChest(bot, actionType = 'deposit_surplus', targetItem = null, count = 1) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+    const mcData = require('minecraft-data')(bot.version);
+
+    const chestBlockId = mcData.blocksByName['chest']?.id;
+    let chestBlock = chestBlockId ? bot.findBlock({ matching: chestBlockId, maxDistance: 16 }) : null;
+
+    if (!chestBlock && actionType.startsWith('deposit')) {
+        let chestItem = bot.inventory.items().find(i => i.name === 'chest');
+        if (!chestItem) {
+            const plankCount = bot.inventory.items().filter(i => i.name.endsWith('_planks')).reduce((s, i) => s + i.count, 0);
+            if (plankCount >= 8) {
+                bot.chat("📦 Crafting chest from 8 planks...");
+                try {
+                    await smartCraft(bot, 'chest', 1);
+                    chestItem = bot.inventory.items().find(i => i.name === 'chest');
+                } catch (_) {}
+            }
+        }
+
+        if (chestItem) {
+            const ground = bot.blockAt(bot.entity.position.offset(1, -1, 0));
+            const air = bot.blockAt(bot.entity.position.offset(1, 0, 0));
+            if (ground && ground.boundingBox === 'block' && air && air.name === 'air') {
+                try {
+                    await bot.equip(chestItem, 'hand');
+                    await bot.placeBlock(ground, new Vec3(0, 1, 0));
+                    await new Promise(r => setTimeout(r, 400));
+                    chestBlock = bot.findBlock({ matching: chestBlockId, maxDistance: 6 });
+                } catch (cpErr) {
+                    console.warn(`[Chest] Could not place chest: ${cpErr.message}`);
+                }
+            }
+        }
+    }
+
+    if (!chestBlock) {
+        bot.chat("No chest found nearby and unable to place new chest.");
+        return { success: false, reason: 'no_chest_found_or_placeable' };
+    }
+
+    try {
+        await bot.pathfinder.goto(new GoalNear(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z, 2.5));
+        const chestWindow = await bot.openChest(chestBlock);
+        const ESSENTIAL_ITEMS = [
+            'iron_pickaxe', 'diamond_pickaxe', 'stone_pickaxe', 'wooden_pickaxe',
+            'iron_sword', 'diamond_sword', 'stone_sword', 'shield', 'water_bucket',
+            'cooked_beef', 'cooked_porkchop', 'bread', 'cooked_mutton', 'torch'
+        ];
+
+        let transCount = 0;
+        if (actionType === 'withdraw' && targetItem) {
+            const chestItemMatch = chestWindow.items().find(i => i.name.toLowerCase().includes(targetItem.toLowerCase()));
+            if (chestItemMatch) {
+                const withdrawAmount = Math.min(count, chestItemMatch.count);
+                await chestWindow.withdraw(chestItemMatch.type, null, withdrawAmount);
+                transCount = withdrawAmount;
+                bot.chat(`📦 Withdrew ${withdrawAmount}x ${chestItemMatch.name} from chest.`);
+            } else {
+                chestWindow.close();
+                bot.chat(`Item '${targetItem}' not found in chest storage.`);
+                return { success: false, reason: `item_${targetItem}_not_in_chest` };
+            }
+        } else {
+            const depositCands = bot.inventory.items().filter(i => {
+                if (ESSENTIAL_ITEMS.includes(i.name)) return false;
+                if (i.name.includes('helmet') || i.name.includes('chestplate') || i.name.includes('leggings') || i.name.includes('boots')) return false;
+                return true;
+            });
+
+            for (const item of depositCands) {
+                try {
+                    await chestWindow.deposit(item.type, null, item.count);
+                    transCount += item.count;
+                    await new Promise(r => setTimeout(r, 150));
+                } catch (_) {}
+            }
+            bot.chat(`📦 Deposited ${transCount} surplus item(s) into chest storage.`);
+        }
+
+        const snapshot = chestWindow.items().map(i => ({ name: i.name, count: i.count }));
+        sendToPython({
+            type: 'chest_used',
+            chest_pos: { x: chestBlock.position.x, y: chestBlock.position.y, z: chestBlock.position.z },
+            dimension: (bot.game && bot.game.dimension) ? String(bot.game.dimension).toLowerCase() : 'overworld',
+            items: snapshot
+        });
+
+        chestWindow.close();
+        return { success: true, transferred_count: transCount, chest_pos: chestBlock.position };
+    } catch (err) {
+        console.warn(`[Chest] Error: ${err.message}`);
+        return { success: false, reason: `chest_error: ${err.message}` };
+    }
 }
 
 async function buildShelter(bot, mode = 'auto') {
@@ -2701,16 +3046,22 @@ async function handleAction(action) {
                     actionError = "Cannot sleep in Nether or End (beds explode)";
                     break;
                 }
-                const bed = bot.findBlock({ matching: b => b.name.includes('bed'), maxDistance: 16 });
+                let bed = bot.findBlock({ matching: b => b.name.includes('bed'), maxDistance: 16 });
+                if (!bed) {
+                    bed = await smartPlaceBed(bot);
+                }
+
                 if (bed) {
                     try {
                         const isDay = bot.time ? bot.time.isDay : true;
                         if (!isDay || bot.isRaining) {
                             await bot.sleep(bed);
-                            bot.chat("Sleeping in bed now, setting spawn point! 🛏️💤");
+                            lastSleepTime = Date.now();
+                            bot.chat("Sleeping in bed now, resetting phantom timer and setting spawn point! 🛏️💤");
                         } else {
                             // In Minecraft 1.20 Java Edition: right-clicking bed during day sets spawn point
                             await bot.activateBlock(bed);
+                            lastSleepTime = Date.now();
                             bot.chat("Respawn point set at bed! (Daytime) 🛏️📍");
                         }
                         sendToPython({
@@ -2724,8 +3075,8 @@ async function handleAction(action) {
                     }
                 } else {
                     actionSuccess = false;
-                    actionError = "no_bed_in_range";
-                    bot.chat("No bed found within 16 blocks.");
+                    actionError = "no_bed_in_range_or_inventory";
+                    bot.chat("No bed found within 16 blocks and no bed in inventory to place.");
                 }
                 break;
             }
@@ -3083,6 +3434,38 @@ async function handleAction(action) {
                     actionSuccess = false;
                     actionError = "Failed to bridge chasm";
                 }
+                break;
+            }
+
+            case 'breed_animals': {
+                isBusy = true;
+                currentActionName = 'breeding';
+                const animalType = args.animal_type || 'any';
+                const res = await breedAnimals(bot, animalType);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'catch_fish': {
+                isBusy = true;
+                currentActionName = 'fishing';
+                const count = parseInt(args.count || args.attempts || 3, 10);
+                const res = await catchFish(bot, count);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'manage_chest': {
+                isBusy = true;
+                currentActionName = 'managing_chest';
+                const actionType = args.action_type || 'deposit_surplus';
+                const targetItem = args.target_item || args.item_name || null;
+                const count = parseInt(args.count || 1, 10);
+                const res = await manageChest(bot, actionType, targetItem, count);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
                 break;
             }
 

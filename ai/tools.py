@@ -547,5 +547,71 @@ MINECRAFT_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "breed_animals",
+            "description": "Breed nearby farm animals (cows, sheep, chickens, pigs) by feeding them matching breeding food (wheat, seeds, carrots/potatoes) to multiply animals, earn XP, and produce food sources.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "animal_type": {
+                        "type": "string",
+                        "description": "Type of animal to breed: 'cow', 'sheep', 'chicken', 'pig', or 'any'.",
+                        "enum": ["cow", "sheep", "chicken", "pig", "any"],
+                        "default": "any"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "catch_fish",
+            "description": "Catch fish and treasure from water sources using a fishing rod.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of fishing attempts or fish to catch (default 3).",
+                        "default": 3
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_chest",
+            "description": "Store surplus inventory items in a nearby chest or withdraw needed items. If no chest exists, crafts and places one.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action_type": {
+                        "type": "string",
+                        "description": "Action: 'deposit_surplus' (deposit excess blocks/items), 'withdraw', or 'deposit_all'.",
+                        "enum": ["deposit_surplus", "withdraw", "deposit_all"],
+                        "default": "deposit_surplus"
+                    },
+                    "target_item": {
+                        "type": "string",
+                        "description": "Specific item to withdraw from chest (if action_type is 'withdraw').",
+                        "default": ""
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of items to transfer.",
+                        "default": 1
+                    }
+                },
+                "required": []
+            }
+        }
     }
 ]

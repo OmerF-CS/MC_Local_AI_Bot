@@ -2,7 +2,7 @@
 import asyncio
 import subprocess
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 
 from utils.logger import get_logger
 from ai.minecraft_registry import lookup_component_data
@@ -18,11 +18,11 @@ class MinecraftChatHandler:
         self.bot = bot
         self.last_response_time = 0.0
 
-    def _assign_task(self, instruction: str, primary_action: str, sender: str, priority: int = 5) -> Dict[str, Any]:
+    def _assign_task(self, instruction: str, primary_action: str, sender: str, priority: int = 5, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Saves a player directive into SQLite task queue and marks it as active."""
         task_id = None
         if hasattr(self.bot, "db") and self.bot.db:
-            task_id = self.bot.db.add_task(instruction, primary_action, sender, priority)
+            task_id = self.bot.db.add_task(instruction, primary_action, sender, priority, args=args)
             self.bot.db.update_task_status(task_id, "active")
 
         task = {
@@ -31,7 +31,8 @@ class MinecraftChatHandler:
             "assigned_by": sender,
             "status": "active",
             "timestamp": time.time(),
-            "primary_action": primary_action
+            "primary_action": primary_action,
+            "args": args or {}
         }
         self.bot.active_player_task = task
         logger.info(f"📋 Registered Active Task #{task_id or 'mem'}: '{instruction}' (Action: {primary_action})")
@@ -265,9 +266,31 @@ class MinecraftChatHandler:
                     return
 
                 elif cmd_name in ("bridge", "bridge_chasm"):
-                    dist = int(cmd_args[0]) if cmd_args and cmd_args[0].isdigit() else 5
-                    self._assign_task(clean_message, "bridge_chasm", sender)
                     await self.bot.bridge.send_action("bridge_chasm", {"direction": "forward", "distance": dist})
+                    return
+
+                elif cmd_name in ("breed", "breed_animals", "mate"):
+                    animal = cmd_args[0] if cmd_args else "any"
+                    self._assign_task(clean_message, "breed_animals", sender, args={"animal_type": animal})
+                    await self.bot.bridge.send_action("breed_animals", {"animal_type": animal})
+                    return
+
+                elif cmd_name in ("fish", "catch_fish", "fishing"):
+                    count = int(cmd_args[0]) if cmd_args and cmd_args[0].isdigit() else 3
+                    self._assign_task(clean_message, "catch_fish", sender, args={"count": count})
+                    await self.bot.bridge.send_action("catch_fish", {"count": count})
+                    return
+
+                elif cmd_name in ("chest", "store", "deposit", "manage_chest"):
+                    self._assign_task(clean_message, "manage_chest", sender, args={"action_type": "deposit_surplus"})
+                    await self.bot.bridge.send_action("manage_chest", {"action_type": "deposit_surplus"})
+                    return
+
+                elif cmd_name in ("withdraw", "take_item"):
+                    target = cmd_args[0] if cmd_args else ""
+                    count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 1
+                    self._assign_task(clean_message, "manage_chest", sender, args={"action_type": "withdraw", "target_item": target, "count": count})
+                    await self.bot.bridge.send_action("manage_chest", {"action_type": "withdraw", "target_item": target, "count": count})
                     return
 
                 elif cmd_name in ("tasks", "queue", "task_list"):
@@ -337,7 +360,8 @@ class MinecraftChatHandler:
             "build_nether_portal", "throw_eye_of_ender", "activate_end_portal",
             "destroy_end_crystals", "fight_ender_dragon", "enter_exit_portal",
             "farm_crops", "build_shelter", "break_out_shelter",
-            "enchant_gear", "build_nether_outpost", "bridge_chasm"
+            "enchant_gear", "build_nether_outpost", "bridge_chasm",
+            "breed_animals", "catch_fish", "manage_chest"
         }
         assigned_actions = [tc for tc in tool_calls if tc.get("name") in action_tools]
         if assigned_actions:
@@ -586,6 +610,21 @@ class MinecraftChatHandler:
         elif cmd == "hunt_food":
             animal = str(validated_args.get("animal_type", "any")).strip().lower()
             validated_args["animal_type"] = animal or "any"
+
+        elif cmd == "breed_animals":
+            animal = str(validated_args.get("animal_type", "any")).strip().lower()
+            validated_args["animal_type"] = animal or "any"
+
+        elif cmd == "catch_fish":
+            count = validated_args.get("count", 3)
+            validated_args["count"] = max(1, int(count) if str(count).isdigit() else 3)
+
+        elif cmd == "manage_chest":
+            act = str(validated_args.get("action_type", "deposit_surplus")).strip().lower()
+            validated_args["action_type"] = act or "deposit_surplus"
+            validated_args["target_item"] = str(validated_args.get("target_item", "")).strip().lower()
+            count = validated_args.get("count", 1)
+            validated_args["count"] = max(1, int(count) if str(count).isdigit() else 1)
 
         elif cmd in ("follow_player", "guard_player"):
             player = str(validated_args.get("player_name", sender)).strip()
