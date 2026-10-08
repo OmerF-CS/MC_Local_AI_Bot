@@ -23,12 +23,16 @@ def get_java_executable() -> str:
         r"C:\Program Files\Java\jdk-21\bin\java.exe",
         r"C:\Program Files\Java\jdk-17\bin\java.exe",
         r"C:\Program Files\Eclipse Adoptium\jdk-21\bin\java.exe",
-        "java"
+        r"C:\Users\omerf\AppData\Roaming\.tlauncher\starter\jre_default\jre-21.0.11-windows-x64\bin\java.exe",
+        "/usr/bin/java",
+        "/usr/lib/jvm/java-21-openjdk/bin/java",
+        "/usr/lib/jvm/temurin-21-jdk/bin/java"
     ]
     for c in candidates:
         if os.path.isfile(c):
             return c
-    return "java"
+    import shutil
+    return shutil.which("java") or "java"
 
 
 class TestLiveMinecraft1204Integration(unittest.TestCase):

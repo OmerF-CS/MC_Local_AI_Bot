@@ -7,8 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  test-python:
-    name: Unit Tests (Python ${{ matrix.python-version }})
+  unit-tests:
+    name: Unit & Progression Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -29,12 +29,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run Test Suite
+    - name: Run Unit Tests
       run: |
-        python -m unittest discover tests
+        python -m unittest tests.test_action_results_and_recovery tests.test_v2_phase1_lifecycle tests.test_v2_phase2_phase3 tests.test_planner_tactics tests.test_dragon_fight tests.test_farming_and_shelter tests.test_enchanting_and_blueprints tests.test_tasks_and_gpu tests.test_dataset_and_prompt tests.test_export_sft
 
   validate-node:
-    name: Mineflayer Worker Syntax Check (Node ${{ matrix.node-version }})
+    name: Mineflayer Worker Check (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -49,7 +49,48 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
 
+    - name: Install Node Dependencies
+      working-directory: ./minecraft_bot
+      run: npm install
+
     - name: Check Worker JS Syntax
       working-directory: ./minecraft_bot
+      run: node --check bot.js
+
+  live-server-integration:
+    name: Live Minecraft 1.20.4 End-to-End Dedicated Server Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Java 21 LTS
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+
+    - name: Set up Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install Node Dependencies
+      working-directory: ./minecraft_bot
+      run: npm install
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: Install Python Dependencies
       run: |
-        node --check bot.js
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run Live Minecraft 1.20.4 Dedicated Server Integration Test
+      run: |
+        python -m unittest tests/test_live_server_integration.py

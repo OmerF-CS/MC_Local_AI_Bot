@@ -426,10 +426,36 @@ class MinecraftAIBot:
 
         logger.info("✅ System initialized and ready!")
 
-        # Main loop - wait for shutdown signal
+        # Main supervisor watchdog loop - monitors health and auto-recovers crashes
+        consecutive_worker_crashes = 0
         try:
             while not self._shutdown_event.is_set():
-                await asyncio.sleep(0.5)
+                # Check if Mineflayer worker subprocess died unexpectedly
+                if self.node_process and self.node_process.poll() is not None:
+                    exit_code = self.node_process.poll()
+                    consecutive_worker_crashes += 1
+                    self._bot_ready.clear()
+
+                    if consecutive_worker_crashes > 5:
+                        logger.error("🚨 [Watchdog] Mineflayer worker crashed 5 consecutive times. Terminating.")
+                        self._shutdown_event.set()
+                        break
+
+                    backoff = min(15, 2 * consecutive_worker_crashes)
+                    logger.warning(
+                        f"🚨 [Worker Watchdog] Mineflayer worker terminated unexpectedly (code {exit_code})! "
+                        f"Auto-restarting in {backoff}s (attempt {consecutive_worker_crashes}/5)..."
+                    )
+                    await asyncio.sleep(backoff)
+                    if not self._shutdown_event.is_set():
+                        if self.start_mineflayer_worker():
+                            logger.info("🔄 [Worker Watchdog] Mineflayer worker restarted. Waiting for bot to spawn...")
+                            await self.wait_for_bot_ready(timeout=25)
+                else:
+                    if self._bot_ready.is_set():
+                        consecutive_worker_crashes = 0
+
+                await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             pass
         finally:
