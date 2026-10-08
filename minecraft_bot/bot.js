@@ -740,11 +740,19 @@ function withTimeout(promise, ms = 8000, desc = 'Action') {
     ]);
 }
 
+const REPLACEABLE_BLOCKS = new Set([
+    'air', 'cave_air', 'void_air', 'pink_petals', 'grass', 'short_grass',
+    'tall_grass', 'fern', 'large_fern', 'dead_bush', 'snow',
+    'dandelion', 'poppy', 'blue_orchid', 'allium', 'azure_bluet',
+    'red_tulip', 'orange_tulip', 'white_tulip', 'pink_tulip',
+    'oxeye_daisy', 'cornflower', 'lily_of_the_valley'
+]);
+
 function findPlacementLocation(bot) {
     const botPos = bot.entity.position;
-    for (let dy of [-1, 0]) {
-        for (let dx of [1, -1, 0, 2, -2]) {
-            for (let dz of [1, -1, 0, 2, -2]) {
+    for (let dy of [0, -1, 1]) {
+        for (let dx of [1, -1, 0, 2, -2, 3, -3]) {
+            for (let dz of [1, -1, 0, 2, -2, 3, -3]) {
                 if (dx === 0 && dz === 0) continue;
                 const groundPos = botPos.floored().offset(dx, dy, dz);
                 const ground = bot.blockAt(groundPos);
@@ -753,10 +761,14 @@ function findPlacementLocation(bot) {
                 }
                 const placePos = groundPos.offset(0, 1, 0);
                 const airBlock = bot.blockAt(placePos);
-                if (airBlock && (airBlock.name === 'air' || airBlock.name === 'cave_air')) {
-                    const dist = botPos.distanceTo(placePos);
-                    if (dist >= 1.2 && dist <= 3.8) {
-                        return { referenceBlock: ground, faceVector: new Vec3(0, 1, 0), placedPos: placePos };
+                if (airBlock) {
+                    const bName = airBlock.name.toLowerCase();
+                    const isReplaceable = REPLACEABLE_BLOCKS.has(bName) || bName.includes('air') || bName.includes('petal') || bName.includes('grass') || bName.includes('flower');
+                    if (isReplaceable) {
+                        const dist = botPos.distanceTo(placePos);
+                        if (dist >= 0.8 && dist <= 4.2) {
+                            return { referenceBlock: ground, faceVector: new Vec3(0, 1, 0), placedPos: placePos };
+                        }
                     }
                 }
             }
@@ -768,21 +780,29 @@ function findPlacementLocation(bot) {
 async function ensurePlanks(bot, neededPlankCount) {
     const mcData = require('minecraft-data')(bot.version);
     let availablePlanks = bot.inventory.items().filter(i => i.name.endsWith('_planks')).reduce((s, i) => s + i.count, 0);
+    console.log(`[Crafting] ensurePlanks: needed=${neededPlankCount}, available=${availablePlanks}`);
     if (availablePlanks >= neededPlankCount) return true;
 
     const deficit = neededPlankCount - availablePlanks;
     const craftsNeeded = Math.ceil(deficit / 4);
 
-    const logItem = bot.inventory.items().find(i => i.name.endsWith('_log') || i.name.endsWith('_stem') || i.name.endsWith('_wood'));
-    if (!logItem) return false;
+    const logItem = bot.inventory.items().find(i => i.name.endsWith('_log') || i.name.endsWith('_stem') || i.name.endsWith('_wood') || i.name.includes('log') || i.name.includes('wood'));
+    if (!logItem) {
+        console.warn("[Crafting] No log item found in inventory to craft planks.");
+        return false;
+    }
 
     const plankName = logItem.name.replace(/(_log|_stem|_wood)/, '_planks');
-    const plankDef = mcData.itemsByName[plankName];
+    const plankDef = mcData.itemsByName[plankName] || mcData.itemsByName['oak_planks'];
     if (!plankDef) return false;
 
     const recipes = bot.recipesFor(plankDef.id, null, 1, null);
-    if (recipes.length === 0) return false;
+    if (recipes.length === 0) {
+        console.warn(`[Crafting] No recipes found for ${plankName} using ${logItem.name}.`);
+        return false;
+    }
 
+    console.log(`[Crafting] Crafting ${craftsNeeded * 4}x ${plankName} from logs...`);
     bot.chat(`Crafting ${craftsNeeded * 4}x ${plankName} from logs...`);
     try {
         await withTimeout(bot.craft(recipes[0], craftsNeeded, null), 6000, 'Craft planks');
@@ -796,6 +816,7 @@ async function ensurePlanks(bot, neededPlankCount) {
 async function ensureSticks(bot, neededStickCount) {
     const mcData = require('minecraft-data')(bot.version);
     let availableSticks = bot.inventory.items().filter(i => i.name === 'stick').reduce((s, i) => s + i.count, 0);
+    console.log(`[Crafting] ensureSticks: needed=${neededStickCount}, available=${availableSticks}`);
     if (availableSticks >= neededStickCount) return true;
 
     const deficit = neededStickCount - availableSticks;
@@ -810,6 +831,7 @@ async function ensureSticks(bot, neededStickCount) {
     const recipes = bot.recipesFor(stickDef.id, null, 1, null);
     if (recipes.length === 0) return false;
 
+    console.log(`[Crafting] Crafting ${stickCraftsNeeded * 4}x sticks...`);
     bot.chat(`Crafting ${stickCraftsNeeded * 4}x sticks...`);
     try {
         await withTimeout(bot.craft(recipes[0], stickCraftsNeeded, null), 6000, 'Craft sticks');
@@ -839,12 +861,16 @@ async function ensureCraftingTableInWorld(bot) {
 
     // 1. Existing table right next to bot (< 4m)
     let tableBlock = bot.findBlock({ matching: tableBlockId, maxDistance: 4 });
-    if (tableBlock) return { tableBlock, placedByMe: false };
+    if (tableBlock) {
+        console.log(`[Crafting] Found existing crafting table within 4m at ${tableBlock.position}`);
+        return { tableBlock, placedByMe: false };
+    }
 
     // 2. Existing table within 16m
     const distantTable = bot.findBlock({ matching: tableBlockId, maxDistance: 16 });
     if (distantTable) {
         try {
+            console.log(`[Crafting] Walking towards crafting table within 16m at ${distantTable.position}...`);
             await Promise.race([
                 bot.pathfinder.goto(new goals.GoalNear(distantTable.position.x, distantTable.position.y, distantTable.position.z, 2)),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Pathfinder timeout to table')), 6000))
@@ -861,6 +887,7 @@ async function ensureCraftingTableInWorld(bot) {
         await ensurePlanks(bot, 4);
         const totalPlanks = bot.inventory.items().filter(i => i.name.endsWith('_planks')).reduce((s, i) => s + i.count, 0);
         if (totalPlanks < 4) {
+            console.warn(`[Crafting] Need 4 wood planks to craft table, only have ${totalPlanks}`);
             bot.chat("Need 4 wood planks to craft a crafting table.");
             return { tableBlock: null, placedByMe: false };
         }
@@ -868,10 +895,12 @@ async function ensureCraftingTableInWorld(bot) {
         const tableDef = mcData.itemsByName['crafting_table'];
         const recipes = bot.recipesFor(tableDef.id, null, 1, null);
         if (recipes.length === 0) {
+            console.warn("[Crafting] Could not find recipe for crafting table.");
             bot.chat("Could not find recipe for crafting table.");
             return { tableBlock: null, placedByMe: false };
         }
 
+        console.log("[Crafting] Crafting crafting_table item in 2x2 grid...");
         bot.chat("Crafting a crafting table...");
         try {
             await withTimeout(bot.craft(recipes[0], 1, null), 6000, 'Craft table item');
@@ -886,15 +915,28 @@ async function ensureCraftingTableInWorld(bot) {
 
     const loc = findPlacementLocation(bot);
     if (!loc) {
+        console.warn("[Crafting] Cannot find a clear placement space for crafting table.");
         bot.chat("Cannot find a clear space to place crafting table.");
         return { tableBlock: null, placedByMe: false };
     }
 
+    // Clear any non-solid plant or petal occupying the block
+    const occBlock = bot.blockAt(loc.placedPos);
+    if (occBlock && occBlock.name !== 'air' && occBlock.name !== 'cave_air') {
+        try {
+            console.log(`[Crafting] Clearing obstruction '${occBlock.name}' before placing table...`);
+            await bot.dig(occBlock);
+            await bot.waitForTicks(2);
+        } catch (_) {}
+    }
+
+    console.log(`[Crafting] Placing crafting table at (${loc.placedPos.x}, ${loc.placedPos.y}, ${loc.placedPos.z})...`);
     bot.chat("Placing crafting table...");
     try {
         await withTimeout(bot.equip(tableItem, 'hand'), 3000, 'Equip crafting table');
         await withTimeout(bot.placeBlock(loc.referenceBlock, loc.faceVector), 5000, 'Place crafting table');
         tableBlock = bot.blockAt(loc.placedPos);
+        console.log(`[Crafting] Successfully placed crafting table.`);
         return { tableBlock, placedByMe: true };
     } catch (err) {
         console.warn(`[Crafting] Error placing table block: ${err.message}`);

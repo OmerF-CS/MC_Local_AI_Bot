@@ -76,10 +76,17 @@ class AutonomousCoopBrain:
                             "text": f"Defending against {mob_name} inside bunker!",
                             "tool_calls": [{"name": "attack_target", "arguments": {"target_name": mob_name}}]
                         }
-                # Safe inside shelter: stay sheltered and wait, do not run outdoor progression
+                # Safe inside shelter: stay sheltered and wait, rate-limit chat to avoid spam
+                now = time.time()
+                if now - getattr(self, "last_bunker_wait_chat_time", 0.0) >= 30.0:
+                    self.last_bunker_wait_chat_time = now
+                    return {
+                        "text": "Remaining safely inside shelter until hostiles clear and daylight arrives.",
+                        "tool_calls": [{"name": "say_chat", "arguments": {"message": "Safe inside bunker. Waiting for threats to pass..."}}]
+                    }
                 return {
-                    "text": "Remaining safely inside shelter until hostiles clear and daylight arrives.",
-                    "tool_calls": [{"name": "say_chat", "arguments": {"message": "Safe inside bunker. Waiting for threats to pass..."}}]
+                    "text": "Waiting safely inside bunker until daylight arrives.",
+                    "tool_calls": []
                 }
 
         # 1. Critical health (<= 6 HP / 3 hearts) with nearby hostile mobs -> build emergency shelter
