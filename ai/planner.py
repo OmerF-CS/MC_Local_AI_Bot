@@ -643,9 +643,28 @@ class AutonomousCoopBrain:
         if inv.get("coal", 0) >= 1 and "torch" not in inv:
             return "Craft torches for light", {"name": "craft_item", "arguments": {"item_name": "torch", "count": 4}}
 
+        pos = state.get("position", {"x": 0, "y": 64, "z": 0})
+        dim = state.get("dimension", "overworld")
+
         if target == "iron_pickaxe":
             if raw_iron < 3 and iron_ingots < 3:
-                return "Mine 3 iron ore (iron missing)", {"name": "collect_block", "arguments": {"block_name": "iron", "count": 3}}
+                # F2.4: Query SQLite ore_map for recorded unmined iron veins!
+                if self.db:
+                    unmined = self.db.get_unmined_ores(dim=dim, block_type="iron", x=pos.get("x", 0), y=pos.get("y", 0), z=pos.get("z", 0), max_dist=256.0)
+                    if unmined:
+                        closest = unmined[0]
+                        logger.info(f"💎 [Ore Map Navigator] Directing bot to known unmined {closest['block']} at ({closest['x']}, {closest['y']}, {closest['z']})!")
+                        return f"Navigate to known {closest['block']} deposit from ore map", {
+                            "name": "collect_block",
+                            "arguments": {
+                                "block_name": closest["block"],
+                                "count": 3,
+                                "target_x": closest["x"],
+                                "target_y": closest["y"],
+                                "target_z": closest["z"]
+                            }
+                        }
+                return "Mine 3 iron ore (iron missing)", {"name": "collect_block", "arguments": {"block_name": "iron", "count": 3, "optimal_y": 16}}
             if raw_iron >= 3 and iron_ingots < 3:
                 return "Smelt 3 raw iron into ingots", {
                     "name": "smelt_item",
@@ -656,7 +675,23 @@ class AutonomousCoopBrain:
         diamonds = inv.get("diamond", 0)
         if target == "diamond_pickaxe":
             if diamonds < 3:
-                return "Mine 3 diamonds (diamonds missing)", {"name": "collect_block", "arguments": {"block_name": "diamond", "count": 3}}
+                # F2.4: Query SQLite ore_map for recorded unmined diamond veins!
+                if self.db:
+                    unmined = self.db.get_unmined_ores(dim=dim, block_type="diamond", x=pos.get("x", 0), y=pos.get("y", 0), z=pos.get("z", 0), max_dist=256.0)
+                    if unmined:
+                        closest = unmined[0]
+                        logger.info(f"💎 [Ore Map Navigator] Directing bot to known unmined {closest['block']} at ({closest['x']}, {closest['y']}, {closest['z']})!")
+                        return f"Navigate to known {closest['block']} deposit from ore map", {
+                            "name": "collect_block",
+                            "arguments": {
+                                "block_name": closest["block"],
+                                "count": 3,
+                                "target_x": closest["x"],
+                                "target_y": closest["y"],
+                                "target_z": closest["z"]
+                            }
+                        }
+                return "Mine 3 diamonds (diamonds missing)", {"name": "collect_block", "arguments": {"block_name": "diamond", "count": 3, "optimal_y": -58}}
             return "Craft diamond pickaxe (materials ready)", {"name": "craft_item", "arguments": {"item_name": "diamond_pickaxe", "count": 1}}
 
         # Tactical Gear Buff: Enchanting check before dangerous dimensions

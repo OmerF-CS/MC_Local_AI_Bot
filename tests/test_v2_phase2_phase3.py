@@ -140,6 +140,80 @@ class TestV2Phase2And3Features(unittest.TestCase):
         self.assertIsNotNone(diamond_m)
         self.assertEqual(diamond_m["target"], "diamond_pickaxe")
 
+    def test_ore_map_navigation_in_planner(self):
+        """Verify that when unmined ores are in the SQLite database, planner passes target coordinates."""
+        # Save known iron ore vein
+        self.db.save_ore("overworld", 120, 16, -45, "iron_ore")
+        self.db.save_ore("overworld", 88, -58, -35, "deepslate_diamond_ore")
+
+        mock_brain = MagicMock()
+        brain = AutonomousCoopBrain(mock_brain, bot_owner="Omer", db=self.db)
+
+        # State with cobblestone pickaxe ready to mine iron
+        state = {
+            "health": 20,
+            "food": 20,
+            "is_day": True,
+            "inventory_items": [{"name": "stone_pickaxe", "count": 1}],
+            "position": {"x": 100, "y": 64, "z": -40},
+            "dimension": "overworld"
+        }
+        inv = {"stone_pickaxe": 1}
+
+        # Query milestone for iron_pickaxe
+        desc, action = brain.get_milestone_action({"target": "iron_pickaxe"}, inv, state)
+        self.assertIn("Navigate to known", desc)
+        self.assertEqual(action["name"], "collect_block")
+        self.assertEqual(action["arguments"]["target_x"], 120)
+        self.assertEqual(action["arguments"]["target_y"], 16)
+        self.assertEqual(action["arguments"]["target_z"], -45)
+
+        # Query milestone for diamond_pickaxe
+        inv_diamond = {"iron_pickaxe": 1}
+        desc_dia, action_dia = brain.get_milestone_action({"target": "diamond_pickaxe"}, inv_diamond, state)
+        self.assertIn("Navigate to known", desc_dia)
+        self.assertEqual(action_dia["name"], "collect_block")
+        self.assertEqual(action_dia["arguments"]["target_x"], 88)
+        self.assertEqual(action_dia["arguments"]["target_y"], -58)
+        self.assertEqual(action_dia["arguments"]["target_z"], -35)
+
+    def test_new_tool_definitions(self):
+        """Verify that trade_with_villager, brew_potion, and repair_gear_anvil are defined."""
+        from ai.tools import MINECRAFT_TOOLS
+        tool_names = [t["function"]["name"] for t in MINECRAFT_TOOLS]
+        self.assertIn("trade_with_villager", tool_names)
+        self.assertIn("brew_potion", tool_names)
+        self.assertIn("repair_gear_anvil", tool_names)
+
+    def test_js_combat_and_ore_navigation_integrity(self):
+        """Verify that minecraft_bot/bot.js contains mob-specific tactics and ore navigation code."""
+        bot_js_path = os.path.join(os.path.dirname(__file__), "..", "minecraft_bot", "bot.js")
+        with open(bot_js_path, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        # Ore map navigation in collect_block
+        self.assertIn("args.target_x !== undefined", code)
+        self.assertIn("GoalNear(oreVec.x, oreVec.y, oreVec.z, 2)", code)
+
+        # F3 Combat: Ranged bow combat & ballistics
+        self.assertIn("getRangedCombatGear", code)
+        self.assertIn("performRangedBowShot", code)
+        self.assertIn("pitchOffset", code)
+
+        # F3 Combat: Enderman, Skeleton, Creeper, Witch tactics
+        self.assertIn("isEndermanGazeRisk", code)
+        self.assertIn("performWaterBarrierDefense", code)
+        self.assertIn("water_bucket", code)
+        self.assertIn("creeper", code)
+        self.assertIn("skeleton", code)
+        self.assertIn("witch", code)
+
+        # F2 Extensions: Villager trading, brewing, anvil
+        self.assertIn("tradeWithVillager", code)
+        self.assertIn("brewPotion", code)
+        self.assertIn("repairGearAnvil", code)
+
 
 if __name__ == "__main__":
     unittest.main()
+

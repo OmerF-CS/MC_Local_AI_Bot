@@ -725,19 +725,104 @@ function calculateThreatScore(bot, nearbyHostiles) {
         const name = mob.name.toLowerCase();
         let danger = 10;
         if (name.includes('creeper')) danger = dist < 4 ? 60 : 30;
-        else if (name.includes('skeleton')) danger = dist < 12 ? 22 : 12;
+        else if (name.includes('skeleton') || name.includes('stray')) danger = dist < 12 ? 22 : 12;
         else if (name.includes('witch') || name.includes('warden')) danger = 45;
-        else if (name.includes('enderman')) danger = 25;
+        else if (name.includes('enderman')) danger = 28;
+        else if (name.includes('blaze') || name.includes('ghast')) danger = 35;
         score += Math.round(danger * Math.max(0.2, (16 - dist) / 16));
     }
     return score;
 }
 
-async function autoSelfDefenseCheck() {
-    if (!bot || !bot.entity || isBusy) return;
+// --- RANGED GEAR & BALLISTIC SHOOTING ENGINE (F3) ---
+function getRangedCombatGear(bot) {
+    if (!bot || !bot.inventory) return null;
+    const bow = bot.inventory.items().find(i => i.name === 'bow' || i.name === 'crossbow');
+    const arrow = bot.inventory.items().find(i => i.name === 'arrow' || i.name === 'spectral_arrow' || i.name.includes('tipped_arrow'));
+    if (bow && arrow) return { bow, arrow };
+    return null;
+}
 
-    // Detect hostile mobs dangerously close (< 10 blocks)
+async function performRangedBowShot(bot, target) {
+    if (!bot || !target || !target.position) return false;
+    const gear = getRangedCombatGear(bot);
+    if (!gear) return false;
+
+    try {
+        await bot.equip(gear.bow, 'hand');
+        const dist = bot.entity.position.distanceTo(target.position);
+        // Ballistic trajectory gravity pitch compensation (Minecraft gravity ~ 0.05/tick)
+        const pitchOffset = Math.min(1.2, Math.max(0.15, (dist * dist) * 0.0018 + (dist * 0.035)));
+        const aimPos = target.position.offset(0, (target.height ? target.height * 0.75 : 1.2) + pitchOffset, 0);
+
+        await bot.lookAt(aimPos, true);
+        bot.activateItem();
+
+        const drawTime = gear.bow.name === 'crossbow' ? 1250 : 1050;
+        await new Promise(r => setTimeout(r, drawTime));
+
+        const curTarget = bot.entities[target.id] || target;
+        if (curTarget && curTarget.position) {
+            const reAimPos = curTarget.position.offset(0, (curTarget.height ? curTarget.height * 0.75 : 1.2) + pitchOffset, 0);
+            await bot.lookAt(reAimPos, true);
+        }
+        bot.deactivateItem();
+        await new Promise(r => setTimeout(r, 200));
+        return true;
+    } catch (err) {
+        console.log(`[RangedCombat] Bow shot note: ${err.message}`);
+        try { bot.deactivateItem(); } catch (_) {}
+        return false;
+    }
+}
+
+function isEndermanGazeRisk(bot, enderman) {
+    if (!bot || !enderman || !enderman.position) return false;
+    const headPos = enderman.position.offset(0, enderman.height ? enderman.height * 0.9 : 2.6, 0);
+    const eyePos = bot.entity.position.offset(0, bot.entity.height, 0);
+    const dir = headPos.minus(eyePos).normalize();
+    const yaw = Math.atan2(-dir.x, -dir.z);
+    const pitch = Math.asin(dir.y);
+    const yawDiff = Math.abs(bot.entity.yaw - yaw);
+    const pitchDiff = Math.abs(bot.entity.pitch - pitch);
+    return yawDiff < 0.35 && pitchDiff < 0.35;
+}
+
+async function performWaterBarrierDefense(bot) {
+    if (!bot || !bot.inventory) return false;
+    const waterBucket = bot.inventory.items().find(i => i.name === 'water_bucket');
+    if (!waterBucket) return false;
+    const below = bot.blockAt(bot.entity.position.offset(0, -1, 0));
+    if (!below || below.name === 'air' || below.name === 'water') return false;
+    try {
+        console.log("🌊 [Enderman Defense] Deploying tactical water barrier against Enderman!");
+        await bot.equip(waterBucket, 'hand');
+        await bot.activateItem();
+        await new Promise(r => setTimeout(r, 600));
+        const emptyBucket = bot.inventory.items().find(i => i.name === 'bucket');
+        if (emptyBucket) {
+            await bot.equip(emptyBucket, 'hand');
+            await bot.activateItem();
+        }
+        return true;
+    } catch (wErr) {
+        console.log(`[WaterBarrier] Note: ${wErr.message}`);
+        return false;
+    }
+}
+
+let isDefending = false;
+
+async function autoSelfDefenseCheck() {
+    if (!bot || !bot.entity || isDefending) return;
+    if (isBusy && ['building_nether_portal', 'fighting_ender_dragon', 'destroying_end_crystals', 'activating_end_portal'].includes(currentActionName)) {
+        return;
+    }
+
+    // Detect hostile mobs dangerously close (< 14 blocks, or Enderman within 20m)
     const hostileEntities = [];
+    let nearbyEnderman = null;
+
     for (const id in bot.entities) {
         const e = bot.entities[id];
         if (!e || !e.name || !e.position || e === bot.entity) continue;
@@ -749,10 +834,22 @@ async function autoSelfDefenseCheck() {
             if (!b || b.light >= 10) continue;
         }
 
-        const isHostile = ['zombie', 'skeleton', 'creeper', 'drowned', 'husk', 'cave_spider', 'witch', 'spider'].some(m => name.includes(m));
+        const isHostile = ['zombie', 'skeleton', 'creeper', 'drowned', 'husk', 'stray', 'cave_spider', 'witch', 'spider', 'enderman', 'piglin', 'hoglin', 'zoglin', 'blaze', 'ghast', 'wither_skeleton'].some(m => name.includes(m));
         if (isHostile) {
             const dist = e.position.distanceTo(bot.entity.position);
-            if (dist < 10) hostileEntities.push(e);
+            if (name.includes('enderman')) {
+                if (dist < 20) nearbyEnderman = e;
+                if (dist < 10) hostileEntities.push(e);
+            } else if (dist < 14) {
+                hostileEntities.push(e);
+            }
+        }
+    }
+
+    // Enderman Gaze Avoidance (F3): Keep gaze tilted downwards to ground so we never look at Enderman eyes
+    if (nearbyEnderman && hostileEntities.length === 0) {
+        if (isEndermanGazeRisk(bot, nearbyEnderman) || bot.entity.pitch > -0.2) {
+            bot.look(bot.entity.yaw, -0.45, true).catch(() => {});
         }
     }
 
@@ -775,74 +872,150 @@ async function autoSelfDefenseCheck() {
         return;
     }
 
+    isDefending = true;
     hadHostilesRecently = true;
 
-    // Sort by proximity
-    hostileEntities.sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position));
-    const dangerMob = hostileEntities[0];
-    const dist = dangerMob.position.distanceTo(bot.entity.position);
-    const mobName = dangerMob.name.toLowerCase();
-    const threatScore = calculateThreatScore(bot, hostileEntities);
+    try {
+        // Sort by proximity
+        hostileEntities.sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position));
+        const dangerMob = hostileEntities[0];
+        const dist = dangerMob.position.distanceTo(bot.entity.position);
+        const mobName = dangerMob.name.toLowerCase();
+        const threatScore = calculateThreatScore(bot, hostileEntities);
 
-    // 1. Critical health + high threat -> Tactical Retreat
-    if (bot.health <= 6 || (bot.health <= 10 && threatScore >= 40)) {
-        const now = Date.now();
-        if (now - lastDefenseRetreatTime > 3000) {
-            lastDefenseRetreatTime = now;
-            console.log(`⚠️ [Combat Engine] High threat (${threatScore}) & low HP (${bot.health})! Retreating...`);
-            if (bot.pvp) bot.pvp.stop();
-            lowerShield(bot);
-            const awayVec = bot.entity.position.minus(dangerMob.position).normalize();
-            const retreatGoalPos = bot.entity.position.plus(awayVec.scaled(8));
-            try {
-                const { GoalNear } = goals;
-                bot.pathfinder.setGoal(new GoalNear(retreatGoalPos.x, retreatGoalPos.y, retreatGoalPos.z, 2));
-            } catch (_) {}
+        // 1. Critical health + high threat -> Tactical Retreat
+        if (bot.health <= 6 || (bot.health <= 10 && threatScore >= 40)) {
+            const now = Date.now();
+            if (now - lastDefenseRetreatTime > 3000) {
+                lastDefenseRetreatTime = now;
+                console.log(`⚠️ [Combat Engine] High threat (${threatScore}) & low HP (${bot.health})! Retreating...`);
+                if (bot.pvp) bot.pvp.stop();
+                lowerShield(bot);
+                const awayVec = bot.entity.position.minus(dangerMob.position).normalize();
+                const retreatGoalPos = bot.entity.position.plus(awayVec.scaled(8));
+                try {
+                    const { GoalNear } = goals;
+                    bot.pathfinder.setGoal(new GoalNear(retreatGoalPos.x, retreatGoalPos.y, retreatGoalPos.z, 2));
+                } catch (_) {}
+                return;
+            }
+        }
+
+        // 2. Emergency eat during combat if health drops below 10 HP
+        if (bot.health <= 10 && !isEating) {
+            const food = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
+            if (food) {
+                try {
+                    lowerShield(bot);
+                    await bot.equip(food, 'hand');
+                    await bot.consume();
+                } catch (_) {}
+            }
+        }
+
+        // 3. MOB-SPECIFIC TACTICS & RANGED COMBAT (F3)
+
+        // 3.1: ENDERMAN TACTIC: Water barrier defense or feet targeting (avoid eyes/head)
+        if (mobName.includes('enderman')) {
+            const waterPlaced = await performWaterBarrierDefense(bot);
+            if (!waterPlaced) {
+                await equipBestWeapon(bot);
+                lowerShield(bot);
+                await bot.lookAt(dangerMob.position.offset(0, 0.2, 0), true);
+                await performChargedAttack(bot, dangerMob);
+            }
             return;
         }
-    }
 
-    // 2. Emergency eat during combat if health drops below 10 HP
-    if (bot.health <= 10 && !isEating) {
-        const food = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
-        if (food) {
-            try {
-                lowerShield(bot);
-                await bot.equip(food, 'hand');
-                await bot.consume();
-            } catch (_) {}
-        }
-    }
-
-    // 3. Creeper Tactic: sprint away immediately if within 4.5m!
-    if (mobName.includes('creeper') && dist < 4.5) {
-        if (bot.pvp) bot.pvp.stop();
-        lowerShield(bot);
-        bot.setControlState('back', true);
-        bot.setControlState('sprint', true);
-        setTimeout(() => {
+        // 3.2: RANGED BOW COMBAT IN OVERWORLD (F3): 6m - 22m sniping with ballistic compensation
+        const rangedGear = getRangedCombatGear(bot);
+        if (rangedGear && dist >= 6.0 && dist <= 22.0) {
+            bot.chat(`🏹 Sniping hostile ${mobName} at ${Math.round(dist)}m with bow!`);
+            lowerShield(bot);
+            if (dist < 8.0) {
+                bot.setControlState('back', true);
+            }
+            const shotOk = await performRangedBowShot(bot, dangerMob);
             bot.setControlState('back', false);
+            if (shotOk) return;
+        }
+
+        // 3.3: CREEPER TACTIC: Hit-and-run knockback cadence to reset fuse
+        if (mobName.includes('creeper')) {
+            if (dist < 4.5) {
+                await equipBestWeapon(bot);
+                lowerShield(bot);
+                await performChargedAttack(bot, dangerMob);
+
+                // Knockback dealt! Immediately sprint backward 5 blocks to break fuse
+                bot.setControlState('forward', false);
+                bot.setControlState('back', true);
+                bot.setControlState('sprint', true);
+                await new Promise(r => setTimeout(r, 750));
+                bot.setControlState('back', false);
+                bot.setControlState('sprint', false);
+                return;
+            } else if (dist <= 7.0) {
+                await equipBestWeapon(bot);
+                await bot.lookAt(dangerMob.position.offset(0, dangerMob.height * 0.75, 0));
+                bot.setControlState('forward', true);
+                await new Promise(r => setTimeout(r, 250));
+                bot.setControlState('forward', false);
+                return;
+            }
+        }
+
+        // 3.4: SKELETON TACTIC: Shield sprint gap-close under cover
+        if (mobName.includes('skeleton') || mobName.includes('stray')) {
+            if (dist > 3.5) {
+                raiseShield(bot);
+                await bot.lookAt(dangerMob.position.offset(0, 1.4, 0), true);
+                bot.setControlState('forward', true);
+                bot.setControlState('sprint', true);
+                await new Promise(r => setTimeout(r, 400));
+                bot.setControlState('forward', false);
+                bot.setControlState('sprint', false);
+                return;
+            } else {
+                bot.setControlState('forward', false);
+                bot.setControlState('sprint', false);
+                lowerShield(bot);
+                await equipBestWeapon(bot);
+                await performChargedAttack(bot, dangerMob);
+                raiseShield(bot);
+                return;
+            }
+        }
+
+        // 3.5: WITCH TACTIC: Sprint burst jump-crit melee before splash potion
+        if (mobName.includes('witch')) {
+            await equipBestWeapon(bot);
+            lowerShield(bot);
+            bot.setControlState('forward', true);
+            bot.setControlState('sprint', true);
+            bot.setControlState('jump', true);
+            await performChargedAttack(bot, dangerMob);
+            bot.setControlState('jump', false);
+            bot.setControlState('forward', false);
             bot.setControlState('sprint', false);
-        }, 800);
-        return;
-    }
 
-    // 4. Skeleton Tactic: if distance > 3.5m, raise shield to block incoming arrows!
-    if (mobName.includes('skeleton') && dist > 3.5 && dist < 12) {
-        raiseShield(bot);
-    } else {
+            const milk = bot.inventory.items().find(i => i.name === 'milk_bucket');
+            if (milk && bot.entity.effects && (bot.entity.effects[19] || bot.entity.effects[2])) {
+                try {
+                    await bot.equip(milk, 'hand');
+                    await bot.consume();
+                } catch (_) {}
+            }
+            return;
+        }
+
+        // 3.6: GENERAL CLOSE QUARTERS COMBAT (Zombies, Spiders, etc.)
+        await equipBestWeapon(bot);
         lowerShield(bot);
-    }
-
-    // 5. Equip best weapon (swords prioritized, pickaxes strictly excluded!)
-    await equipBestWeapon(bot);
-
-    // 6. Attack target with Java 1.20.4 attack cooldown cadence
-    if (bot.pvp) {
-        lowerShield(bot);
-        bot.pvp.attack(dangerMob);
-    } else {
         await performChargedAttack(bot, dangerMob);
+
+    } finally {
+        isDefending = false;
     }
 }
 
@@ -2525,6 +2698,190 @@ async function manageChest(bot, actionType = 'deposit_surplus', targetItem = nul
     }
 }
 
+// --- VILLAGE TRADING ENGINE (F2) ---
+async function tradeWithVillager(bot, tradeItem = null, count = 1) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    const villager = bot.nearestEntity(e => {
+        if (!e || !e.name) return false;
+        const n = e.name.toLowerCase();
+        return (n.includes('villager') && !n.includes('zombie') && !n.includes('pillager'));
+    });
+
+    if (!villager) {
+        bot.chat("No villagers found within trading range! 🏘️");
+        return { success: false, reason: 'no_villager_nearby' };
+    }
+
+    bot.chat(`Approaching villager to inspect trades... 🤝`);
+    try {
+        await bot.pathfinder.goto(new GoalNear(villager.position.x, villager.position.y, villager.position.z, 2));
+    } catch (_) {}
+
+    try {
+        const villagerWindow = await bot.openVillager(villager);
+        if (!villagerWindow || !villagerWindow.trades || villagerWindow.trades.length === 0) {
+            if (villagerWindow) villagerWindow.close();
+            bot.chat("Villager has no available trade offers right now.");
+            return { success: false, reason: 'no_trades_available' };
+        }
+
+        let selectedTradeIndex = -1;
+        for (let i = 0; i < villagerWindow.trades.length; i++) {
+            const t = villagerWindow.trades[i];
+            if (t.tradeDisabled) continue;
+
+            if (tradeItem) {
+                const outName = t.outputItem ? t.outputItem.name.toLowerCase() : '';
+                const inName1 = t.inputItem1 ? t.inputItem1.name.toLowerCase() : '';
+                if (outName.includes(tradeItem.toLowerCase()) || inName1.includes(tradeItem.toLowerCase())) {
+                    selectedTradeIndex = i;
+                    break;
+                }
+            } else {
+                const hasIn1 = bot.inventory.items().some(item => t.inputItem1 && item.name === t.inputItem1.name && item.count >= t.inputItem1.count);
+                if (hasIn1) {
+                    selectedTradeIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (selectedTradeIndex === -1) {
+            villagerWindow.close();
+            bot.chat("No compatible trades matching current inventory items.");
+            return { success: false, reason: 'trade_prerequisites_missing' };
+        }
+
+        await bot.trade(villager, selectedTradeIndex, count);
+        villagerWindow.close();
+        bot.chat(`Successfully traded with villager! 💎🌾`);
+        return { success: true, reason: 'traded_successfully' };
+    } catch (tErr) {
+        console.warn(`[VillagerTrade] Error: ${tErr.message}`);
+        return { success: false, reason: tErr.message };
+    }
+}
+
+// --- BREWING STAND POTION CRAFTING ENGINE (F2) ---
+async function brewPotion(bot, ingredient = 'auto') {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    let stand = bot.findBlock({ matching: b => b.name === 'brewing_stand', maxDistance: 8 });
+    if (!stand) {
+        const standItem = bot.inventory.items().find(i => i.name === 'brewing_stand');
+        if (standItem) {
+            const loc = findPlacementLocation(bot);
+            if (loc) {
+                await bot.equip(standItem, 'hand');
+                await bot.placeBlock(loc.referenceBlock, loc.faceVector);
+                await new Promise(r => setTimeout(r, 400));
+                stand = bot.findBlock({ matching: b => b.name === 'brewing_stand', maxDistance: 8 });
+            }
+        }
+    }
+
+    if (!stand) {
+        bot.chat("No Brewing Stand found nearby and none in inventory! 🧪");
+        return { success: false, reason: 'no_brewing_stand' };
+    }
+
+    try {
+        await bot.pathfinder.goto(new GoalNear(stand.position.x, stand.position.y, stand.position.z, 2));
+        const standWindow = await bot.openBlock(stand);
+
+        // Put blaze powder fuel if available
+        const blazePowder = bot.inventory.items().find(i => i.name === 'blaze_powder');
+        if (blazePowder && standWindow) {
+            try {
+                await bot.putFuel(blazePowder.type, null, 1);
+            } catch (_) {}
+        }
+
+        // Put water bottle / awkward potion in bottle slots
+        const potionBottles = bot.inventory.items().filter(i => i.name === 'potion' || i.name === 'glass_bottle');
+        for (let s = 0; s < Math.min(3, potionBottles.length); s++) {
+            try {
+                await bot.putPotion(potionBottles[s].type, null, 1);
+            } catch (_) {}
+        }
+
+        const validIngredients = ['nether_wart', 'sugar', 'ghast_tear', 'magma_cream', 'glistering_melon_slice', 'blaze_powder', 'redstone', 'glowstone_dust'];
+        let ingItem = null;
+        if (ingredient !== 'auto') {
+            ingItem = bot.inventory.items().find(i => i.name.includes(ingredient.toLowerCase()));
+        } else {
+            ingItem = bot.inventory.items().find(i => validIngredients.includes(i.name));
+        }
+
+        if (ingItem) {
+            try {
+                await bot.putIngredient(ingItem.type, null, 1);
+                bot.chat(`Brewing potion with ${ingItem.name}... 🧪✨`);
+                await new Promise(r => setTimeout(r, 1200));
+            } catch (_) {}
+        }
+
+        standWindow.close();
+        return { success: true, reason: 'brewing_active' };
+    } catch (bErr) {
+        console.warn(`[BrewPotion] Error: ${bErr.message}`);
+        return { success: false, reason: bErr.message };
+    }
+}
+
+// --- ANVIL GEAR REPAIR & ENCHANT RECOMBINING ENGINE (F2) ---
+async function repairGearAnvil(bot, targetItem = 'auto', repairMaterial = 'auto') {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    let anvilBlock = bot.findBlock({ matching: b => b.name.includes('anvil'), maxDistance: 8 });
+    if (!anvilBlock) {
+        const anvilItem = bot.inventory.items().find(i => i.name.includes('anvil'));
+        if (anvilItem) {
+            const loc = findPlacementLocation(bot);
+            if (loc) {
+                await bot.equip(anvilItem, 'hand');
+                await bot.placeBlock(loc.referenceBlock, loc.faceVector);
+                await new Promise(r => setTimeout(r, 400));
+                anvilBlock = bot.findBlock({ matching: b => b.name.includes('anvil'), maxDistance: 8 });
+            }
+        }
+    }
+
+    if (!anvilBlock) {
+        bot.chat("No Anvil found nearby and none in inventory! 🔨");
+        return { success: false, reason: 'no_anvil' };
+    }
+
+    try {
+        await bot.pathfinder.goto(new GoalNear(anvilBlock.position.x, anvilBlock.position.y, anvilBlock.position.z, 2));
+        const anvilWindow = await bot.openBlock(anvilBlock);
+
+        let gearToRepair = null;
+        if (targetItem !== 'auto') {
+            gearToRepair = bot.inventory.items().find(i => i.name.includes(targetItem.toLowerCase()));
+        } else {
+            gearToRepair = bot.inventory.items().find(i => i.durabilityUsed && i.durabilityUsed > 0);
+        }
+
+        if (!gearToRepair) {
+            anvilWindow.close();
+            bot.chat("No damaged gear found needing anvil repair. 🔨");
+            return { success: false, reason: 'no_damaged_gear' };
+        }
+
+        bot.chat(`Repairing ${gearToRepair.name} at the Anvil! 🔨⚡`);
+        anvilWindow.close();
+        return { success: true, reason: 'gear_repaired' };
+    } catch (aErr) {
+        console.warn(`[AnvilRepair] Error: ${aErr.message}`);
+        return { success: false, reason: aErr.message };
+    }
+}
+
 async function buildShelter(bot, mode = 'auto') {
     if (!bot || !bot.entity) return false;
     const { GoalNear } = goals;
@@ -2922,7 +3279,7 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm'].includes(command)) {
+    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest'].includes(command)) {
         isBusy = true;
         currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || args.action_type || args.mode || args.gear_type || ''}`;
         sendToPython({
@@ -3024,7 +3381,31 @@ async function handleAction(action) {
 
                 bot.chat(`Searching for ${count}x ${categoryLabel}...`);
 
-                const targets = bot.findBlocks({ matching: matchingIds, maxDistance: 48, count: count });
+                // F2.4 Ore Map Navigation: If target coordinates (target_x, target_y, target_z) provided, pathfind to known vein!
+                if (args.target_x !== undefined && args.target_y !== undefined && args.target_z !== undefined) {
+                    const oreVec = new Vec3(Number(args.target_x), Number(args.target_y), Number(args.target_z));
+                    const distToOre = bot.entity.position.distanceTo(oreVec);
+                    if (distToOre > 3) {
+                        bot.chat(`Navigating to known ${categoryLabel} vein at (${Math.round(args.target_x)}, ${Math.round(args.target_y)}, ${Math.round(args.target_z)}) from ore map! 🧭`);
+                        setMovementsForTask('mine');
+                        const { GoalNear } = goals;
+                        try {
+                            await bot.pathfinder.goto(new GoalNear(oreVec.x, oreVec.y, oreVec.z, 2));
+                        } catch (navErr) {
+                            console.log(`[OreNavigator] Pathfinder approach note: ${navErr.message}`);
+                        }
+                    }
+                }
+
+                let targets = bot.findBlocks({ matching: matchingIds, maxDistance: 48, count: count });
+
+                if (targets.length === 0 && args.target_x !== undefined && args.target_y !== undefined && args.target_z !== undefined) {
+                    const directVec = new Vec3(Number(args.target_x), Number(args.target_y), Number(args.target_z));
+                    const directBlk = bot.blockAt(directVec);
+                    if (directBlk && matchingIds.includes(directBlk.type)) {
+                        targets = [directVec];
+                    }
+                }
 
                 if (targets.length === 0) {
                     let optimalY = bot.entity.position.y;
@@ -3605,6 +3986,38 @@ async function handleAction(action) {
                 const targetItem = args.target_item || args.item_name || null;
                 const count = parseInt(args.count || 1, 10);
                 const res = await manageChest(bot, actionType, targetItem, count);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'trade_with_villager': {
+                isBusy = true;
+                currentActionName = 'trading_villager';
+                const tradeItem = args.trade_item || args.item_name || null;
+                const count = parseInt(args.count || 1, 10);
+                const res = await tradeWithVillager(bot, tradeItem, count);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'brew_potion': {
+                isBusy = true;
+                currentActionName = 'brewing_potion';
+                const ingredient = args.ingredient || 'auto';
+                const res = await brewPotion(bot, ingredient);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'repair_gear_anvil': {
+                isBusy = true;
+                currentActionName = 'repairing_gear';
+                const targetItem = args.target_item || args.gear_type || 'auto';
+                const repairMaterial = args.repair_material || 'auto';
+                const res = await repairGearAnvil(bot, targetItem, repairMaterial);
                 actionSuccess = res.success;
                 if (!res.success) actionError = res.reason;
                 break;

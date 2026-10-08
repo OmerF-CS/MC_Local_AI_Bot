@@ -613,5 +613,70 @@ MINECRAFT_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "trade_with_villager",
+            "description": "Trade with nearby village villagers to obtain emeralds, enchanted books, diamond armor/tools, or food.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trade_item": {
+                        "type": "string",
+                        "description": "Desired trade item (e.g. 'emerald', 'bread', 'iron_sword', 'enchanted_book'). Default '' accepts first available trade.",
+                        "default": ""
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of times to execute the trade (default 1).",
+                        "default": 1
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "brew_potion",
+            "description": "Brew potions using a brewing stand, blaze powder fuel, and water bottles. Examples: nether_wart (awkward potion), sugar (speed), magma_cream (fire resistance), glistering_melon_slice (healing).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ingredient": {
+                        "type": "string",
+                        "description": "Brewing ingredient: 'auto', 'nether_wart', 'sugar', 'magma_cream', 'ghast_tear', 'glistering_melon_slice', 'redstone', 'glowstone_dust'.",
+                        "enum": ["auto", "nether_wart", "sugar", "magma_cream", "ghast_tear", "glistering_melon_slice", "redstone", "glowstone_dust"],
+                        "default": "auto"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "repair_gear_anvil",
+            "description": "Repair damaged weapons, tools, or armor on an anvil using repair ingots/diamonds or combining duplicate items.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_item": {
+                        "type": "string",
+                        "description": "Gear item to repair: 'auto' (most damaged item), or specific name like 'diamond_pickaxe', 'iron_chestplate'.",
+                        "default": "auto"
+                    },
+                    "repair_material": {
+                        "type": "string",
+                        "description": "Material used for repair: 'auto', 'diamond', 'iron_ingot'.",
+                        "default": "auto"
+                    }
+                },
+                "required": []
+            }
+        }
     }
 ]
