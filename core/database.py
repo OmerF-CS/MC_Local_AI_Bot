@@ -102,6 +102,22 @@ class Database:
                 )
             """)
 
+            # Persistent Ore Map (Phase 2 / F2.2)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS ore_map (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dim TEXT DEFAULT 'overworld',
+                    x INTEGER,
+                    y INTEGER,
+                    z INTEGER,
+                    block TEXT,
+                    mined INTEGER DEFAULT 0,
+                    discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    mined_at DATETIME,
+                    UNIQUE(dim, x, y, z)
+                )
+            """)
+
             # Task Queue
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS task_queue (
@@ -345,6 +361,52 @@ class Database:
                 nearby.append(c)
         nearby.sort(key=lambda item: item["distance"])
         return nearby
+
+    # --- PERSISTENT ORE MAP (Phase 2 / F2.2) ---
+
+    def save_ore(self, dim: str, x: int, y: int, z: int, block: str) -> bool:
+        """Saves a discovered ore vein coordinate to memory."""
+        with self.conn:
+            self.conn.execute("""
+                INSERT OR IGNORE INTO ore_map (dim, x, y, z, block)
+                VALUES (?, ?, ?, ?, ?)
+            """, (dim, int(x), int(y), int(z), block.lower()))
+            return True
+
+    def get_unmined_ores(self, dim: str = "overworld", block_type: Optional[str] = None, x: float = 0.0, y: float = 0.0, z: float = 0.0, max_dist: float = 64.0) -> List[Dict[str, Any]]:
+        """Finds unmined ores within max_dist, sorted by distance."""
+        cur = self.conn.cursor()
+        if block_type:
+            cur.execute("""
+                SELECT * FROM ore_map
+                WHERE dim = ? AND mined = 0 AND (block = ? OR block LIKE ?)
+                ORDER BY id DESC
+            """, (dim, block_type.lower(), f"%{block_type.lower()}%"))
+        else:
+            cur.execute("""
+                SELECT * FROM ore_map
+                WHERE dim = ? AND mined = 0
+                ORDER BY id DESC
+            """, (dim,))
+        
+        ores = []
+        for row in cur.fetchall():
+            o = dict(row)
+            dist = ((o["x"] - x)**2 + (o["y"] - y)**2 + (o["z"] - z)**2) ** 0.5
+            if dist <= max_dist:
+                o["distance"] = dist
+                ores.append(o)
+        ores.sort(key=lambda item: item["distance"])
+        return ores
+
+    def mark_ore_mined(self, dim: str, x: int, y: int, z: int):
+        """Marks an ore as mined after collection."""
+        with self.conn:
+            self.conn.execute("""
+                UPDATE ore_map
+                SET mined = 1, mined_at = datetime('now')
+                WHERE dim = ? AND x = ? AND y = ? AND z = ?
+            """, (dim, int(x), int(y), int(z)))
 
     def close(self):
         """Closes the underlying SQLite database connection."""

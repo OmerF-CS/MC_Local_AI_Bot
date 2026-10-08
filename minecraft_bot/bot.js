@@ -12,11 +12,11 @@ const Vec3 = require('vec3');
 const toolLearner = require('./tool_learner');
 
 // Configuration
-const MC_HOST = process.env.MINECRAFT_HOST || 'localhost';
-const MC_PORT = parseInt(process.env.MINECRAFT_PORT || '25565', 10);
-const MC_USERNAME = process.env.MINECRAFT_USERNAME || 'AIAssistant';
-const MC_VERSION = process.env.MINECRAFT_VERSION || false;
-const BRIDGE_URL = process.env.BRIDGE_URL || 'ws://127.0.0.1:8765';
+const MC_HOST = process.env.MINECRAFT_HOST || process.env.MC_HOST || 'localhost';
+const MC_PORT = parseInt(process.env.MINECRAFT_PORT || process.env.MC_PORT || '25565', 10);
+const MC_USERNAME = process.env.MINECRAFT_USERNAME || process.env.MC_USERNAME || 'AIAssistant';
+const MC_VERSION = process.env.MINECRAFT_VERSION || process.env.MC_VERSION || false;
+const BRIDGE_URL = process.env.BRIDGE_URL || `ws://${process.env.BRIDGE_HOST || '127.0.0.1'}:${process.env.BRIDGE_PORT || '8765'}`;
 
 let ws = null;
 let bot = null;
@@ -89,9 +89,21 @@ const RESOURCE_CATEGORIES = [
     'hay_block', 'wheat', 'carrots', 'potatoes', 'farmland',
     'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'acacia_log', 'jungle_log', 'cherry_log',
     'stone', 'cobblestone', 'deepslate', 'coal_ore', 'iron_ore', 'copper_ore', 'gold_ore', 'redstone_ore', 'lapis_ore', 'diamond_ore',
+    'deepslate_coal_ore', 'deepslate_iron_ore', 'deepslate_copper_ore', 'deepslate_gold_ore', 'deepslate_redstone_ore', 'deepslate_lapis_ore', 'deepslate_diamond_ore', 'ancient_debris',
     'water', 'lava'
 ];
 const cachedVisibleResources = {};
+const reportedOreVeins = new Set();
+const ORE_INTEREST_NAMES = [
+    'coal_ore', 'deepslate_coal_ore',
+    'iron_ore', 'deepslate_iron_ore',
+    'copper_ore', 'deepslate_copper_ore',
+    'gold_ore', 'deepslate_gold_ore',
+    'redstone_ore', 'deepslate_redstone_ore',
+    'lapis_ore', 'deepslate_lapis_ore',
+    'diamond_ore', 'deepslate_diamond_ore',
+    'ancient_debris'
+];
 let scanRoundRobinIndex = 0;
 let botCreatedTime = Date.now();
 let lastSleepTime = Date.now();
@@ -116,6 +128,8 @@ function tickResourceScanner() {
         if (found.length > 0) {
             let exposedCount = 0;
             let closestDist = 999;
+            const curDim = (bot.game && bot.game.dimension ? String(bot.game.dimension).toLowerCase() : 'overworld');
+
             for (const pos of found) {
                 const dist = Math.round(bot.entity.position.distanceTo(pos));
                 if (dist < closestDist) closestDist = dist;
@@ -132,6 +146,22 @@ function tickResourceScanner() {
                     ];
                     if (neighbors.some(n => n && (n.name === 'air' || n.name === 'cave_air'))) {
                         exposedCount++;
+                    }
+                }
+
+                // Phase 2 / F2.3: Record persistent ore vein locations to SQLite
+                if (ORE_INTEREST_NAMES.includes(bName)) {
+                    const oreKey = `${curDim}:${pos.x},${pos.y},${pos.z}`;
+                    if (!reportedOreVeins.has(oreKey)) {
+                        reportedOreVeins.add(oreKey);
+                        sendToPython({
+                            type: 'ore_discovered',
+                            dim: curDim,
+                            x: pos.x,
+                            y: pos.y,
+                            z: pos.z,
+                            block: bName
+                        });
                     }
                 }
             }
@@ -597,6 +627,8 @@ async function autoEquipGearCheck() {
     }
 }
 
+let activeGuardedHostile = null;
+
 function guardLoop() {
     if (!isGuarding || !bot || !bot.entity || !guardedPlayerName || isBusy) return;
 
@@ -615,10 +647,21 @@ function guardLoop() {
     });
 
     if (hostileMob && bot.pvp) {
+        activeGuardedHostile = hostileMob;
         equipBestWeapon(bot).then(() => {
             if (bot.pvp) bot.pvp.attack(hostileMob);
         }).catch(() => {});
     } else {
+        // F0.4: If guarded hostile mob just fell, collect combat drops immediately!
+        if (activeGuardedHostile && (!activeGuardedHostile.isValid || activeGuardedHostile.health <= 0)) {
+            activeGuardedHostile = null;
+            setTimeout(async () => {
+                try {
+                    await collectNearbyDrops(bot, 12);
+                } catch (_) {}
+            }, 400);
+        }
+
         const dist = bot.entity.position.distanceTo(player.position);
         if (dist > 4 && (!bot.pathfinder.isMoving() || bot.pathfinder.goal == null)) {
             const { GoalFollow } = goals;
@@ -648,6 +691,32 @@ async function autoTorchCheck() {
 
 // --- AUTO-SELF DEFENSE AGAINST SURROUNDING HOSTILE MOBS ---
 let lastDefenseRetreatTime = 0;
+let hadHostilesRecently = false;
+let isCollectingDefenseDrops = false;
+let lastMeleeAttackTime = 0;
+
+function getWeaponCooldownMs(weaponName) {
+    if (!weaponName) return 625;
+    const name = weaponName.toLowerCase();
+    if (name.includes('axe') && !name.includes('pickaxe')) return 1100;
+    if (name.includes('sword')) return 625;
+    return 625;
+}
+
+async function performChargedAttack(bot, target) {
+    if (!bot || !target) return;
+    const held = bot.heldItem ? bot.heldItem.name : '';
+    const cooldown = getWeaponCooldownMs(held);
+    const now = Date.now();
+    const elapsed = now - lastMeleeAttackTime;
+    if (elapsed < cooldown) {
+        await new Promise(r => setTimeout(r, cooldown - elapsed));
+    }
+    lowerShield(bot);
+    await bot.lookAt(target.position.offset(0, target.height, 0));
+    bot.attack(target);
+    lastMeleeAttackTime = Date.now();
+}
 
 function calculateThreatScore(bot, nearbyHostiles) {
     let score = 0;
@@ -689,8 +758,24 @@ async function autoSelfDefenseCheck() {
 
     if (hostileEntities.length === 0) {
         lowerShield(bot);
+        // F0.4: Combat drops collection right after threat is eliminated!
+        if (hadHostilesRecently && !isCollectingDefenseDrops) {
+            hadHostilesRecently = false;
+            isCollectingDefenseDrops = true;
+            console.log("🛡️ [Combat Engine] All nearby hostiles eliminated! Collecting combat drops...");
+            setTimeout(async () => {
+                try {
+                    await collectNearbyDrops(bot, 14);
+                } catch (_) {}
+                finally {
+                    isCollectingDefenseDrops = false;
+                }
+            }, 400);
+        }
         return;
     }
+
+    hadHostilesRecently = true;
 
     // Sort by proximity
     hostileEntities.sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position));
@@ -752,12 +837,12 @@ async function autoSelfDefenseCheck() {
     // 5. Equip best weapon (swords prioritized, pickaxes strictly excluded!)
     await equipBestWeapon(bot);
 
-    // 6. Attack target
+    // 6. Attack target with Java 1.20.4 attack cooldown cadence
     if (bot.pvp) {
+        lowerShield(bot);
         bot.pvp.attack(dangerMob);
     } else {
-        await bot.lookAt(dangerMob.position.offset(0, dangerMob.height, 0));
-        bot.attack(dangerMob);
+        await performChargedAttack(bot, dangerMob);
     }
 }
 
@@ -871,6 +956,27 @@ function createBot() {
             timestamp: Date.now(),
             state: getBotState()
         });
+    });
+
+    bot.on('entityDead', (entity) => {
+        if (!entity || !entity.position || !bot.entity) return;
+        const dist = bot.entity.position.distanceTo(entity.position);
+        const name = (entity.name || '').toLowerCase();
+        const isCombatOrHunt = [
+            'zombie', 'skeleton', 'creeper', 'spider', 'drowned', 'husk', 'enderman',
+            'blaze', 'piglin', 'witch', 'slime', 'magma_cube', 'piglin_brute', 'wither_skeleton',
+            'cow', 'sheep', 'pig', 'chicken'
+        ].some(m => name.includes(m));
+
+        if (dist <= 14 && isCombatOrHunt) {
+            console.log(`⚔️ [Loot Engine] Mob ${entity.name} died nearby (${dist.toFixed(1)}m)! Collecting combat drops...`);
+            setTimeout(async () => {
+                if (!bot || !bot.entity) return;
+                try {
+                    await collectNearbyDrops(bot, 14);
+                } catch (_) {}
+            }, 500);
+        }
     });
 
     bot.on('sleep', () => {
@@ -2921,13 +3027,33 @@ async function handleAction(action) {
                 const targets = bot.findBlocks({ matching: matchingIds, maxDistance: 48, count: count });
 
                 if (targets.length === 0) {
-                    bot.chat(`No ${categoryLabel} found in the immediate area. Exploring outward to discover veins! 🏃`);
-                    const angle = Math.random() * Math.PI * 2;
-                    const exploreX = Math.round(bot.entity.position.x + Math.cos(angle) * 35);
-                    const exploreZ = Math.round(bot.entity.position.z + Math.sin(angle) * 35);
-                    const exploreY = Math.round(bot.entity.position.y);
-                    const { GoalNear } = goals;
-                    bot.pathfinder.setGoal(new GoalNear(exploreX, exploreY, exploreZ, 2));
+                    let optimalY = bot.entity.position.y;
+                    if (rawName.includes('diamond')) optimalY = -58;
+                    else if (rawName.includes('iron')) optimalY = 16;
+                    else if (rawName.includes('gold')) optimalY = -16;
+                    else if (rawName.includes('redstone')) optimalY = -58;
+                    else if (rawName.includes('lapis')) optimalY = 0;
+                    else if (rawName.includes('copper')) optimalY = 48;
+                    else if (rawName.includes('coal')) optimalY = 95;
+                    else if (rawName.includes('ancient_debris')) optimalY = 15;
+
+                    if (Math.abs(bot.entity.position.y - optimalY) > 8) {
+                        bot.chat(`No ${categoryLabel} at current elevation (Y: ${Math.round(bot.entity.position.y)}). Navigating towards optimal depth Y: ${optimalY}! ⛏️`);
+                        const angle = Math.random() * Math.PI * 2;
+                        const exploreX = Math.round(bot.entity.position.x + Math.cos(angle) * 16);
+                        const exploreZ = Math.round(bot.entity.position.z + Math.sin(angle) * 16);
+                        const exploreY = Math.max(-59, Math.round(bot.entity.position.y - 10));
+                        const { GoalNear } = goals;
+                        bot.pathfinder.setGoal(new GoalNear(exploreX, exploreY, exploreZ, 2));
+                    } else {
+                        bot.chat(`No ${categoryLabel} found in the immediate area. Exploring outward to discover veins! 🏃`);
+                        const angle = Math.random() * Math.PI * 2;
+                        const exploreX = Math.round(bot.entity.position.x + Math.cos(angle) * 35);
+                        const exploreZ = Math.round(bot.entity.position.z + Math.sin(angle) * 35);
+                        const exploreY = Math.round(bot.entity.position.y);
+                        const { GoalNear } = goals;
+                        bot.pathfinder.setGoal(new GoalNear(exploreX, exploreY, exploreZ, 2));
+                    }
                     actionSuccess = false;
                     actionError = `No ${categoryLabel} found nearby (exploring outward)`;
                     break;
@@ -2969,6 +3095,21 @@ async function handleAction(action) {
                     const lesson = toolLearner.recordExperience(blocks[0].name, prep.toolEquipped, durationMs, true, gained);
                     if (lesson) console.log(`🧠 [Tool Learning] ${lesson}`);
                     bot.chat(`Gathered ${count}x ${categoryLabel}! (Used: ${prep.toolEquipped})`);
+
+                    // Phase 2 / F2.2: Notify SQLite that ore blocks at this coordinate are mined
+                    const curDim = (bot.game && bot.game.dimension ? String(bot.game.dimension).toLowerCase() : 'overworld');
+                    for (const b of blocks) {
+                        if (ORE_INTEREST_NAMES.includes(b.name)) {
+                            sendToPython({
+                                type: 'ore_mined',
+                                dim: curDim,
+                                x: b.position.x,
+                                y: b.position.y,
+                                z: b.position.z,
+                                block: b.name
+                            });
+                        }
+                    }
 
                     // Tool durability check
                     const heldTool = bot.heldItem;

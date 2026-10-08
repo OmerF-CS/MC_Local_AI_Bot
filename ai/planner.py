@@ -6,7 +6,13 @@ import random
 import time
 from typing import Dict, Any, List, Optional
 from utils.logger import get_logger
-from ai.progression_tree import get_current_progression_goal, resolve_missing_ingredients
+from ai.progression_tree import (
+    get_current_progression_goal,
+    resolve_missing_ingredients,
+    get_stage_rank,
+    get_milestone_by_stage,
+    get_optimal_ore_height
+)
 
 logger = get_logger("AutonomousCoopBrain")
 
@@ -28,13 +34,18 @@ class AutonomousCoopBrain:
         self.last_hunt_emergency_time = 0.0
         self.last_eat_emergency_time = 0.0
 
+        self.checkpoint_stage = None
+        self.checkpoint_target = None
+
         # F0.5: Resume from recorded progression checkpoint if available
         if self.db:
             try:
                 latest = self.db.get_latest_progression()
                 if latest:
-                    self.last_goal_target = latest.get("target")
-                    logger.info(f"💾 [Progression Checkpoint Loaded] Resuming from Era: {latest.get('stage')} -> Target: {latest.get('target')}")
+                    self.checkpoint_stage = latest.get("stage")
+                    self.checkpoint_target = latest.get("target")
+                    self.last_goal_target = self.checkpoint_target
+                    logger.info(f"💾 [Progression Checkpoint Loaded] Resuming from Era: {self.checkpoint_stage} -> Target: {self.checkpoint_target}")
             except Exception as e:
                 logger.warning(f"Failed to load latest progression checkpoint: {e}")
 
@@ -277,15 +288,48 @@ class AutonomousCoopBrain:
         time_str = "Daytime (Safe)" if is_day else "Nighttime (Hostile mobs active!)"
         biome = state.get("biome", "Unknown")
 
-        # Retrieve active tech tree milestone
-        goal = get_current_progression_goal(inv_dict, state)
-        if goal["target"] != self.last_goal_target:
-            self.last_goal_target = goal["target"]
-            logger.info(f"🏆 [Milestone Checkpoint] Era: {goal['stage']} -> Target: {goal['target']}")
-            if self.db:
-                self.db.save_progression(goal["stage"], goal["target"], inv_dict)
+        # Retrieve active tech tree milestone from current inventory
+        inv_goal = get_current_progression_goal(inv_dict, state)
+        inv_rank = get_stage_rank(inv_goal["stage"])
+        cp_rank = get_stage_rank(self.checkpoint_stage) if self.checkpoint_stage else -1
 
-        substep_hint, milestone_action = self.get_milestone_action(goal, inv_dict, state)
+        if self.checkpoint_stage and inv_rank < cp_rank:
+            # Inventory lacks tools achieved in previous sessions (e.g. death or stored in chest)
+            # 1. Check if nearby chest has our needed tools/materials
+            if self.db:
+                pos = state.get("position", {"x": 0, "y": 0, "z": 0})
+                dim = state.get("dimension", "overworld")
+                nearby_chests = self.db.get_nearby_chests(dim=dim, x=pos.get("x", 0), y=pos.get("y", 0), z=pos.get("z", 0), max_dist=48.0)
+                for chest in nearby_chests:
+                    c_items = chest.get("items", [])
+                    needed_tools = ["diamond_pickaxe", "iron_pickaxe", "stone_pickaxe", "shield", "bucket"]
+                    for it in c_items:
+                        it_name = it.get("name", "")
+                        if it_name in needed_tools or it_name == self.checkpoint_target:
+                            logger.info(f"📦 [Checkpoint Recovery] Found {it_name} in nearby chest! Withdrawing to resume {self.checkpoint_stage}...")
+                            return {
+                                "text": f"Retrieving {it_name} from nearby chest to resume our {self.checkpoint_stage} progress!",
+                                "tool_calls": [{"name": "manage_chest", "arguments": {"action_type": "withdraw", "item_name": it_name, "count": 1}}]
+                            }
+
+            # 2. Re-gear toward checkpoint without downgrading database record
+            saved_m = get_milestone_by_stage(self.checkpoint_stage)
+            goal = saved_m if saved_m else inv_goal
+            substep_hint = f"Rebuilding gear toward {self.checkpoint_target} ({self.checkpoint_stage}): currently need {inv_goal['target']}"
+        else:
+            # Monotonic advancement or first startup
+            goal = inv_goal
+            if inv_rank > cp_rank or self.checkpoint_stage is None:
+                self.checkpoint_stage = goal["stage"]
+                self.checkpoint_target = goal["target"]
+                if self.db and goal["target"] != self.last_goal_target:
+                    self.last_goal_target = goal["target"]
+                    logger.info(f"🏆 [Milestone Advanced] Era: {goal['stage']} -> Target: {goal['target']}")
+                    self.db.save_progression(goal["stage"], goal["target"], inv_dict)
+            else:
+                self.last_goal_target = goal["target"]
+            substep_hint, milestone_action = self.get_milestone_action(goal, inv_dict, state)
+
         missing_ingredients = resolve_missing_ingredients(goal["target"], inv_dict)
         missing_str = ", ".join(missing_ingredients) or "All materials ready for crafting!"
 

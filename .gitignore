@@ -42,3 +42,11 @@ scratch/
 models/*
 !models/Modelfile
 
+# Minecraft Test Server generated files & binaries
+test_server/world/
+test_server/libraries/
+test_server/versions/
+test_server/logs/
+test_server/*.jar
+test_server/*.json
+

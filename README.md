@@ -12,12 +12,13 @@
 ---
 
 > [!NOTE]
-> ### 🚧 Project Status: Active Beta (v0.8.0) - Work in Progress
+> ### 🚧 Project Status: Active Beta (v0.9.0) - Work in Progress
 > **MC Local AI Bot is an ambitious ongoing AI research & development project.**  
-> - **Current State:** Core architecture (Python orchestrator, Mineflayer worker, Ollama LLM, SQLite memory, and 63 unit tests) is operational.
-> - **V2 Updates:** Phase 0 (Death recovery, structured results, checkpoint loading) and Phase 1 (Beds, breeding, fishing, chests, phantoms) fully active.
-> - **In Active Testing:** Real-world in-game edge cases (terrain navigation, tree variants, biome obstacles, combat reflexes).
-> - **Next Horizons:** Phase 2 (Y-level ore mining, persistent ore map) and Phase 3 (Combat v2 attack cooldowns, mob-specific AI).
+> - **Current State:** Core architecture (Python orchestrator, Mineflayer worker, Ollama LLM, SQLite memory, and **68 unit & live integration tests**) is fully operational.
+> - **Live Integration Validated (F0.1):** End-to-end test against a real official Minecraft 1.20.4 Java dedicated server (`tests/test_live_server_integration.py`).
+> - **V2 Infrastructure (Phase 0 & 1):** Death recovery & corpse retrieval, structured results contract, 100% combat loot drop collection, monotonic progression checkpoints, beds, breeding, fishing, chests, and phantom insomnia management.
+> - **Overworld Mining & Ore Map (Phase 2):** Persistent SQLite `ore_map`, vein discovery radar, and optimal Y-level mining traversal (Iron at Y:16, Diamond at Y:-58).
+> - **Combat Engine v2 (Phase 3):** Java 1.20.4 attack cooldown cadence (sword: 1.6/s, axe: 0.8/s), reactive shield arrow blocking, and low-HP tactical retreat.
 > Contributions, feedback, and bug reports are warmly welcomed!
 
 ---

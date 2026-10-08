@@ -235,6 +235,46 @@ def get_current_progression_goal(inventory: Dict[str, int], state: Optional[Dict
             return milestone
     return MILESTONES[-1]
 
+STAGE_RANKS: Dict[str, int] = {m["stage"]: idx for idx, m in enumerate(MILESTONES)}
+
+def get_stage_rank(stage: str) -> int:
+    """Returns numerical rank of milestone stage for monotonic progression comparison."""
+    if not stage:
+        return -1
+    return STAGE_RANKS.get(str(stage).upper(), -1)
+
+def get_milestone_by_stage(stage: str) -> Optional[Dict[str, Any]]:
+    """Returns milestone dictionary by stage name."""
+    if not stage:
+        return None
+    stage_upper = str(stage).upper()
+    for m in MILESTONES:
+        if m["stage"] == stage_upper:
+            return m
+    return None
+
+# Optimal Mining Heights (1.18+ / 1.20.4 World Generation)
+ORE_OPTIMAL_Y: Dict[str, int] = {
+    "coal": 95,
+    "iron": 16,
+    "copper": 48,
+    "gold": -16,
+    "redstone": -58,
+    "lapis": 0,
+    "diamond": -58,
+    "ancient_debris": 15
+}
+
+def get_optimal_ore_height(ore_name: str) -> int:
+    """Returns optimal Y altitude for mining the requested ore type."""
+    if not ore_name:
+        return 16
+    name = str(ore_name).lower()
+    for key, y_level in ORE_OPTIMAL_Y.items():
+        if key in name:
+            return y_level
+    return 16
+
 def resolve_missing_ingredients(target_item: str, inventory: Dict[str, int]) -> List[str]:
     """Computes missing materials using universal tag equivalents (any wood, any stone)."""
     recipe = TECH_TREE.get(target_item)

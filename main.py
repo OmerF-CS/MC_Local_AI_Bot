@@ -53,6 +53,8 @@ class MinecraftAIBot:
         self.bridge.on_action_completed_callback = self.on_action_completed
         self.bridge.on_bed_used_callback = self.on_bed_used
         self.bridge.on_chest_used_callback = self.on_chest_used
+        self.bridge.on_ore_discovered_callback = self.on_ore_discovered
+        self.bridge.on_ore_mined_callback = self.on_ore_mined
         
         # Signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -208,6 +210,27 @@ class MinecraftAIBot:
                 f"📦 [Chest Memory] Recorded chest at ({chest_pos.get('x')}, {chest_pos.get('y')}, {chest_pos.get('z')}) "
                 f"in {dim} with {len(items)} stored item types!"
             )
+
+    async def on_ore_discovered(self, data: Dict[str, Any]):
+        """Called when Mineflayer spots an ore vein."""
+        dim = data.get("dim") or data.get("dimension") or "overworld"
+        x = data.get("x")
+        y = data.get("y")
+        z = data.get("z")
+        block = data.get("block", "")
+        if hasattr(self, "db") and self.db and x is not None and y is not None and z is not None:
+            self.db.save_ore(dim, int(x), int(y), int(z), block)
+            logger.info(f"💎 [Ore Map] Discovered {block} at ({x}, {y}, {z}) in {dim}!")
+
+    async def on_ore_mined(self, data: Dict[str, Any]):
+        """Called when an ore vein block is harvested."""
+        dim = data.get("dim") or data.get("dimension") or "overworld"
+        x = data.get("x")
+        y = data.get("y")
+        z = data.get("z")
+        if hasattr(self, "db") and self.db and x is not None and y is not None and z is not None:
+            self.db.mark_ore_mined(dim, int(x), int(y), int(z))
+            logger.info(f"⛏️ [Ore Map] Marked ore at ({x}, {y}, {z}) in {dim} as mined.")
 
     async def on_game_won(self, data):
         """Called when the Ender Dragon is defeated and the exit portal is entered."""

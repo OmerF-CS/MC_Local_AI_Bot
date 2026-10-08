@@ -27,6 +27,8 @@ class MinecraftBridge:
         self.on_game_won_callback: Optional[Callable] = None
         self.on_bed_used_callback: Optional[Callable] = None
         self.on_chest_used_callback: Optional[Callable] = None
+        self.on_ore_discovered_callback: Optional[Callable] = None
+        self.on_ore_mined_callback: Optional[Callable] = None
 
         # Action Tracking and Wait Events
         self._pending_action_events: Dict[str, asyncio.Event] = {}
@@ -105,6 +107,14 @@ class MinecraftBridge:
             logger.info("📦 Bot interacted with chest storage!")
             if self.on_chest_used_callback:
                 await self.on_chest_used_callback(data)
+
+        elif msg_type == "ore_discovered":
+            if self.on_ore_discovered_callback:
+                await self.on_ore_discovered_callback(data)
+
+        elif msg_type == "ore_mined":
+            if self.on_ore_mined_callback:
+                await self.on_ore_mined_callback(data)
 
         elif msg_type == "game_won":
             logger.info("🏆 [VICTORY] The game has been beaten! Ender Dragon defeated and exit portal entered!")
