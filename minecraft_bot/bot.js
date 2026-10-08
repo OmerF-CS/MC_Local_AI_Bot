@@ -274,6 +274,32 @@ function getBotState() {
         }
     }
 
+    let villagersCount = 0;
+    let piglinsCount = 0;
+    let blazesCount = 0;
+    for (const id in bot.entities) {
+        const ent = bot.entities[id];
+        if (!ent || !ent.position || !ent.name) continue;
+        const d = ent.position.distanceTo(bot.entity.position);
+        const nm = ent.name.toLowerCase();
+        if (nm.includes('villager') && !nm.includes('zombie') && !nm.includes('pillager') && d <= 24) villagersCount++;
+        if (nm.includes('piglin') && !nm.includes('brute') && !nm.includes('zombified') && d <= 20) piglinsCount++;
+        if (nm.includes('blaze') && d <= 24) blazesCount++;
+    }
+
+    let hasNearbyBrewingStand = false;
+    let hasNearbyAnvil = false;
+    try {
+        hasNearbyBrewingStand = Boolean(bot.findBlock({ matching: b => b.name === 'brewing_stand', maxDistance: 12 }));
+        hasNearbyAnvil = Boolean(bot.findBlock({ matching: b => b.name.includes('anvil'), maxDistance: 12 }));
+    } catch (_) {}
+
+    let isGearLowDurability = false;
+    if (bot.heldItem && bot.heldItem.maxDurability) {
+        const remaining = bot.heldItem.maxDurability - (bot.heldItem.durabilityUsed || 0);
+        if (remaining <= 15) isGearLowDurability = true;
+    }
+
     const summaryParts = [];
     if (hostiles.length > 0) summaryParts.push(`Hostiles: ${hostiles.slice(0, 6).join(', ')}`);
     if (passives.length > 0) summaryParts.push(`Animals/Passives: ${passives.slice(0, 6).join(', ')}`);
@@ -404,7 +430,14 @@ function getBotState() {
         is_sheltered: isSheltered,
         nether_outpost_built: netherOutpostBuilt,
         xp_level: bot.experience ? bot.experience.level : 0,
-        xp_points: bot.experience ? bot.experience.points : 0
+        xp_points: bot.experience ? bot.experience.points : 0,
+        nearby_villagers_count: villagersCount,
+        nearby_piglins_count: piglinsCount,
+        nearby_blazes_count: blazesCount,
+        nearby_brewing_stand: hasNearbyBrewingStand,
+        nearby_anvil: hasNearbyAnvil,
+        low_durability_gear: isGearLowDurability,
+        fire_resistance_active: Boolean(bot.entity && bot.entity.effects && bot.entity.effects[12])
     };
 }
 
@@ -713,7 +746,16 @@ async function performChargedAttack(bot, target) {
         await new Promise(r => setTimeout(r, cooldown - elapsed));
     }
     lowerShield(bot);
-    await bot.lookAt(target.position.offset(0, target.height, 0));
+
+    // Generalized Jump-Critical Hit: strike while descending for 1.5x damage multiplier
+    if (bot.entity.onGround && !bot.entity.isInWater) {
+        bot.setControlState('jump', true);
+        await new Promise(r => setTimeout(r, 110));
+        bot.setControlState('jump', false);
+        await new Promise(r => setTimeout(r, 90));
+    }
+
+    await bot.lookAt(target.position.offset(0, target.height ? target.height * 0.75 : 1.0, 0));
     bot.attack(target);
     lastMeleeAttackTime = Date.now();
 }
@@ -876,6 +918,22 @@ async function autoSelfDefenseCheck() {
     hadHostilesRecently = true;
 
     try {
+        // 0. Ghast Fireball Deflection: Reverse projectile velocity back at Ghast!
+        for (const id in bot.entities) {
+            const ent = bot.entities[id];
+            if (ent && ent.name && (ent.name.includes('fireball') || ent.name.includes('large_fireball'))) {
+                const fbDist = ent.position.distanceTo(bot.entity.position);
+                if (fbDist < 6.0) {
+                    console.log(`🔥 [Combat Engine] Deflecting incoming Ghast fireball at ${fbDist.toFixed(1)}m!`);
+                    await bot.lookAt(ent.position, true);
+                    lowerShield(bot);
+                    await equipBestWeapon(bot);
+                    bot.attack(ent);
+                    return;
+                }
+            }
+        }
+
         // Sort by proximity
         hostileEntities.sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position));
         const dangerMob = hostileEntities[0];
@@ -901,15 +959,27 @@ async function autoSelfDefenseCheck() {
             }
         }
 
-        // 2. Emergency eat during combat if health drops below 10 HP
-        if (bot.health <= 10 && !isEating) {
-            const food = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
-            if (food) {
+        // 2. Emergency eat or potion during combat if health drops below 10 HP
+        if (bot.health <= 10) {
+            const splashHealing = bot.inventory.items().find(i => i.name.includes('splash') && (i.name.includes('healing') || i.name.includes('regeneration')));
+            if (splashHealing) {
                 try {
+                    console.log("🧪 [Combat Engine] Critical HP! Throwing emergency Splash Healing Potion at feet!");
                     lowerShield(bot);
-                    await bot.equip(food, 'hand');
-                    await bot.consume();
+                    await bot.equip(splashHealing, 'hand');
+                    await bot.look(bot.entity.yaw, -1.5, true);
+                    bot.activateItem();
+                    await new Promise(r => setTimeout(r, 150));
                 } catch (_) {}
+            } else if (!isEating) {
+                const food = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
+                if (food) {
+                    try {
+                        lowerShield(bot);
+                        await bot.equip(food, 'hand');
+                        await bot.consume();
+                    } catch (_) {}
+                }
             }
         }
 
@@ -965,9 +1035,23 @@ async function autoSelfDefenseCheck() {
             }
         }
 
-        // 3.4: SKELETON TACTIC: Shield sprint gap-close under cover
+        // 3.4: SKELETON TACTIC: Shield sprint gap-close with cover / LOS break
         if (mobName.includes('skeleton') || mobName.includes('stray')) {
             if (dist > 3.5) {
+                // If far (> 8m) and lacking shield or low HP, seek solid block cover to break LOS
+                if (dist > 8.0 && (!bot.inventory.slots[45] || bot.health <= 10)) {
+                    const coverBlock = bot.findBlock({
+                        matching: b => b && b.boundingBox === 'block' && b.name !== 'air' && b.position.distanceTo(bot.entity.position) <= 5,
+                        maxDistance: 6
+                    });
+                    if (coverBlock) {
+                        console.log("🏹 [Skeleton Combat] Taking cover behind solid block to break line of sight!");
+                        try {
+                            const { GoalNear } = goals;
+                            bot.pathfinder.setGoal(new GoalNear(coverBlock.position.x, coverBlock.position.y, coverBlock.position.z, 1));
+                        } catch (_) {}
+                    }
+                }
                 raiseShield(bot);
                 await bot.lookAt(dangerMob.position.offset(0, 1.4, 0), true);
                 bot.setControlState('forward', true);
@@ -1009,7 +1093,18 @@ async function autoSelfDefenseCheck() {
             return;
         }
 
-        // 3.6: GENERAL CLOSE QUARTERS COMBAT (Zombies, Spiders, etc.)
+        // 3.6: ZOMBIE SWARM CHOKEPOINT / FUNNEL TACTIC: When outnumbered (>= 3 melee hostiles)
+        const closeMeleeHostiles = hostileEntities.filter(m => m.position.distanceTo(bot.entity.position) < 6.0);
+        if (closeMeleeHostiles.length >= 3) {
+            console.log(`🧟 [Combat Swarm] Outnumbered by ${closeMeleeHostiles.length} hostiles! Backpedaling into chokepoint funnel...`);
+            bot.setControlState('back', true);
+            bot.setControlState('sprint', true);
+            await new Promise(r => setTimeout(r, 450));
+            bot.setControlState('back', false);
+            bot.setControlState('sprint', false);
+        }
+
+        // 3.7: GENERAL CLOSE QUARTERS COMBAT (Zombies, Spiders, etc.)
         await equipBestWeapon(bot);
         lowerShield(bot);
         await performChargedAttack(bot, dangerMob);
@@ -2882,6 +2977,219 @@ async function repairGearAnvil(bot, targetItem = 'auto', repairMaterial = 'auto'
     }
 }
 
+// --- PIGLIN BARTERING ENGINE (F4) ---
+async function barterWithPiglins(bot, count = 1) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    const goldIngot = bot.inventory.items().find(i => i.name === 'gold_ingot');
+    if (!goldIngot) {
+        bot.chat("I need gold ingots to barter with Piglins! 🪙");
+        return { success: false, reason: 'no_gold_ingots' };
+    }
+
+    const piglin = bot.nearestEntity(e => {
+        if (!e || !e.name) return false;
+        const n = e.name.toLowerCase();
+        return n.includes('piglin') && !n.includes('brute') && !n.includes('zombified');
+    });
+
+    if (!piglin) {
+        bot.chat("No adult Piglins found nearby to barter with. 🐷");
+        return { success: false, reason: 'no_piglins_nearby' };
+    }
+
+    bot.chat(`Approaching Piglin to barter ${count}x gold ingots for Ender Pearls and loot! 🪙✨`);
+    try {
+        await bot.pathfinder.goto(new GoalNear(piglin.position.x, piglin.position.y, piglin.position.z, 3));
+    } catch (_) {}
+
+    try {
+        await bot.equip(goldIngot, 'hand');
+        await bot.lookAt(piglin.position.offset(0, 1.2, 0));
+        const tossCount = Math.min(count, goldIngot.count);
+        await bot.toss(goldIngot.type, null, tossCount);
+
+        bot.chat(`Offered ${tossCount}x gold ingots to Piglin. Waiting for barter evaluation... ⏳`);
+        await new Promise(r => setTimeout(r, 6500));
+
+        await collectNearbyDrops(bot, 10);
+        bot.chat("Collected Piglin barter loot! 💎✨");
+        return { success: true, reason: 'bartered_successfully' };
+    } catch (bErr) {
+        console.warn(`[PiglinBarter] Error: ${bErr.message}`);
+        return { success: false, reason: bErr.message };
+    }
+}
+
+// --- HOGLIN FOOD HUNTING ENGINE (F4) ---
+async function huntHoglin(bot) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    const hoglin = bot.nearestEntity(e => {
+        if (!e || !e.name) return false;
+        return e.name.toLowerCase().includes('hoglin') && !e.name.toLowerCase().includes('zoglin');
+    });
+
+    if (!hoglin) {
+        bot.chat("No Hoglins found in this Nether area. 🐗");
+        return { success: false, reason: 'no_hoglins_nearby' };
+    }
+
+    bot.chat("Hunting Hoglin for high-saturation cooked porkchops! 🐗🥩");
+    await equipBestWeapon(bot);
+
+    try {
+        const rangedGear = getRangedCombatGear(bot);
+        const dist = bot.entity.position.distanceTo(hoglin.position);
+
+        if (rangedGear && dist > 6) {
+            await performRangedBowShot(bot, hoglin);
+        }
+
+        await bot.pathfinder.goto(new GoalNear(hoglin.position.x, hoglin.position.y, hoglin.position.z, 3)).catch(() => {});
+        raiseShield(bot);
+        await new Promise(r => setTimeout(r, 300));
+        lowerShield(bot);
+        await performChargedAttack(bot, hoglin);
+
+        const checkDeadline = Date.now() + 10000;
+        while (Date.now() < checkDeadline && hoglin.isValid && (hoglin.health == null || hoglin.health > 0)) {
+            await performChargedAttack(bot, hoglin);
+            await new Promise(r => setTimeout(r, 600));
+        }
+
+        await new Promise(r => setTimeout(r, 600));
+        await collectNearbyDrops(bot, 12);
+        bot.chat("Successfully hunted Hoglin and collected porkchop food! 🥩🍗");
+        return { success: true, reason: 'hoglin_hunted' };
+    } catch (hErr) {
+        console.warn(`[HoglinHunt] Error: ${hErr.message}`);
+        return { success: false, reason: hErr.message };
+    }
+}
+
+// --- NETHER RESPAWN ANCHOR SETUP ENGINE (F4) ---
+async function setupRespawnAnchor(bot) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    let anchor = bot.findBlock({ matching: b => b.name === 'respawn_anchor', maxDistance: 8 });
+    if (!anchor) {
+        const anchorItem = bot.inventory.items().find(i => i.name === 'respawn_anchor');
+        if (anchorItem) {
+            const loc = findPlacementLocation(bot);
+            if (loc) {
+                await bot.equip(anchorItem, 'hand');
+                await bot.placeBlock(loc.referenceBlock, loc.faceVector);
+                await new Promise(r => setTimeout(r, 400));
+                anchor = bot.findBlock({ matching: b => b.name === 'respawn_anchor', maxDistance: 8 });
+            }
+        }
+    }
+
+    if (!anchor) {
+        bot.chat("No Respawn Anchor found nearby and none in inventory! ⚓");
+        return { success: false, reason: 'no_respawn_anchor' };
+    }
+
+    try {
+        await bot.pathfinder.goto(new GoalNear(anchor.position.x, anchor.position.y, anchor.position.z, 2));
+
+        const glowstone = bot.inventory.items().find(i => i.name === 'glowstone');
+        if (glowstone) {
+            await bot.equip(glowstone, 'hand');
+            await bot.activateBlock(anchor);
+            await new Promise(r => setTimeout(r, 300));
+            bot.chat("Charged Respawn Anchor with Glowstone! ⚓✨");
+        }
+
+        await bot.unequip('hand').catch(() => {});
+        await bot.activateBlock(anchor);
+        bot.chat("✅ Respawn Anchor active! Nether spawn point set successfully! ⚓🔥");
+        return { success: true, reason: 'respawn_anchor_set' };
+    } catch (aErr) {
+        console.warn(`[RespawnAnchor] Error: ${aErr.message}`);
+        return { success: false, reason: aErr.message };
+    }
+}
+
+// --- END CITY & ELYTRA EXPLORATION ENGINE (F5) ---
+async function exploreEndCity(bot) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+    const { GoalNear } = goals;
+
+    bot.chat("🚀 Scouting End Gateway and Outer End Islands for End Cities & Elytra! 🏙️🪽");
+
+    const mcData = require('minecraft-data')(bot.version);
+    const gatewayId = mcData.blocksByName['end_gateway']?.id;
+    let gatewayBlock = null;
+    if (gatewayId) {
+        gatewayBlock = bot.findBlock({ matching: gatewayId, maxDistance: 64 });
+    }
+
+    if (gatewayBlock) {
+        bot.chat(`Approaching End Gateway at (${Math.round(gatewayBlock.position.x)}, ${Math.round(gatewayBlock.position.y)}, ${Math.round(gatewayBlock.position.z)})... 🌌`);
+        try {
+            await bot.pathfinder.goto(new GoalNear(gatewayBlock.position.x, gatewayBlock.position.y, gatewayBlock.position.z, 2));
+            const pearl = bot.inventory.items().find(i => i.name === 'ender_pearl');
+            if (pearl) {
+                await bot.equip(pearl, 'hand');
+                await bot.lookAt(gatewayBlock.position.offset(0.5, 0.5, 0.5));
+                bot.activateItem();
+                bot.chat("Tossed Ender Pearl into Gateway! Teleporting to Outer End Islands... 🌌🚀");
+                await new Promise(r => setTimeout(r, 2000));
+            }
+        } catch (_) {}
+    }
+
+    const purpurId = mcData.blocksByName['purpur_block']?.id;
+    const purpur = purpurId ? bot.findBlock({ matching: purpurId, maxDistance: 64 }) : null;
+
+    if (purpur) {
+        bot.chat("🏛️ End City structure detected! Navigating towards End City towers...");
+        try {
+            await bot.pathfinder.goto(new GoalNear(purpur.position.x, purpur.position.y, purpur.position.z, 3));
+        } catch (_) {}
+    }
+
+    const shulker = bot.nearestEntity(e => e.name && e.name.toLowerCase().includes('shulker'));
+    if (shulker) {
+        bot.chat("Targeting Shulker to acquire Shulker Shells! 🛡️🐚");
+        raiseShield(bot);
+        await equipBestWeapon(bot);
+        lowerShield(bot);
+        await performChargedAttack(bot, shulker);
+        await collectNearbyDrops(bot, 10);
+    }
+
+    const elytra = bot.inventory.items().find(i => i.name === 'elytra');
+    if (elytra) {
+        bot.chat("🏆🎉 ELYTRA ACQUIRED! Flight capability unlocked! 🪽✨");
+    }
+
+    return { success: true, reason: 'end_city_explored' };
+}
+
+// --- CHORUS FRUIT SUSTENANCE & TELEPORT ENGINE (F5) ---
+async function eatChorusFruit(bot) {
+    if (!bot || !bot.inventory) return { success: false, reason: 'bot_not_ready' };
+    const chorus = bot.inventory.items().find(i => i.name === 'chorus_fruit');
+    if (!chorus) {
+        bot.chat("No Chorus Fruit in inventory! 🍇");
+        return { success: false, reason: 'no_chorus_fruit' };
+    }
+    try {
+        await bot.equip(chorus, 'hand');
+        bot.chat("Consuming Chorus Fruit for sustenance and tactical teleportation... 🍇🌀");
+        await bot.consume();
+        return { success: true, reason: 'chorus_fruit_eaten' };
+    } catch (cErr) {
+        return { success: false, reason: cErr.message };
+    }
+}
+
 async function buildShelter(bot, mode = 'auto') {
     if (!bot || !bot.entity) return false;
     const { GoalNear } = goals;
@@ -3279,7 +3587,7 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest'].includes(command)) {
+    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest', 'barter_with_piglins', 'hunt_hoglin', 'setup_respawn_anchor', 'explore_end_city', 'eat_chorus_fruit'].includes(command)) {
         isBusy = true;
         currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || args.action_type || args.mode || args.gear_type || ''}`;
         sendToPython({
@@ -4018,6 +4326,52 @@ async function handleAction(action) {
                 const targetItem = args.target_item || args.gear_type || 'auto';
                 const repairMaterial = args.repair_material || 'auto';
                 const res = await repairGearAnvil(bot, targetItem, repairMaterial);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'barter_with_piglins': {
+                isBusy = true;
+                currentActionName = 'bartering_piglins';
+                const count = parseInt(args.count || 1, 10);
+                const res = await barterWithPiglins(bot, count);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'hunt_hoglin': {
+                isBusy = true;
+                currentActionName = 'hunting_hoglin';
+                const res = await huntHoglin(bot);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'setup_respawn_anchor': {
+                isBusy = true;
+                currentActionName = 'setting_respawn_anchor';
+                const res = await setupRespawnAnchor(bot);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'explore_end_city': {
+                isBusy = true;
+                currentActionName = 'exploring_end_city';
+                const res = await exploreEndCity(bot);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'eat_chorus_fruit': {
+                isBusy = true;
+                currentActionName = 'eating_chorus_fruit';
+                const res = await eatChorusFruit(bot);
                 actionSuccess = res.success;
                 if (!res.success) actionError = res.reason;
                 break;

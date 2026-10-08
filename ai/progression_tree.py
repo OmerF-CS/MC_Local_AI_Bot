@@ -127,6 +127,21 @@ TECH_TREE: Dict[str, Dict[str, Any]] = {
         "ingredients": {"book": 3, "planks": 6},
         "description": "Surrounds enchanting table to unlock up to Level 30 max enchantments."
     },
+    "anvil": {
+        "requires_tools": ["crafting_table", "furnace"],
+        "ingredients": {"iron_block": 3, "iron_ingot": 4},
+        "description": "Repairs damaged tools, weapons, and armor or combines enchanted books."
+    },
+    "brewing_stand": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"blaze_rod": 1, "cobblestone": 3},
+        "description": "Brews combat potions (Fire Resistance, Healing, Speed, Strength)."
+    },
+    "fire_resistance_potion": {
+        "requires_tools": ["brewing_stand"],
+        "ingredients": {"nether_wart": 1, "magma_cream": 1},
+        "description": "Provides immunity against lava and blaze fireballs inside the Nether."
+    },
 
     # --- NETHER AGE ---
     "nether_portal": {

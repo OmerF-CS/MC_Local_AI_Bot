@@ -646,6 +646,35 @@ class AutonomousCoopBrain:
         pos = state.get("position", {"x": 0, "y": 64, "z": 0})
         dim = state.get("dimension", "overworld")
 
+        # Tactical Gear Buff: Enchanting check before dangerous dimensions
+        from ai.enchanting import should_prioritize_enchanting
+        xp_level = state.get("xp_level", 0)
+        if should_prioritize_enchanting(inv, xp_level, dimension):
+            return "Enchant gear at enchanting table", {"name": "enchant_gear", "arguments": {"gear_type": "auto", "target_level": 15}}
+
+        # Tactical Gear Buff: Anvil repair check for damaged tools/armor (F2)
+        low_durability = state.get("low_durability_gear", False)
+        if low_durability:
+            if "anvil" in inv or state.get("nearby_anvil", False):
+                return "Repair damaged gear at anvil", {"name": "repair_gear_anvil", "arguments": {"target_item": "auto"}}
+            elif inv.get("iron_ingot", 0) >= 3 and inv.get("stick", 0) >= 2 and target == "iron_pickaxe":
+                return "Craft spare iron pickaxe before tool breaks", {"name": "craft_item", "arguments": {"item_name": "iron_pickaxe", "count": 1}}
+
+        # Tactical Gear Buff: Village trading when villagers are nearby (F2)
+        nearby_villagers = state.get("nearby_villagers_count", 0)
+        if nearby_villagers > 0 and (inv.get("emerald", 0) > 0 or inv.get("wheat", 0) >= 20 or inv.get("raw_iron", 0) >= 15):
+            return "Trade with nearby village villager for provisions and gear", {"name": "trade_with_villager", "arguments": {"trade_item": "auto", "count": 1}}
+
+        # Tactical Gear Buff: Potion brewing before Nether or Dragon (F2)
+        has_brewing_stand = "brewing_stand" in inv or state.get("nearby_brewing_stand", False)
+        has_nether_wart = inv.get("nether_wart", 0) > 0
+        has_bottles = any(b in inv for b in ("glass_bottle", "potion", "water_bottle"))
+        if (has_brewing_stand or inv.get("blaze_rod", 0) >= 1) and has_nether_wart and has_bottles:
+            if not state.get("fire_resistance_active", False) and inv.get("magma_cream", 0) > 0:
+                return "Brew Fire Resistance potion using brewing stand", {"name": "brew_potion", "arguments": {"ingredient": "magma_cream"}}
+            elif inv.get("glistering_melon_slice", 0) > 0:
+                return "Brew Healing potion using brewing stand", {"name": "brew_potion", "arguments": {"ingredient": "glistering_melon_slice"}}
+
         if target == "iron_pickaxe":
             if raw_iron < 3 and iron_ingots < 3:
                 # F2.4: Query SQLite ore_map for recorded unmined iron veins!
@@ -694,18 +723,26 @@ class AutonomousCoopBrain:
                 return "Mine 3 diamonds (diamonds missing)", {"name": "collect_block", "arguments": {"block_name": "diamond", "count": 3, "optimal_y": -58}}
             return "Craft diamond pickaxe (materials ready)", {"name": "craft_item", "arguments": {"item_name": "diamond_pickaxe", "count": 1}}
 
-        # Tactical Gear Buff: Enchanting check before dangerous dimensions
-        from ai.enchanting import should_prioritize_enchanting
-        xp_level = state.get("xp_level", 0)
-        if should_prioritize_enchanting(inv, xp_level, dimension):
-            return "Enchant gear at enchanting table", {"name": "enchant_gear", "arguments": {"gear_type": "auto", "target_level": 15}}
-
-        # Phase 3: Nether Portal Progression
-        if target == "nether_portal":
+        # Phase 3 & 4: Nether Portal & Nether Progression (F4)
+        if target == "nether_portal" or "nether" in dimension:
             if "nether" in dimension:
+                # 1. Respawn anchor setup if materials ready
+                if ("respawn_anchor" in inv or (inv.get("crying_obsidian", 0) >= 6 and inv.get("glowstone", 0) >= 3)) and not state.get("respawn_anchor_set", False):
+                    return "Setup and charge Respawn Anchor for Nether spawn point", {"name": "setup_respawn_anchor", "arguments": {}}
+
+                # 2. Nether Fortress Fortification
                 cobble_count = inv.get("cobblestone", 0) + inv.get("cobbled_deepslate", 0) + inv.get("blackstone", 0)
                 if cobble_count >= 12 and not state.get("nether_outpost_built", False):
                     return "Build Nether outpost for safety", {"name": "build_nether_outpost", "arguments": {"wall_material": "auto"}}
+
+                # 3. Hoglin food hunt if food is low
+                if state.get("food", 20) <= 10 and state.get("nearby_passives", []):
+                    return "Hunt Hoglin in Crimson forest for porkchop food", {"name": "hunt_hoglin", "arguments": {}}
+
+                # 4. Piglin bartering for Ender Pearls if gold available and pearls missing
+                if inv.get("gold_ingot", 0) >= 1 and inv.get("ender_pearl", 0) < 12 and state.get("nearby_piglins_count", 0) > 0:
+                    return "Barter gold ingots with Piglin for Ender Pearls and potions", {"name": "barter_with_piglins", "arguments": {"count": min(inv.get("gold_ingot", 0), 4)}}
+
                 return "Hunt Blazes in fortress", {"name": "attack_target", "arguments": {"target_name": "blaze"}}
 
             obsidian_count = inv.get("obsidian", 0)
@@ -744,6 +781,8 @@ class AutonomousCoopBrain:
                 return "Craft Eye of Ender", {"name": "craft_item", "arguments": {"item_name": "eye_of_ender", "count": 1}}
 
             if ender_pearls < 1:
+                if "nether" in dimension and inv.get("gold_ingot", 0) >= 1 and state.get("nearby_piglins_count", 0) > 0:
+                    return "Barter gold ingots with Piglin for Ender Pearls", {"name": "barter_with_piglins", "arguments": {"count": min(inv.get("gold_ingot", 0), 4)}}
                 return "Hunt Enderman for Ender Pearls", {"name": "attack_target", "arguments": {"target_name": "enderman"}}
 
             if blaze_rods < 1 and blaze_powders < 1:
@@ -751,11 +790,14 @@ class AutonomousCoopBrain:
                     return "Hunt Blazes for rods", {"name": "attack_target", "arguments": {"target_name": "blaze"}}
                 return "Build Nether portal for rods", {"name": "build_nether_portal", "arguments": {}}
 
-        # Phase 3 & 4: The End & Ender Dragon Slaying
+        # Phase 3 & 4: The End & Ender Dragon Slaying (F5)
         if target in ("ender_dragon", "fight_ender_dragon", "end_crystal", "enter_exit_portal"):
             if "end" in dimension:
                 dragon_defeated = state.get("dragon_defeated", False)
                 if dragon_defeated or target == "enter_exit_portal":
+                    # F5: Outer End Islands exploration for Elytra & Shulker Boxes
+                    if inv.get("ender_pearl", 0) >= 1 and not state.get("elytra_acquired", False):
+                        return "Explore End Gateway towards End City for Elytra and Shulker Shells", {"name": "explore_end_city", "arguments": {}}
                     return "Enter exit portal to beat game", {"name": "enter_exit_portal", "arguments": {}}
 
                 crystals_count = state.get("end_crystals_count", 0)

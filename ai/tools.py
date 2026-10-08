@@ -678,5 +678,71 @@ MINECRAFT_TOOLS = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "barter_with_piglins",
+            "description": "Barter gold ingots with Nether Piglins to obtain Ender Pearls, Fire Resistance potions, obsidian, and crying obsidian.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of gold ingots to barter (default 1).",
+                        "default": 1
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hunt_hoglin",
+            "description": "Hunt Hoglins in the Nether Crimson Forest for high-saturation cooked porkchop food supplies.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_respawn_anchor",
+            "description": "Place and charge a Respawn Anchor with Glowstone inside the Nether to establish a persistent Nether spawn point.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "explore_end_city",
+            "description": "Navigate through the End Gateway to the Outer End Islands to discover End Cities, defeat Shulkers for shells, and claim the Elytra.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "eat_chorus_fruit",
+            "description": "Consume a Chorus Fruit from the End to restore hunger and trigger tactical short-range teleportation.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     }
 ]

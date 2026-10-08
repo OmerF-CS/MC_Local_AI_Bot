@@ -184,9 +184,68 @@ class TestV2Phase2And3Features(unittest.TestCase):
         self.assertIn("trade_with_villager", tool_names)
         self.assertIn("brew_potion", tool_names)
         self.assertIn("repair_gear_anvil", tool_names)
+        self.assertIn("barter_with_piglins", tool_names)
+        self.assertIn("hunt_hoglin", tool_names)
+        self.assertIn("setup_respawn_anchor", tool_names)
+        self.assertIn("explore_end_city", tool_names)
+        self.assertIn("eat_chorus_fruit", tool_names)
+
+    def test_anvil_and_trading_and_brewing_in_planner(self):
+        """Verify that planner triggers anvil repair, village trading, and potion brewing when preconditions meet."""
+        mock_brain = MagicMock()
+        brain = AutonomousCoopBrain(mock_brain, bot_owner="Omer", db=self.db)
+
+        # 1. Anvil Repair Trigger
+        state_damaged = {
+            "health": 20, "food": 20, "dimension": "overworld",
+            "low_durability_gear": True, "nearby_anvil": True
+        }
+        desc, act = brain.get_milestone_action({"target": "iron_pickaxe"}, {"iron_pickaxe": 1}, state_damaged)
+        self.assertEqual(act["name"], "repair_gear_anvil")
+
+        # 2. Village Trading Trigger
+        state_village = {
+            "health": 20, "food": 20, "dimension": "overworld",
+            "nearby_villagers_count": 3
+        }
+        desc_tr, act_tr = brain.get_milestone_action({"target": "iron_pickaxe"}, {"iron_pickaxe": 1, "emerald": 5}, state_village)
+        self.assertEqual(act_tr["name"], "trade_with_villager")
+
+        # 3. Potion Brewing Trigger (Fire Resistance)
+        state_brewing = {
+            "health": 20, "food": 20, "dimension": "the_nether",
+            "nearby_brewing_stand": True, "fire_resistance_active": False
+        }
+        inv_brew = {"iron_pickaxe": 1, "nether_wart": 2, "water_bottle": 1, "magma_cream": 1}
+        desc_br, act_br = brain.get_milestone_action({"target": "nether_portal"}, inv_brew, state_brewing)
+        self.assertEqual(act_br["name"], "brew_potion")
+        self.assertEqual(act_br["arguments"]["ingredient"], "magma_cream")
+
+    def test_nether_f4_and_end_f5_planner_flow(self):
+        """Verify Piglin bartering, Hoglin hunting, and End City exploration trigger in planner."""
+        mock_brain = MagicMock()
+        brain = AutonomousCoopBrain(mock_brain, bot_owner="Omer", db=self.db)
+
+        # 1. Piglin Bartering Trigger when pearls needed
+        state_piglin = {
+            "health": 20, "food": 20, "dimension": "the_nether",
+            "nearby_piglins_count": 2
+        }
+        inv_piglin = {"gold_ingot": 5, "blaze_rod": 6, "blaze_powder": 2}
+        desc_barter, act_barter = brain.get_milestone_action({"target": "eye_of_ender"}, inv_piglin, state_piglin)
+        self.assertEqual(act_barter["name"], "barter_with_piglins")
+
+        # 2. End City Exploration Trigger after dragon defeat
+        state_end_city = {
+            "health": 20, "food": 20, "dimension": "the_end",
+            "dragon_defeated": True, "elytra_acquired": False
+        }
+        inv_end = {"ender_pearl": 4}
+        desc_end, act_end = brain.get_milestone_action({"target": "ender_dragon"}, inv_end, state_end_city)
+        self.assertEqual(act_end["name"], "explore_end_city")
 
     def test_js_combat_and_ore_navigation_integrity(self):
-        """Verify that minecraft_bot/bot.js contains mob-specific tactics and ore navigation code."""
+        """Verify that minecraft_bot/bot.js contains mob-specific tactics, F4 Nether, and F5 End code."""
         bot_js_path = os.path.join(os.path.dirname(__file__), "..", "minecraft_bot", "bot.js")
         with open(bot_js_path, "r", encoding="utf-8") as f:
             code = f.read()
@@ -200,18 +259,26 @@ class TestV2Phase2And3Features(unittest.TestCase):
         self.assertIn("performRangedBowShot", code)
         self.assertIn("pitchOffset", code)
 
-        # F3 Combat: Enderman, Skeleton, Creeper, Witch tactics
+        # F3 Combat: Enderman, Skeleton, Creeper, Witch tactics & fireball deflection
         self.assertIn("isEndermanGazeRisk", code)
         self.assertIn("performWaterBarrierDefense", code)
         self.assertIn("water_bucket", code)
         self.assertIn("creeper", code)
         self.assertIn("skeleton", code)
         self.assertIn("witch", code)
+        self.assertIn("fireball", code)
 
         # F2 Extensions: Villager trading, brewing, anvil
         self.assertIn("tradeWithVillager", code)
         self.assertIn("brewPotion", code)
         self.assertIn("repairGearAnvil", code)
+
+        # F4 & F5 Extensions: Piglin barter, Hoglin, Respawn anchor, End City, Chorus fruit
+        self.assertIn("barterWithPiglins", code)
+        self.assertIn("huntHoglin", code)
+        self.assertIn("setupRespawnAnchor", code)
+        self.assertIn("exploreEndCity", code)
+        self.assertIn("eatChorusFruit", code)
 
 
 if __name__ == "__main__":
