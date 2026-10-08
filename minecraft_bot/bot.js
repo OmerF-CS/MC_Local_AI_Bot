@@ -193,6 +193,7 @@ function getBotState() {
 
     // 3. Multi-Category Entity & Threat Radar (32m Radius)
     const hostiles = [];
+    const hostileEntityObjects = [];
     const passives = [];
     const droppedItems = [];
     const playersNearby = [];
@@ -234,6 +235,7 @@ function getBotState() {
             const raw = e.name.toLowerCase();
             if (HOSTILE_KEYWORDS.some(h => raw.includes(h))) {
                 hostiles.push(`${e.name} (${dist}m away)`);
+                hostileEntityObjects.push(e);
             } else if (PASSIVE_KEYWORDS.some(p => raw.includes(p))) {
                 passives.push(`${e.name} (${dist}m away)`);
             }
@@ -343,6 +345,21 @@ function getBotState() {
         is_busy: isBusy,
         current_action: currentActionName,
         is_day: bot.time ? bot.time.isDay : true,
+        is_raining: Boolean(bot.isRaining),
+        is_thundering: Boolean(bot.thunderState > 0),
+        time_of_day: bot.time ? bot.time.timeOfDay : 0,
+        food_saturation: bot.foodSaturation != null ? Math.round(bot.foodSaturation * 10) / 10 : 5,
+        oxygen_level: bot.oxygenLevel != null ? bot.oxygenLevel : 20,
+        armor_equipped: {
+            head: bot.inventory.slots[5]?.name || null,
+            torso: bot.inventory.slots[6]?.name || null,
+            legs: bot.inventory.slots[7]?.name || null,
+            feet: bot.inventory.slots[8]?.name || null,
+            offhand: bot.inventory.slots[45]?.name || null
+        },
+        status_effects: bot.entity?.effects ? Object.values(bot.entity.effects).map(ef => ({ id: ef.id, amplifier: ef.amplifier, duration: ef.duration })) : [],
+        threat_score: calculateThreatScore(bot, hostileEntityObjects),
+        held_item: bot.heldItem ? bot.heldItem.name : 'empty',
         biome: bot.blockAt(bot.entity.position)?.biome?.name || 'unknown',
         owner_info: ownerObservation,
         end_crystals_count: endCrystalsCount,
@@ -413,39 +430,108 @@ async function autoEatCheck() {
     }
 }
 
-function guardLoop() {
-    if (!isGuarding || !bot || !bot.entity || !guardedPlayerName || isBusy) return;
+// --- COMBAT WEAPON HIERARCHY & SELECTION ---
+const WEAPON_SCORES = {
+    'netherite_sword': 100,
+    'diamond_sword': 90,
+    'iron_sword': 80,
+    'stone_sword': 70,
+    'golden_sword': 65,
+    'wooden_sword': 60,
+    'netherite_axe': 58,
+    'diamond_axe': 52,
+    'iron_axe': 46,
+    'stone_axe': 38,
+    'golden_axe': 32,
+    'wooden_axe': 26
+};
 
-    const player = bot.players[guardedPlayerName]?.entity;
-    if (!player) return;
+function getWeaponScore(itemName) {
+    if (!itemName) return 0;
+    const name = itemName.toLowerCase();
+    // EXPLICIT FILTER: Pickaxes, shovels, hoes are NOT combat weapons!
+    if (name.includes('pickaxe') || name.includes('shovel') || name.includes('hoe')) return 0;
+    if (WEAPON_SCORES[name]) return WEAPON_SCORES[name];
+    if (name.endsWith('_sword')) return 50;
+    if (name.endsWith('_axe')) return 30;
+    return 0;
+}
 
-    const hostileMob = bot.nearestEntity(e => {
-        if (!e || !e.name) return false;
-        const name = e.name.toLowerCase();
-        const isHostile = ['zombie', 'skeleton', 'spider', 'creeper', 'drowned', 'husk'].some(m => name.includes(m));
-        if (!isHostile) return false;
-
-        const distToPlayer = e.position.distanceTo(player.position);
-        const distToBot = e.position.distanceTo(bot.entity.position);
-        return distToPlayer < 12 || distToBot < 10;
-    });
-
-    if (hostileMob && bot.pvp) {
-        const sword = bot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'));
-        if (sword) bot.equip(sword, 'hand').catch(() => {});
-        bot.pvp.attack(hostileMob);
-    } else {
-        const dist = bot.entity.position.distanceTo(player.position);
-        if (dist > 4 && (!bot.pathfinder.isMoving() || bot.pathfinder.goal == null)) {
-            const { GoalFollow } = goals;
-            bot.pathfinder.setGoal(new GoalFollow(player, 2), true);
+function getBestWeapon(bot) {
+    if (!bot || !bot.inventory) return null;
+    const items = bot.inventory.items();
+    let best = null;
+    let bestScore = 0;
+    for (const item of items) {
+        const score = getWeaponScore(item.name);
+        if (score > bestScore) {
+            bestScore = score;
+            best = item;
         }
+    }
+    return best;
+}
+
+async function equipBestWeapon(bot) {
+    if (!bot || !bot.inventory) return false;
+    const best = getBestWeapon(bot);
+    if (!best) return false;
+    // Prevent weapon churn: if already holding this item in main hand, do nothing
+    if (bot.heldItem && bot.heldItem.name === best.name) return true;
+    try {
+        await bot.equip(best, 'hand');
+        return true;
+    } catch (_) {
+        return false;
     }
 }
 
-// --- AUTO-EQUIP ARMOR & OFFHAND SHIELD ---
+// --- SHIELD STATE & BLOCKING ENGINE ---
+let isShieldActive = false;
+
+function raiseShield(bot) {
+    if (!bot || !bot.inventory) return;
+    const offhand = bot.inventory.slots[45];
+    if (offhand && offhand.name.includes('shield') && !isShieldActive) {
+        try {
+            bot.activateItem(true);
+            isShieldActive = true;
+        } catch (_) {}
+    }
+}
+
+function lowerShield(bot) {
+    if (!bot) return;
+    if (isShieldActive) {
+        try {
+            bot.deactivateItem();
+            isShieldActive = false;
+        } catch (_) {}
+    }
+}
+
+// --- ARMOR TIERS & AUTO-UPGRADE CHECK ---
+const ARMOR_TIERS = {
+    'netherite': 6,
+    'diamond': 5,
+    'iron': 4,
+    'chainmail': 3,
+    'golden': 2,
+    'leather': 1,
+    'turtle': 3
+};
+
+function getArmorScore(itemName) {
+    if (!itemName) return 0;
+    const name = itemName.toLowerCase();
+    for (const [tier, score] of Object.entries(ARMOR_TIERS)) {
+        if (name.includes(tier)) return score;
+    }
+    return 1;
+}
+
 async function autoEquipGearCheck() {
-    if (!bot || !bot.entity) return;
+    if (!bot || !bot.entity || !bot.inventory) return;
 
     const destinations = [
         { dest: 'head', keywords: ['helmet', 'cap'] },
@@ -465,16 +551,73 @@ async function autoEquipGearCheck() {
 
     const items = bot.inventory.items();
     for (const d of destinations) {
-        const item = items.find(i => d.keywords.some(k => i.name.toLowerCase().includes(k)));
-        if (item) {
-            const slotIndex = armorSlotIndices[d.dest];
-            const currentItem = bot.inventory.slots[slotIndex];
-            if (!currentItem) {
-                try {
-                    await bot.equip(item, d.dest);
-                    console.log(`🛡️ [AutoGear] Equipped ${item.name} into ${d.dest}!`);
-                } catch (_) {}
+        const slotIndex = armorSlotIndices[d.dest];
+        const currentItem = bot.inventory.slots[slotIndex];
+
+        if (d.dest === 'off-hand') {
+            if (!currentItem || (!currentItem.name.includes('shield') && !currentItem.name.includes('totem'))) {
+                const offhandItem = items.find(i => d.keywords.some(k => i.name.toLowerCase().includes(k)));
+                if (offhandItem) {
+                    try {
+                        await bot.equip(offhandItem, 'off-hand');
+                        console.log(`🛡️ [AutoGear] Equipped ${offhandItem.name} into off-hand!`);
+                    } catch (_) {}
+                }
             }
+            continue;
+        }
+
+        // Armor upgrade logic: pick highest tier candidate
+        const candidates = items.filter(i => d.keywords.some(k => i.name.toLowerCase().includes(k)));
+        if (candidates.length === 0) continue;
+
+        const currentScore = currentItem ? getArmorScore(currentItem.name) : 0;
+        let bestCandidate = null;
+        let bestScore = currentScore;
+
+        for (const cand of candidates) {
+            const score = getArmorScore(cand.name);
+            if (score > bestScore) {
+                bestScore = score;
+                bestCandidate = cand;
+            }
+        }
+
+        if (bestCandidate && bestScore > currentScore) {
+            try {
+                await bot.equip(bestCandidate, d.dest);
+                console.log(`🛡️ [AutoGear] Upgraded ${currentItem ? currentItem.name : 'empty'} -> ${bestCandidate.name} on ${d.dest}!`);
+            } catch (_) {}
+        }
+    }
+}
+
+function guardLoop() {
+    if (!isGuarding || !bot || !bot.entity || !guardedPlayerName || isBusy) return;
+
+    const player = bot.players[guardedPlayerName]?.entity;
+    if (!player) return;
+
+    const hostileMob = bot.nearestEntity(e => {
+        if (!e || !e.name) return false;
+        const name = e.name.toLowerCase();
+        const isHostile = ['zombie', 'skeleton', 'spider', 'creeper', 'drowned', 'husk'].some(m => name.includes(m));
+        if (!isHostile) return false;
+
+        const distToPlayer = e.position.distanceTo(player.position);
+        const distToBot = e.position.distanceTo(bot.entity.position);
+        return distToPlayer < 12 || distToBot < 10;
+    });
+
+    if (hostileMob && bot.pvp) {
+        equipBestWeapon(bot).then(() => {
+            if (bot.pvp) bot.pvp.attack(hostileMob);
+        }).catch(() => {});
+    } else {
+        const dist = bot.entity.position.distanceTo(player.position);
+        if (dist > 4 && (!bot.pathfinder.isMoving() || bot.pathfinder.goal == null)) {
+            const { GoalFollow } = goals;
+            bot.pathfinder.setGoal(new GoalFollow(player, 2), true);
         }
     }
 }
@@ -499,57 +642,117 @@ async function autoTorchCheck() {
 }
 
 // --- AUTO-SELF DEFENSE AGAINST SURROUNDING HOSTILE MOBS ---
+let lastDefenseRetreatTime = 0;
+
+function calculateThreatScore(bot, nearbyHostiles) {
+    let score = 0;
+    for (const mob of nearbyHostiles) {
+        const dist = mob.position.distanceTo(bot.entity.position);
+        const name = mob.name.toLowerCase();
+        let danger = 10;
+        if (name.includes('creeper')) danger = dist < 4 ? 60 : 30;
+        else if (name.includes('skeleton')) danger = dist < 12 ? 22 : 12;
+        else if (name.includes('witch') || name.includes('warden')) danger = 45;
+        else if (name.includes('enderman')) danger = 25;
+        score += Math.round(danger * Math.max(0.2, (16 - dist) / 16));
+    }
+    return score;
+}
+
 async function autoSelfDefenseCheck() {
-    if (!bot || !bot.entity) return;
+    if (!bot || !bot.entity || isBusy) return;
 
-    // Detect hostile mobs dangerously close (< 6 blocks)
-    const dangerMob = bot.nearestEntity(e => {
-        if (!e || !e.name || !e.position) return false;
+    // Detect hostile mobs dangerously close (< 10 blocks)
+    const hostileEntities = [];
+    for (const id in bot.entities) {
+        const e = bot.entities[id];
+        if (!e || !e.name || !e.position || e === bot.entity) continue;
         const name = e.name.toLowerCase();
-        const isHostile = ['zombie', 'skeleton', 'spider', 'creeper', 'drowned', 'husk', 'cave_spider', 'witch'].some(m => name.includes(m));
-        if (!isHostile) return false;
-        return e.position.distanceTo(bot.entity.position) < 6;
-    });
 
-    if (dangerMob) {
-        const mobName = dangerMob.name.toLowerCase();
-        const dist = dangerMob.position.distanceTo(bot.entity.position);
-
-        // Emergency heal/eat during combat if health drops below 10 HP
-        if (bot.health <= 10 && !isEating) {
-            const food = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
-            if (food) {
-                try {
-                    await bot.equip(food, 'hand');
-                    await bot.consume();
-                } catch (_) {}
-            }
+        // Daytime spider exemption: Neutral in daylight unless attacked
+        if (name.includes('spider') && bot.time && bot.time.isDay) {
+            const b = bot.blockAt(bot.entity.position);
+            if (!b || b.light >= 10) continue;
         }
 
-        // Creeper defense: back off immediately to avoid explosion!
-        if (mobName.includes('creeper') && dist < 4) {
-            bot.setControlState('back', true);
-            setTimeout(() => bot.setControlState('back', false), 800);
+        const isHostile = ['zombie', 'skeleton', 'creeper', 'drowned', 'husk', 'cave_spider', 'witch', 'spider'].some(m => name.includes(m));
+        if (isHostile) {
+            const dist = e.position.distanceTo(bot.entity.position);
+            if (dist < 10) hostileEntities.push(e);
+        }
+    }
+
+    if (hostileEntities.length === 0) {
+        lowerShield(bot);
+        return;
+    }
+
+    // Sort by proximity
+    hostileEntities.sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position));
+    const dangerMob = hostileEntities[0];
+    const dist = dangerMob.position.distanceTo(bot.entity.position);
+    const mobName = dangerMob.name.toLowerCase();
+    const threatScore = calculateThreatScore(bot, hostileEntities);
+
+    // 1. Critical health + high threat -> Tactical Retreat
+    if (bot.health <= 6 || (bot.health <= 10 && threatScore >= 40)) {
+        const now = Date.now();
+        if (now - lastDefenseRetreatTime > 3000) {
+            lastDefenseRetreatTime = now;
+            console.log(`⚠️ [Combat Engine] High threat (${threatScore}) & low HP (${bot.health})! Retreating...`);
+            if (bot.pvp) bot.pvp.stop();
+            lowerShield(bot);
+            const awayVec = bot.entity.position.minus(dangerMob.position).normalize();
+            const retreatGoalPos = bot.entity.position.plus(awayVec.scaled(8));
+            try {
+                const { GoalNear } = goals;
+                bot.pathfinder.setGoal(new GoalNear(retreatGoalPos.x, retreatGoalPos.y, retreatGoalPos.z, 2));
+            } catch (_) {}
             return;
         }
+    }
 
-        // Off-hand shield auto-equip
-        const shield = bot.inventory.items().find(i => i.name.includes('shield'));
-        if (shield && (!bot.inventory.slots[45] || !bot.inventory.slots[45].name.includes('shield'))) {
-            try { await bot.equip(shield, 'off-hand'); } catch (_) {}
+    // 2. Emergency eat during combat if health drops below 10 HP
+    if (bot.health <= 10 && !isEating) {
+        const food = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
+        if (food) {
+            try {
+                lowerShield(bot);
+                await bot.equip(food, 'hand');
+                await bot.consume();
+            } catch (_) {}
         }
+    }
 
-        // Equip best weapon
-        const weapon = bot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'));
-        if (weapon) await bot.equip(weapon, 'hand').catch(() => {});
+    // 3. Creeper Tactic: sprint away immediately if within 4.5m!
+    if (mobName.includes('creeper') && dist < 4.5) {
+        if (bot.pvp) bot.pvp.stop();
+        lowerShield(bot);
+        bot.setControlState('back', true);
+        bot.setControlState('sprint', true);
+        setTimeout(() => {
+            bot.setControlState('back', false);
+            bot.setControlState('sprint', false);
+        }, 800);
+        return;
+    }
 
-        // Attack or raise shield
-        if (bot.pvp) {
-            bot.pvp.attack(dangerMob);
-        } else {
-            await bot.lookAt(dangerMob.position.offset(0, dangerMob.height, 0));
-            bot.attack(dangerMob);
-        }
+    // 4. Skeleton Tactic: if distance > 3.5m, raise shield to block incoming arrows!
+    if (mobName.includes('skeleton') && dist > 3.5 && dist < 12) {
+        raiseShield(bot);
+    } else {
+        lowerShield(bot);
+    }
+
+    // 5. Equip best weapon (swords prioritized, pickaxes strictly excluded!)
+    await equipBestWeapon(bot);
+
+    // 6. Attack target
+    if (bot.pvp) {
+        bot.pvp.attack(dangerMob);
+    } else {
+        await bot.lookAt(dangerMob.position.offset(0, dangerMob.height, 0));
+        bot.attack(dangerMob);
     }
 }
 
@@ -2457,8 +2660,11 @@ async function handleAction(action) {
             case 'attack_target': {
                 const targetName = (args.target_name || '').toLowerCase();
                 const entity = bot.nearestEntity(e => e.name && e.name.toLowerCase().includes(targetName) && e.position.distanceTo(bot.entity.position) < 16);
-                if (entity && bot.pvp) {
-                    bot.pvp.attack(entity);
+                if (entity) {
+                    await equipBestWeapon(bot);
+                    if (bot.pvp) {
+                        bot.pvp.attack(entity);
+                    }
                 }
                 break;
             }
@@ -2498,10 +2704,7 @@ async function handleAction(action) {
                 const animalName = targetEntity.name;
                 bot.chat(`Hunting ${animalName} for food! 🥩`);
 
-                const weapon = bot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'));
-                if (weapon) {
-                    await bot.equip(weapon, 'hand').catch(() => {});
-                }
+                await equipBestWeapon(bot);
 
                 try {
                     if (bot.pvp) {
