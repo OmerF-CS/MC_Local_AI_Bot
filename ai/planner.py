@@ -28,6 +28,16 @@ class AutonomousCoopBrain:
         self.last_hunt_emergency_time = 0.0
         self.last_eat_emergency_time = 0.0
 
+        # F0.5: Resume from recorded progression checkpoint if available
+        if self.db:
+            try:
+                latest = self.db.get_latest_progression()
+                if latest:
+                    self.last_goal_target = latest.get("target")
+                    logger.info(f"💾 [Progression Checkpoint Loaded] Resuming from Era: {latest.get('stage')} -> Target: {latest.get('target')}")
+            except Exception as e:
+                logger.warning(f"Failed to load latest progression checkpoint: {e}")
+
     def parse_inventory(self, items: List[Dict[str, Any]]) -> Dict[str, int]:
         """Converts inventory item list into a name -> count mapping."""
         inv = {}

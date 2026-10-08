@@ -25,6 +25,7 @@ class MinecraftBridge:
         self.on_action_completed_callback: Optional[Callable] = None
         self.on_action_started_callback: Optional[Callable] = None
         self.on_game_won_callback: Optional[Callable] = None
+        self.on_bed_used_callback: Optional[Callable] = None
 
         # Action Tracking and Wait Events
         self._pending_action_events: Dict[str, asyncio.Event] = {}
@@ -89,10 +90,15 @@ class MinecraftBridge:
         elif msg_type == "bot_death":
             logger.warning("💀 Bot died!")
             if self.on_death_callback:
-                await self.on_death_callback(self.latest_state)
+                await self.on_death_callback(data)
 
         elif msg_type == "bot_status":
             logger.info(f"ℹ️ Bot status: {data.get('status')}")
+
+        elif msg_type == "bed_used":
+            logger.info("🛏️ Bot interacted with bed / set spawn point!")
+            if self.on_bed_used_callback:
+                await self.on_bed_used_callback(data)
 
         elif msg_type == "game_won":
             logger.info("🏆 [VICTORY] The game has been beaten! Ender Dragon defeated and exit portal entered!")
@@ -108,9 +114,19 @@ class MinecraftBridge:
         elif msg_type == "action_completed":
             cmd = data.get("command", "")
             action_id = data.get("action_id", data.get("command", ""))
-            success = data.get("success", True)
-            error = data.get("error")
-            res = {"success": success, "error": error, "command": cmd}
+            success = data.get("success", data.get("ok", True))
+            error = data.get("error", data.get("reason"))
+            items_delta = data.get("items_delta", {})
+            duration_ms = data.get("duration_ms", 0)
+            res = {
+                "success": success,
+                "ok": success,
+                "error": error,
+                "reason": error or "success",
+                "items_delta": items_delta,
+                "duration_ms": duration_ms,
+                "command": cmd
+            }
             self._last_action_results[action_id] = res
 
             if action_id in self._pending_action_events:

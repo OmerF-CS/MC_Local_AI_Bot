@@ -848,8 +848,22 @@ function createBot() {
         isBusy = false;
         isSheltered = false;
         currentActionName = 'idle';
+        lowerShield(bot);
+
+        const deathPos = bot.entity ? {
+            x: Math.round(bot.entity.position.x * 10) / 10,
+            y: Math.round(bot.entity.position.y * 10) / 10,
+            z: Math.round(bot.entity.position.z * 10) / 10
+        } : null;
+        const invSnapshot = bot.inventory ? bot.inventory.items().map(i => ({ name: i.name, count: i.count })) : [];
+        const dim = (bot.game && bot.game.dimension) ? String(bot.game.dimension) : 'overworld';
+
         sendToPython({
             type: 'bot_death',
+            death_pos: deathPos,
+            dimension: dim,
+            inventory_snapshot: invSnapshot,
+            timestamp: Date.now(),
             state: getBotState()
         });
     });
@@ -1366,16 +1380,21 @@ async function collectNearbyDrops(bot, maxDistance = 12) {
             }
         }
     }
-    const { GoalBlock } = goals;
+    if (drops.length === 0) return;
+
+    // F0.4: Sort closest drops first for optimal pathing
+    drops.sort((a, b) => bot.entity.position.distanceTo(a.position) - bot.entity.position.distanceTo(b.position));
+
+    const { GoalNear } = goals;
     for (const drop of drops) {
         if (!drop || !drop.isValid) continue;
         try {
             await Promise.race([
-                bot.pathfinder.goto(new GoalBlock(drop.position.x, drop.position.y, drop.position.z)),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Drop collection timeout')), 5000))
+                bot.pathfinder.goto(new GoalNear(drop.position.x, drop.position.y, drop.position.z, 1)),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Drop collection timeout')), 2500))
             ]);
+            await bot.waitForTicks(2);
         } catch (e) {
-            console.log(`[Minecraft] Skipping unreachable drop: ${e.message}`);
             continue;
         }
     }
@@ -2401,12 +2420,36 @@ async function bridgeChasm(bot, direction = 'forward', distance = 5) {
     }
 }
 
+// --- INVENTORY AUDITING & ACTION METRICS ---
+function getInventoryCountMap(bot) {
+    const map = {};
+    if (!bot || !bot.inventory) return map;
+    for (const item of bot.inventory.items()) {
+        map[item.name] = (map[item.name] || 0) + item.count;
+    }
+    return map;
+}
+
+function calculateInventoryDelta(beforeMap, afterMap) {
+    const delta = {};
+    const allKeys = new Set([...Object.keys(beforeMap), ...Object.keys(afterMap)]);
+    for (const k of allKeys) {
+        const diff = (afterMap[k] || 0) - (beforeMap[k] || 0);
+        if (diff !== 0) {
+            delta[k] = diff;
+        }
+    }
+    return delta;
+}
+
 // --- ACTION EXECUTION ENGINE (TIMEOUT & CONCURRENCY GUARDED) ---
 async function handleAction(action) {
     if (!bot) return;
 
-    const { command, args } = action;
+    const { command, args = {} } = action;
     const actionId = action.action_id || null;
+    const actionStartTime = Date.now();
+    const invBefore = getInventoryCountMap(bot);
     let actionSuccess = true;
     let actionError = null;
 
@@ -2418,7 +2461,11 @@ async function handleAction(action) {
             command: command,
             action_id: actionId,
             success: false,
+            ok: false,
             error: `Bot is busy with '${currentActionName}'`,
+            reason: `busy_with_${currentActionName}`,
+            items_delta: {},
+            duration_ms: 0,
             state: getBotState()
         });
         return;
@@ -2519,6 +2566,8 @@ async function handleAction(action) {
 
                 if (matchingIds.length === 0) {
                     bot.chat(`Unknown or unsupported block type: '${rawName}'.`);
+                    actionSuccess = false;
+                    actionError = `Unknown or unsupported block type: '${rawName}'`;
                     break;
                 }
 
@@ -2534,16 +2583,24 @@ async function handleAction(action) {
                     const exploreY = Math.round(bot.entity.position.y);
                     const { GoalNear } = goals;
                     bot.pathfinder.setGoal(new GoalNear(exploreX, exploreY, exploreZ, 2));
+                    actionSuccess = false;
+                    actionError = `No ${categoryLabel} found nearby (exploring outward)`;
                     break;
                 }
 
                 const blocks = targets.map(p => bot.blockAt(p)).filter(b => b);
-                if (blocks.length === 0) break;
+                if (blocks.length === 0) {
+                    actionSuccess = false;
+                    actionError = `Target blocks could not be resolved in world`;
+                    break;
+                }
 
                 // Tool mastery pre-check and equipping
                 const prep = await toolLearner.prepareAndEquipToolForBlock(bot, blocks[0].name, smartCraft);
                 if (!prep.canHarvest) {
                     console.log(`[ToolLearner] Aborting mining of '${blocks[0].name}' due to missing tool requirement: ${prep.minToolName}`);
+                    actionSuccess = false;
+                    actionError = `Cannot harvest ${blocks[0].name}: requires ${prep.minToolName}`;
                     break;
                 }
 
@@ -2579,6 +2636,8 @@ async function handleAction(action) {
                     }
                 } catch (cErr) {
                     bot.chat(`Mining interrupted: ${cErr.message}`);
+                    actionSuccess = false;
+                    actionError = `Mining interrupted: ${cErr.message}`;
                 } finally {
                     setMovementsForTask('walk');
                 }
@@ -2590,6 +2649,8 @@ async function handleAction(action) {
                 const target = bot.players[targetName]?.entity;
                 if (!target) {
                     bot.chat(`Cannot see ${targetName} nearby!`);
+                    actionSuccess = false;
+                    actionError = `player_not_found: ${targetName}`;
                     break;
                 }
                 const { GoalFollow } = goals;
@@ -2602,6 +2663,8 @@ async function handleAction(action) {
                 const target = bot.players[targetName]?.entity;
                 if (!target) {
                     bot.chat(`${targetName} is not nearby to guard.`);
+                    actionSuccess = false;
+                    actionError = `player_not_found: ${targetName}`;
                     break;
                 }
                 isGuarding = true;
@@ -2641,9 +2704,28 @@ async function handleAction(action) {
                 const bed = bot.findBlock({ matching: b => b.name.includes('bed'), maxDistance: 16 });
                 if (bed) {
                     try {
-                        await bot.sleep(bed);
-                        bot.chat("Sleeping now, sweet dreams!");
-                    } catch (_) {}
+                        const isDay = bot.time ? bot.time.isDay : true;
+                        if (!isDay || bot.isRaining) {
+                            await bot.sleep(bed);
+                            bot.chat("Sleeping in bed now, setting spawn point! 🛏️💤");
+                        } else {
+                            // In Minecraft 1.20 Java Edition: right-clicking bed during day sets spawn point
+                            await bot.activateBlock(bed);
+                            bot.chat("Respawn point set at bed! (Daytime) 🛏️📍");
+                        }
+                        sendToPython({
+                            type: 'bed_used',
+                            bed_pos: { x: bed.position.x, y: bed.position.y, z: bed.position.z },
+                            dimension: curDim || 'overworld'
+                        });
+                    } catch (sErr) {
+                        actionSuccess = false;
+                        actionError = `bed_interaction_failed: ${sErr.message}`;
+                    }
+                } else {
+                    actionSuccess = false;
+                    actionError = "no_bed_in_range";
+                    bot.chat("No bed found within 16 blocks.");
                 }
                 break;
             }
@@ -2651,8 +2733,18 @@ async function handleAction(action) {
             case 'eat_food': {
                 const foodItem = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
                 if (foodItem) {
-                    await bot.equip(foodItem, 'hand');
-                    await bot.consume();
+                    try {
+                        await bot.equip(foodItem, 'hand');
+                        await bot.consume();
+                        bot.chat(`Ate ${foodItem.name} to restore hunger.`);
+                    } catch (eErr) {
+                        actionSuccess = false;
+                        actionError = `consume_failed: ${eErr.message}`;
+                    }
+                } else {
+                    actionSuccess = false;
+                    actionError = "no_food_in_inventory";
+                    bot.chat("No food available in inventory to eat!");
                 }
                 break;
             }
@@ -2664,7 +2756,29 @@ async function handleAction(action) {
                     await equipBestWeapon(bot);
                     if (bot.pvp) {
                         bot.pvp.attack(entity);
+                        await new Promise((resolve) => {
+                            const timeout = setTimeout(() => {
+                                if (bot.pvp) bot.pvp.stop();
+                                resolve();
+                            }, 10000);
+                            const checkInterval = setInterval(() => {
+                                if (!entity.isValid || entity.health <= 0) {
+                                    clearInterval(checkInterval);
+                                    clearTimeout(timeout);
+                                    if (bot.pvp) bot.pvp.stop();
+                                    resolve();
+                                }
+                            }, 300);
+                        });
+                    } else {
+                        await bot.lookAt(entity.position.offset(0, entity.height, 0));
+                        bot.attack(entity);
                     }
+                    await new Promise(r => setTimeout(r, 400));
+                    await collectNearbyDrops(bot, 10);
+                } else {
+                    actionSuccess = false;
+                    actionError = `Target '${targetName}' not found within 16 blocks`;
                 }
                 break;
             }
@@ -2698,6 +2812,8 @@ async function handleAction(action) {
                             new Promise((_, reject) => setTimeout(() => reject(new Error('Explore timeout')), 8000))
                         ]);
                     } catch (_) {}
+                    actionSuccess = false;
+                    actionError = `No food animals (${animalType}) found nearby (exploring outward)`;
                     break;
                 }
 
@@ -2707,6 +2823,7 @@ async function handleAction(action) {
                 await equipBestWeapon(bot);
 
                 try {
+                    let killed = false;
                     if (bot.pvp) {
                         bot.pvp.attack(targetEntity);
                         await new Promise((resolve) => {
@@ -2717,6 +2834,7 @@ async function handleAction(action) {
 
                             const checkInterval = setInterval(() => {
                                 if (!targetEntity.isValid || targetEntity.health <= 0) {
+                                    killed = true;
                                     clearInterval(checkInterval);
                                     clearTimeout(timeout);
                                     if (bot.pvp) bot.pvp.stop();
@@ -2728,13 +2846,21 @@ async function handleAction(action) {
                         const { GoalNear } = goals;
                         await bot.pathfinder.goto(new GoalNear(targetEntity.position.x, targetEntity.position.y, targetEntity.position.z, 2));
                         await bot.attack(targetEntity);
+                        killed = !targetEntity.isValid || targetEntity.health <= 0;
                     }
 
-                    await new Promise(r => setTimeout(r, 600));
-                    await collectNearbyDrops(bot, 12);
-                    bot.chat(`Successfully hunted ${animalName} and collected food drops! 🍗`);
+                    if (!killed && targetEntity.isValid && targetEntity.health > 0) {
+                        actionSuccess = false;
+                        actionError = `hunt_timeout: ${animalName} escaped`;
+                    } else {
+                        await new Promise(r => setTimeout(r, 600));
+                        await collectNearbyDrops(bot, 12);
+                        bot.chat(`Successfully hunted ${animalName} and collected food drops! 🍗`);
+                    }
                 } catch (hErr) {
                     bot.chat(`Hunt interrupted: ${hErr.message}`);
+                    actionSuccess = false;
+                    actionError = `hunt_interrupted: ${hErr.message}`;
                 }
                 break;
             }
@@ -2746,12 +2872,16 @@ async function handleAction(action) {
 
                 if (!playerName || ['system', 'autonomous', 'server', 'none', 'bot', bot.username.toLowerCase()].includes(playerName)) {
                     bot.chat(`Cannot give items: invalid target player '${args.player_name}'.`);
+                    actionSuccess = false;
+                    actionError = `invalid_target_player: ${args.player_name}`;
                     break;
                 }
 
                 const item = bot.inventory.items().find(i => i.name.toLowerCase().includes(itemName));
                 if (!item) {
                     bot.chat(`I don't have '${itemName}' to give.`);
+                    actionSuccess = false;
+                    actionError = `missing_item: ${itemName}`;
                     break;
                 }
 
@@ -2760,6 +2890,8 @@ async function handleAction(action) {
 
                 if (!playerEntity) {
                     bot.chat(`Player '${args.player_name}' is not nearby to give items to.`);
+                    actionSuccess = false;
+                    actionError = `player_not_found: ${args.player_name}`;
                     break;
                 }
 
@@ -2771,10 +2903,17 @@ async function handleAction(action) {
                     await bot.toss(item.type, null, count);
                     bot.chat(`Gave ${count}x ${item.name} to ${targetPlayerObj.username}! 🎁`);
                 } catch (gErr) {
-                    bot.chat(`Could not deliver item: ${gErr.message}`);
-                } finally {
-                    isBusy = false;
+                    actionSuccess = false;
+                    actionError = `give_item_failed: ${gErr.message}`;
                 }
+                break;
+            }
+
+            case 'collect_nearby_drops': {
+                isBusy = true;
+                currentActionName = 'collecting_nearby_drops';
+                const radius = args.radius || 16;
+                await collectNearbyDrops(bot, radius);
                 break;
             }
 
@@ -2960,12 +3099,20 @@ async function handleAction(action) {
         isBusy = false;
         currentActionName = 'idle';
         setMovementsForTask('walk');
+        const durationMs = Date.now() - actionStartTime;
+        const invAfter = getInventoryCountMap(bot);
+        const itemsDelta = calculateInventoryDelta(invBefore, invAfter);
+
         sendToPython({
             type: 'action_completed',
             command: command,
             action_id: actionId,
             success: actionSuccess,
+            ok: actionSuccess,
             error: actionError,
+            reason: actionError || 'success',
+            items_delta: itemsDelta,
+            duration_ms: durationMs,
             state: getBotState()
         });
     }

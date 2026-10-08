@@ -51,6 +51,7 @@ class MinecraftAIBot:
         self.bridge.on_death_callback = self.on_bot_death
         self.bridge.on_game_won_callback = self.on_game_won
         self.bridge.on_action_completed_callback = self.on_action_completed
+        self.bridge.on_bed_used_callback = self.on_bed_used
         
         # Signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -84,6 +85,22 @@ class MinecraftAIBot:
                 })
             self.active_player_task = None
 
+        # F0.3: Check if this movement action brought bot close to unrecovered corpse
+        if self.db and cmd in ("go_to_coordinates", "walking"):
+            unrecovered = self.db.get_unrecovered_death_point()
+            if unrecovered and state.get("position"):
+                cur_pos = state["position"]
+                dx = cur_pos.get("x", 0.0) - unrecovered["x"]
+                dz = cur_pos.get("z", 0.0) - unrecovered["z"]
+                dist = (dx * dx + dz * dz) ** 0.5
+                if dist <= 5.0:
+                    logger.info(f"🎒 Reached death point #{unrecovered['id']}! Collecting dropped inventory...")
+                    await self.bridge.send_action("collect_nearby_drops", {"radius": 32})
+                    self.db.mark_death_point_recovered(unrecovered["id"])
+                    await self.bridge.send_action("say_chat", {
+                        "message": "🎒 Arrived at previous death site and recovered dropped items!"
+                    })
+
         # Check if there are queued pending tasks in SQLite
         if self.db:
             pending = self.db.get_pending_tasks()
@@ -96,9 +113,12 @@ class MinecraftAIBot:
                     "message": f"📋 Starting next queued task: '{next_task['instruction']}'"
                 })
                 if next_task.get('primary_action'):
+                    task_args = dict(next_task.get('args') or {})
+                    if 'instruction' not in task_args:
+                        task_args['instruction'] = next_task['instruction']
                     await self.chat_handler._execute_tool(
                         next_task['primary_action'],
-                        {'instruction': next_task['instruction']},
+                        task_args,
                         state,
                         self.config.BOT_OWNER
                     )
@@ -114,10 +134,61 @@ class MinecraftAIBot:
             "message": f"Hello {self.config.BOT_OWNER}! I am {self.config.BOT_NAME}, ready to explore and beat the game."
         })
 
-    async def on_bot_death(self, state):
+        # F0.3: Check for unrecovered corpse in current dimension
+        if hasattr(self, "db") and self.db:
+            unrecovered = self.db.get_unrecovered_death_point()
+            if unrecovered:
+                cur_dim = state.get("dimension", "overworld")
+                if unrecovered.get("dim", "overworld") == cur_dim:
+                    x, y, z = unrecovered["x"], unrecovered["y"], unrecovered["z"]
+                    logger.warning(
+                        f"🏃 [Corpse Recovery] Unrecovered death point #{unrecovered['id']} found at ({x}, {y}, {z})! "
+                        f"Prioritizing emergency recovery expedition before drops despawn!"
+                    )
+                    self.db.add_task(
+                        instruction=f"Recover items from death site at ({x}, {y}, {z})",
+                        primary_action="go_to_coordinates",
+                        args={"x": x, "y": y, "z": z},
+                        assigned_by="system",
+                        priority=10
+                    )
+
+    async def on_bot_death(self, data):
         """Called when the bot dies in-game."""
         logger.warning("💀 Bot has fallen! Waiting for respawn...")
         self._bot_ready.clear()
+
+        # F0.3: Record death location and inventory snapshot to database for corpse recovery
+        death_pos = data.get("death_pos") if isinstance(data, dict) else None
+        dim = data.get("dimension", "overworld") if isinstance(data, dict) else "overworld"
+        inv_snapshot = data.get("inventory_snapshot", []) if isinstance(data, dict) else []
+
+        if death_pos and hasattr(self, "db") and self.db:
+            death_id = self.db.save_death_point(
+                dim=dim,
+                x=death_pos.get("x", 0.0),
+                y=death_pos.get("y", 0.0),
+                z=death_pos.get("z", 0.0),
+                inventory=inv_snapshot
+            )
+            logger.warning(
+                f"📍 [Death Recovery] Death point #{death_id} recorded at "
+                f"({death_pos.get('x')}, {death_pos.get('y')}, {death_pos.get('z')}) in {dim} with {len(inv_snapshot)} item stacks!"
+            )
+
+    async def on_bed_used(self, data: Dict[str, Any]):
+        """Called when the bot interacts with a bed to sleep or set spawn."""
+        bed_pos = data.get("bed_pos")
+        dim = data.get("dimension", "overworld")
+        if bed_pos and hasattr(self, "db") and self.db:
+            self.db.save_bed_location(
+                dim=dim,
+                x=bed_pos.get("x", 0.0),
+                y=bed_pos.get("y", 0.0),
+                z=bed_pos.get("z", 0.0),
+                is_spawn=True
+            )
+            logger.info(f"🛏️ [Bed Memory] Recorded spawn bed at ({bed_pos.get('x')}, {bed_pos.get('y')}, {bed_pos.get('z')}) in {dim} to database!")
 
     async def on_game_won(self, data):
         """Called when the Ender Dragon is defeated and the exit portal is entered."""
