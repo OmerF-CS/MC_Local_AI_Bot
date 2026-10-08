@@ -2,23 +2,22 @@
 
 > **Autonomous Human-Like Minecraft Co-op Companion Powered 100% Locally by Ollama & Mineflayer**
 
-[![Status: Production Ready](https://img.shields.io/badge/status-active%20release%20(v0.7.0)-brightgreen.svg)](IMPLEMENTATION_ROADMAP.md)
-[![Progress: 100%](https://img.shields.io/badge/progress-100%25%20(Phase%207%20Complete)-brightgreen.svg)](IMPLEMENTATION_ROADMAP.md)
+[![Status: Active Development](https://img.shields.io/badge/status-active%20beta%20(v0.8.0)--dev-orange.svg)](IMPLEMENTATION_ROADMAP.md)
+[![CI Tests](https://github.com/OmerF-CS/MC_Local_AI_Bot/actions/workflows/ci.yml/badge.svg)](https://github.com/OmerF-CS/MC_Local_AI_Bot/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Node.js: 18+](https://img.shields.io/badge/node.js-18%2B-green.svg)](https://nodejs.org/)
-[![LLM: Ollama](https://img.shields.io/badge/LLM-Ollama%20(Qwen%202.5)-purple.svg)](https://ollama.com/)
+[![LLM: Ollama](https://img.shields.io/badge/LLM-Ollama%20(mc--qwen%3A3b)-purple.svg)](https://ollama.com/)
 
 ---
 
 > [!NOTE]
-> ### 🏆 Project Status: Feature-Complete (v0.7.0)
-> **MC Local AI Bot has completed all core roadmap phases!**  
-> - **Phases 1-3:** Autonomous survival, mining, recursive crafting, smelting, dimension safety, Nether portal construction, Blaze hunting, Stronghold tracking, and End Portal activation.
-> - **Phase 4:** End Crystal demolition, Ender Dragon perch combat & bed bombing, victory XP harvesting, exit fountain completion, and one-click launch scripts (`run.bat` / `run.sh`).
-> - **Phases 5-6:** Sustainable farming & bread engine, universal emergency shelter, autonomous enchanting & XP engine, tactical Nether outposts, void bridging, RTX GPU offloading.
-> - **Phase 7:** Full-project audit, concurrency hardening, survival interrupt system, safe dragon combat, bridge action ID tracking.
-> Community contributions, pull requests, and bug reports are warmly welcomed!
+> ### 🚧 Project Status: Active Beta (v0.8.0) - Work in Progress
+> **MC Local AI Bot is an ambitious ongoing AI research & development project.**  
+> - **Current State:** Core architecture (Python orchestrator, Mineflayer worker, Ollama LLM, SQLite memory, and 53 unit tests) is operational.
+> - **In Active Testing:** Real-world in-game edge cases (terrain navigation, tree variants, biome obstacles, combat reflexes).
+> - **Next Horizons:** Continuous gameplay dataset collection, custom Unsloth QLoRA fine-tuning for zero-shot decision making, and extended survival speedruns.
+> Contributions, feedback, and bug reports are warmly welcomed!
 
 ---
 
