@@ -4,7 +4,7 @@ import json
 import math
 import random
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from utils.logger import get_logger
 from ai.progression_tree import (
     get_current_progression_goal,
@@ -42,6 +42,13 @@ class AutonomousCoopBrain:
         self._consecutive_same_fallback_count = 0
         self._last_fallback_category_shift = "wait"
 
+        # F1-R11: Action failure history and consecutive repetition category shift tracking
+        self.action_failure_history: List[Dict[str, Any]] = []
+        self._last_action_failure_key = None
+        self._consecutive_action_failure_count = 0
+        self._pending_category_shift = False
+        self._pending_category_shift_action = None
+
         self.checkpoint_stage = None
         self.checkpoint_target = None
 
@@ -65,6 +72,178 @@ class AutonomousCoopBrain:
             count = item.get("count", 0)
             inv[name] = inv.get(name, 0) + count
         return inv
+
+    # ------------------------------------------------------------------
+    # F1-R11: Action Failure Reason Mapping & Repetition Tracking
+    # ------------------------------------------------------------------
+    @property
+    def consecutive_failure_repeats(self) -> int:
+        """Returns consecutive failure repetitions for the current failure key."""
+        return self._consecutive_action_failure_count
+
+    @property
+    def failure_history(self) -> List[Dict[str, Any]]:
+        """Returns history of recorded action failures."""
+        return self.action_failure_history
+
+    @staticmethod
+    def normalize_failure_reason(action: str, raw_reason_or_error: Optional[str]) -> str:
+        """Normalizes raw worker action error/reason strings to canonical failure reasons (F1-R11)."""
+        if not raw_reason_or_error:
+            return "unknown_failure"
+        err = str(raw_reason_or_error).strip().lower()
+        if "no_crop_found" in err:
+            return "no_crop_found"
+        if "position_unknown" in err:
+            return "position_unknown"
+        if "did_not_reach_destination" in err:
+            return "did_not_reach_destination"
+        return str(raw_reason_or_error).strip()
+
+    @staticmethod
+    def _normalize_target(target: Any, action: str = "", args: Optional[Dict[str, Any]] = None) -> Tuple[Any, str]:
+        """Normalizes action target and produces a stable comparison string (F1-R11)."""
+        if target is None and args:
+            if action == "farm_crops":
+                target = args.get("crop_type") or "all"
+            elif action == "go_to_coordinates":
+                if "x" in args and "z" in args:
+                    target = (args.get("x"), args.get("y"), args.get("z"))
+            elif "target" in args:
+                target = args.get("target")
+
+        if target is None:
+            if action == "farm_crops":
+                target = "all"
+            elif action == "go_to_coordinates":
+                target = "coords"
+            else:
+                target = "default"
+
+        def _fmt(v: Any) -> str:
+            try:
+                f = float(v)
+                return str(int(f)) if f.is_integer() else f"{f:.1f}"
+            except (ValueError, TypeError):
+                return str(v)
+
+        if isinstance(target, dict):
+            if "x" in target and "z" in target:
+                target_str = f"({_fmt(target.get('x'))}, {_fmt(target.get('y', 64))}, {_fmt(target.get('z'))})"
+            else:
+                target_str = json.dumps(target, sort_keys=True)
+        elif isinstance(target, (list, tuple)):
+            target_str = f"({', '.join(_fmt(v) for v in target)})"
+        else:
+            target_str = str(target).strip()
+
+        return target, target_str
+
+    def generate_category_shift_action(
+        self,
+        state: Optional[Dict[str, Any]] = None,
+        reason_label: str = "Repeated action failure"
+    ) -> Dict[str, Any]:
+        """Generates category shift action (exploration or waiting) and toggles shift category (F1-6, F1-R11)."""
+        shift_cat = "exploration" if getattr(self, "_last_fallback_category_shift", "wait") == "wait" else "waiting"
+        self._last_fallback_category_shift = shift_cat
+
+        if shift_cat == "exploration":
+            logger.warning(
+                f"⚠️ [Fallback Category Shift] {reason_label}. "
+                "Shifting planner to category 'exploration' (scouting new area)..."
+            )
+            pos = (state or {}).get("position", {"x": 0, "y": 64, "z": 0})
+            angle = random.random() * 2 * math.pi
+            target_x = round(pos.get("x", 0) + math.cos(angle) * 30)
+            target_z = round(pos.get("z", 0) + math.sin(angle) * 30)
+            return {
+                "name": "go_to_coordinates",
+                "arguments": {"x": target_x, "z": target_z, "ignore_y": True, "range": 3}
+            }
+        else:
+            logger.warning(
+                f"⚠️ [Fallback Category Shift] {reason_label}. "
+                "Shifting planner to category 'waiting' (observing surroundings)..."
+            )
+            return {
+                "name": "say_chat",
+                "arguments": {"message": "Observing surroundings and waiting for opportunities."}
+            }
+
+    def trigger_category_shift(
+        self,
+        state: Optional[Dict[str, Any]] = None,
+        reason_label: str = "Repeated action failure"
+    ) -> Dict[str, Any]:
+        """Triggers category shift, returning shift action and resetting repeat counters (F1-6, F1-R11)."""
+        shift_action = self.generate_category_shift_action(state, reason_label=reason_label)
+        self._pending_category_shift = False
+        self._pending_category_shift_action = None
+        self._consecutive_same_fallback_count = 0
+        self._consecutive_action_failure_count = 0
+        return shift_action
+
+    def record_action_failure(
+        self,
+        action: str,
+        reason: str,
+        target: Any = None,
+        args: Optional[Dict[str, Any]] = None,
+        raw_error: Optional[str] = None,
+        state: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Records action failure reason into failure history and repetition tracking (F1-R11).
+
+        If the same reason + same target repeats 3 consecutive times, triggers category shift
+        (exploration or waiting) and resets the counter.
+        """
+        norm_reason = self.normalize_failure_reason(action, reason or raw_error)
+        norm_target, target_str = self._normalize_target(target, action, args)
+
+        now = time.time()
+        failure_entry = {
+            "action": action,
+            "reason": norm_reason,
+            "raw_error": raw_error or reason,
+            "target": norm_target,
+            "target_str": target_str,
+            "timestamp": now,
+            "time": now
+        }
+        self.action_failure_history.append(failure_entry)
+
+        failure_key = f"{action}:{norm_reason}:{target_str}"
+        if failure_key == getattr(self, "_last_action_failure_key", None):
+            self._consecutive_action_failure_count += 1
+            self._consecutive_same_fallback_count += 1
+        else:
+            self._last_action_failure_key = failure_key
+            self._consecutive_action_failure_count = 1
+            self._consecutive_same_fallback_count = 1
+
+        logger.warning(
+            f"⚠️ [Planner Failure Tracking] Action '{action}' failed with reason '{norm_reason}' "
+            f"(target={target_str}, consecutive_repeats={self._consecutive_same_fallback_count})"
+        )
+
+        shift_action = None
+        if self._consecutive_same_fallback_count >= 3 or self._consecutive_action_failure_count >= 3:
+            shift_action = self.generate_category_shift_action(
+                state=state or {},
+                reason_label=f"Action failure '{failure_key}' repeated 3 consecutive times"
+            )
+            self._pending_category_shift = True
+            self._pending_category_shift_action = shift_action
+
+        return shift_action
+
+    def record_action_success(self, action: str, target: Any = None) -> None:
+        """Resets consecutive failure tracking upon successful action execution (F1-R11)."""
+        self._consecutive_action_failure_count = 0
+        self._last_action_failure_key = None
+        self._pending_category_shift = False
+        self._pending_category_shift_action = None
 
     def _should_use_emergency_action(self, state: Dict[str, Any], inv: Optional[Dict[str, int]] = None) -> Optional[Dict[str, Any]]:
         """Immediate reflex for critical health, imminent starvation, or night danger."""
@@ -402,6 +581,21 @@ class AutonomousCoopBrain:
             self.fallback_consecutive_count = 0
             return emergency_action
 
+        # F1-R11: Check pending category shift from repeated action failures
+        if (
+            getattr(self, "_pending_category_shift", False)
+            or getattr(self, "_consecutive_action_failure_count", 0) >= 3
+            or getattr(self, "_consecutive_same_fallback_count", 0) >= 3
+        ):
+            shift_act = self.trigger_category_shift(
+                state,
+                reason_label=f"Action failure '{getattr(self, '_last_action_failure_key', 'repeated_failure')}' repeated 3 consecutive times"
+            )
+            return {
+                "text": f"Repeated action failure detected. Shifting category to {self._last_fallback_category_shift}.",
+                "tool_calls": [shift_act]
+            }
+
         owner_info = state.get("owner_info")
         health = state.get("health", 20)
         food = state.get("food", 20)
@@ -513,32 +707,10 @@ class AutonomousCoopBrain:
 
                     # F1-6: Aynı fallback üst üste 3 kez seçilirse planner farklı bir kategoriye geçsin (örn. keşif, bekleme)
                     if self._consecutive_same_fallback_count >= 3:
-                        shift_cat = "exploration" if getattr(self, "_last_fallback_category_shift", "wait") == "wait" else "waiting"
-                        self._last_fallback_category_shift = shift_cat
-                        self._consecutive_same_fallback_count = 0
-
-                        if shift_cat == "exploration":
-                            logger.warning(
-                                f"⚠️ [Fallback Category Shift] Fallback '{action_sig}' repeated 3 consecutive times. "
-                                "Shifting planner to category 'exploration' (scouting new area)..."
-                            )
-                            pos = state.get("position", {"x": 0, "y": 64, "z": 0})
-                            angle = random.random() * 2 * math.pi
-                            target_x = round(pos.get("x", 0) + math.cos(angle) * 30)
-                            target_z = round(pos.get("z", 0) + math.sin(angle) * 30)
-                            fallback_action = {
-                                "name": "go_to_coordinates",
-                                "arguments": {"x": target_x, "z": target_z, "ignore_y": True, "range": 3}
-                            }
-                        else:
-                            logger.warning(
-                                f"⚠️ [Fallback Category Shift] Fallback '{action_sig}' repeated 3 consecutive times. "
-                                "Shifting planner to category 'waiting' (observing surroundings)..."
-                            )
-                            fallback_action = {
-                                "name": "say_chat",
-                                "arguments": {"message": "Observing surroundings and waiting for opportunities."}
-                            }
+                        fallback_action = self.trigger_category_shift(
+                            state,
+                            reason_label=f"Fallback '{action_sig}' repeated 3 consecutive times"
+                        )
 
                     tool_calls = [fallback_action]
                     response["tool_calls"] = tool_calls

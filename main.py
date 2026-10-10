@@ -169,6 +169,15 @@ class MinecraftAIBot:
         logger.info(f"🏁 Action finished: {cmd} (success={success}, error={error})")
         self._update_last_known_state(state)
 
+        # F1-R11: Record action completion result in planner failure tracking
+        if hasattr(self, "planner") and self.planner:
+            if success:
+                if hasattr(self.planner, "record_action_success"):
+                    self.planner.record_action_success(cmd)
+            else:
+                if error and hasattr(self.planner, "record_action_failure"):
+                    self.planner.record_action_failure(cmd, error, state=state)
+
         # Check task completion with STRICT correlation
         if self.active_player_task:
             task = self.active_player_task
@@ -530,6 +539,15 @@ class MinecraftAIBot:
                         post_state=post_snapshot,
                         duration_s=dur_s
                     )
+                    # F1-R11: Feed executed tool results into planner repetition tracking
+                    if hasattr(self, "planner") and self.planner and exec_res:
+                        if exec_res.get("success", False):
+                            if hasattr(self.planner, "record_action_success"):
+                                self.planner.record_action_success(cmd)
+                        else:
+                            res_err = exec_res.get("error") or exec_res.get("reason")
+                            if res_err and hasattr(self.planner, "record_action_failure"):
+                                self.planner.record_action_failure(cmd, str(res_err), args=args, state=state)
                     await asyncio.sleep(0.1)
 
                 has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
