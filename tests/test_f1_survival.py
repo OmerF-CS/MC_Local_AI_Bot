@@ -243,6 +243,51 @@ class TestF1SurvivalBasics(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data.get("llm_tool_call_count"), 14)
         self.assertEqual(data.get("llm_timeout_rate"), 0.125)
 
+    # ------------------------------------------------------------------
+    # F1-R7: Hunger Root & Food Strategy Rotation
+    # ------------------------------------------------------------------
+    async def test_f1_r7_stagnant_hp_food_strategy_rotation(self):
+        """F1-R7: Consecutive stagnant HP cycles rotate through hunt -> farm -> fish -> explore without repeating."""
+        state = {
+            "health": 6.0,
+            "food": 10.0,
+            "inventory_items": [],
+            "inventory_summary": "Empty",
+            "nearby_hostiles": [],
+            "is_sheltered": True
+        }
+
+        # Initialize monitor
+        await self.planner.decide_next_action(state)
+
+        # 4 consecutive stagnant cycles
+        actions_received = []
+        for i in range(4):
+            self.planner._low_hp_monitor["start_time"] = time.time() - 65.0
+            dec = await self.planner.decide_next_action(state)
+            self.assertIsNotNone(dec)
+            tc = dec.get("tool_calls", [])
+            self.assertTrue(len(tc) > 0)
+            actions_received.append(tc[0].get("name"))
+
+        # Verify progression without immediate repeat: hunt -> farm -> fish -> go_to_coordinates
+        self.assertEqual(actions_received[0], "hunt_food", "Step 1 must be hunt_food")
+        self.assertEqual(actions_received[1], "farm_crops", "Step 2 must rotate to farm_crops")
+        self.assertEqual(actions_received[2], "catch_fish", "Step 3 must rotate to catch_fish")
+        self.assertEqual(actions_received[3], "go_to_coordinates", "Step 4 must rotate to go_to_coordinates (relocation)")
+
+    # ------------------------------------------------------------------
+    # F1-R8: Ollama Preload & Chat Options Uniformity
+    # ------------------------------------------------------------------
+    def test_f1_r8_ollama_options_consistency(self):
+        """F1-R8: OLLAMA_MODEL_OPTIONS guarantees identical num_ctx, num_gpu, num_thread between preload and chat."""
+        from ai.ollama_client import OLLAMA_MODEL_OPTIONS
+        self.assertEqual(OLLAMA_MODEL_OPTIONS.get("num_ctx"), 8192)
+        self.assertEqual(OLLAMA_MODEL_OPTIONS.get("num_gpu"), 999)
+        self.assertEqual(OLLAMA_MODEL_OPTIONS.get("num_thread"), 8)
+        self.assertIn("temperature", OLLAMA_MODEL_OPTIONS)
+
 
 if __name__ == "__main__":
     unittest.main()
+

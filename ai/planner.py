@@ -123,18 +123,40 @@ class AutonomousCoopBrain:
                 elif not has_food:
                     strategy = "gather_food"
                     mon["active_strategy"] = strategy
-                    logger.info("❤️ [Health Strategy Result] Selected strategy: gather emergency food supplies.")
-                    from ai.farming import should_prioritize_farming, get_farming_action_plan
-                    if inv_map and should_prioritize_farming(inv_map, state):
-                        farm_plan = get_farming_action_plan(inv_map, state)
+                    food_step = getattr(self, "_stagnant_food_step", 0)
+                    self._stagnant_food_step = food_step + 1
+
+                    # F1-R7: Doğal iyileşme için açlık < 14 ve HP stagnant ise yiyecek kaynağı öncelikli;
+                    # hayvan avından tarla, balık veya köy/keşif rotasyonuna geç (tekrar eden başarısız aksiyon yok).
+                    rotation_choice = food_step % 4
+                    if rotation_choice == 0:
+                        logger.info("❤️ [Health Strategy Result] (F1-R7) Selected strategy: hunt animals for sustenance.")
                         return {
-                            "text": "HP stagnant and no food. Harvesting nearby crops.",
-                            "tool_calls": [farm_plan]
+                            "text": "HP stagnant and no food. Hunting food animals immediately.",
+                            "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
                         }
-                    return {
-                        "text": "HP stagnant and no food. Hunting food animals immediately.",
-                        "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
-                    }
+                    elif rotation_choice == 1:
+                        logger.info("❤️ [Health Strategy Result] (F1-R7) Selected strategy: shift to crop farming/harvesting.")
+                        return {
+                            "text": "HP stagnant and no animals found. Harvesting crops for nourishment.",
+                            "tool_calls": [{"name": "farm_crops", "arguments": {"crop_type": "all"}}]
+                        }
+                    elif rotation_choice == 2:
+                        logger.info("❤️ [Health Strategy Result] (F1-R7) Selected strategy: shift to catching fish.")
+                        return {
+                            "text": "HP stagnant and crops exhausted. Catching fish for emergency food.",
+                            "tool_calls": [{"name": "catch_fish", "arguments": {"count": 2}}]
+                        }
+                    else:
+                        logger.info("❤️ [Health Strategy Result] (F1-R7) Selected strategy: relocate to scout village/food sources.")
+                        pos = state.get("position", {"x": 0, "y": 64, "z": 0})
+                        angle = random.random() * 2 * math.pi
+                        target_x = round(pos.get("x", 0) + math.cos(angle) * 35)
+                        target_z = round(pos.get("z", 0) + math.sin(angle) * 35)
+                        return {
+                            "text": "HP stagnant and area food exhausted. Scouting new territory for sustenance.",
+                            "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": target_x, "z": target_z, "ignore_y": True, "range": 3}}]
+                        }
                 else:
                     strategy = "relocate"
                     mon["active_strategy"] = strategy
@@ -263,13 +285,22 @@ class AutonomousCoopBrain:
                             "text": "No animals found after 3 hunts! Harvesting any available crops for food.",
                             "tool_calls": [{"name": "farm_crops", "arguments": {"crop_type": "all"}}]
                         }
+                    elif not getattr(self, "_tried_emergency_fish", False):
+                        self._tried_emergency_fish = True
+                        logger.warning("⚠️ [STUCK LOOP BREAK] Crops not viable! Shifting to fishing for emergency food.")
+                        return {
+                            "text": "No crops found! Catching fish for emergency food.",
+                            "tool_calls": [{"name": "catch_fish", "arguments": {"count": 2}}]
+                        }
                     else:
                         self._tried_emergency_farm = False
+                        self._tried_emergency_fish = False
                         self.consecutive_hunt_failures = 0
                         pos = state.get("position", {"x": 0, "y": 64, "z": 0})
                         angle = random.random() * 2 * math.pi
                         target_x = pos.get("x", 0) + math.cos(angle) * 45
                         target_z = pos.get("z", 0) + math.sin(angle) * 45
+                        logger.warning("⚠️ [STUCK LOOP BREAK] Local food sources exhausted! Relocating to scout new territory.")
                         return {
                             "text": "Starvation area exhausted. Relocating to new territory for food.",
                             "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": round(target_x), "z": round(target_z), "ignore_y": True, "range": 3}}]

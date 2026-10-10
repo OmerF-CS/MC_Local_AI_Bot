@@ -14,6 +14,18 @@ from ai.knowledge_base import get_relevant_tactic
 logger = get_logger("OllamaClient")
 
 
+# Canonical runtime options for mc-qwen:3b (F1-R8: strictly identical between preload and chat to prevent model reloads)
+OLLAMA_MODEL_OPTIONS: Dict[str, Any] = {
+    "num_gpu": 999,      # Force 100% layer offload to RTX 3060 GPU VRAM
+    "num_ctx": 8192,     # Accommodates 44 MINECRAFT_TOOLS JSON specs (~4700 tokens)
+    "num_thread": 8,     # Parallel thread processing
+    "temperature": 0.1,  # Ultra-deterministic, fast tool calling
+    "top_p": 0.8,        # Reduce sampling variance
+    "top_k": 40,
+    "num_predict": 128   # Sub-second response generation
+}
+
+
 class OllamaBrain:
     """Ollama + Qwen 2.5 3B brain for decision making."""
     
@@ -79,10 +91,10 @@ class OllamaBrain:
                         preload_payload = {
                             "model": self.model,
                             "keep_alive": -1,
-                            "options": {"num_gpu": 999}
+                            "options": dict(OLLAMA_MODEL_OPTIONS)
                         }
-                        logger.info(f"⚡ Preloading '{self.model}' into GPU VRAM (zero-latency warmup)...")
-                        async with session.post(f"{self.base_url}/api/generate", json=preload_payload, timeout=25) as warm_resp:
+                        logger.info(f"⚡ Preloading '{self.model}' into GPU VRAM (zero-latency warmup, timeout 60s)...")
+                        async with session.post(f"{self.base_url}/api/generate", json=preload_payload, timeout=60) as warm_resp:
                             if warm_resp.status == 200:
                                 logger.info(f"🔥 Model '{self.model}' pinned to RTX 3060 GPU VRAM!")
                     except Exception as warm_err:
@@ -143,14 +155,7 @@ class OllamaBrain:
             "tools": MINECRAFT_TOOLS,
             "stream": False,
             "keep_alive": -1,        # Keep pinned in GPU VRAM indefinitely
-            "options": {
-                "num_gpu": 999,      # Force 100% layer offload to RTX 3060 GPU VRAM
-                "num_thread": 8,     # Parallel thread processing
-                "temperature": 0.1,  # Ultra-deterministic, fast tool calling
-                "top_p": 0.8,        # Reduce sampling variance
-                "top_k": 40,
-                "num_predict": 128   # Ultra-fast sub-second response generation
-            }
+            "options": dict(OLLAMA_MODEL_OPTIONS)
         }
 
         self.llm_calls_count += 1

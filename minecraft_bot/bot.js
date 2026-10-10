@@ -1074,8 +1074,15 @@ async function autoSelfDefenseCheck(customBot = null) {
         if (!isBusy && !isSheltered && (bot.health <= 6 || (bot.health <= 10 && threatScore >= 40))) {
             const now = Date.now();
             const dangerMobKey = `${mobName}_${dangerMob.id || dangerMob.type || 0}`;
-            const threatLevelKey = `${Math.round(threatScore / 10)}_${Math.round(dist / 4)}`;
-            const currentThreatKey = `${dangerMobKey}_${threatLevelKey}`;
+            let threatCategory = 'dusuk';
+            if (threatScore >= 40) {
+                threatCategory = 'yuksek';
+            } else if (threatScore >= 20) {
+                threatCategory = 'orta';
+            } else {
+                threatCategory = 'dusuk';
+            }
+            const currentThreatKey = `${dangerMobKey}_${threatCategory}`;
             const sameThreat = (currentThreatKey === lastRetreatThreatKey);
 
             // F1-3: Kaçacak yer yoksa tekrar log basılmaz; durum değişince yeniden yazılır.
