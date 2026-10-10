@@ -108,7 +108,7 @@ class AutonomousCoopBrain:
                         "tool_calls": [{"name": "say_chat", "arguments": {"message": "Safe inside bunker. Waiting for threats to pass..."}}]
                     }
                 return {
-                    "text": "Waiting safely inside bunker until daylight arrives.",
+                    "text": "",
                     "tool_calls": []
                 }
 
@@ -177,7 +177,7 @@ class AutonomousCoopBrain:
                         target_z = pos.get("z", 0) + math.sin(angle) * 45
                         return {
                             "text": "Starvation area exhausted. Relocating to new territory for food.",
-                            "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": round(target_x), "y": pos.get("y", 64), "z": round(target_z)}}]
+                            "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": round(target_x), "z": round(target_z), "ignore_y": True, "range": 3}}]
                         }
 
                 cooldown = 15.0 if not has_nearby_animals else 8.0
@@ -313,9 +313,9 @@ class AutonomousCoopBrain:
                             }
 
             # 2. Re-gear toward checkpoint without downgrading database record
-            saved_m = get_milestone_by_stage(self.checkpoint_stage)
-            goal = saved_m if saved_m else inv_goal
-            substep_hint = f"Rebuilding gear toward {self.checkpoint_target} ({self.checkpoint_stage}): currently need {inv_goal['target']}"
+            goal = inv_goal
+            substep_hint, milestone_action = self.get_milestone_action(goal, inv_dict, state)
+            substep_hint = f"Rebuilding gear toward {self.checkpoint_target} ({self.checkpoint_stage}): currently need {inv_goal['target']} ({substep_hint})"
         else:
             # Monotonic advancement or first startup
             goal = inv_goal
@@ -502,7 +502,7 @@ class AutonomousCoopBrain:
                             return {
                                 "text": "Action stalled. Relocating to a better position.",
                                 "tool_calls": [
-                                    {"name": "go_to_coordinates", "arguments": {"x": round(tx), "y": pos.get("y", 64), "z": round(tz)}}
+                                    {"name": "go_to_coordinates", "arguments": {"x": round(tx), "z": round(tz), "ignore_y": True, "range": 3}}
                                 ]
                             }
                 else:
@@ -632,15 +632,24 @@ class AutonomousCoopBrain:
             c for i, c in inv.items()
             if any(s in i for s in ("cobble", "deepslate", "blackstone"))
         )
-        if target == "stone_pickaxe":
-            if cobble_count < 3:
-                return "Mine 3 stone (cobblestone missing)", {"name": "collect_block", "arguments": {"block_name": "stone", "count": 3}}
-            return "Craft stone pickaxe (materials ready)", {"name": "craft_item", "arguments": {"item_name": "stone_pickaxe", "count": 1}}
+        has_any_pickaxe = any(
+            p in inv for p in ("wooden_pickaxe", "stone_pickaxe", "iron_pickaxe", "diamond_pickaxe", "netherite_pickaxe")
+        )
+        if target in ("stone_pickaxe", "furnace"):
+            if not has_any_pickaxe:
+                if (log_count * 4) + plank_count < 4:
+                    return "Mine 3 logs (need wooden pickaxe for stone)", {"name": "collect_block", "arguments": {"block_name": "log", "count": 3}}
+                return "Craft wooden pickaxe (need wooden pickaxe for stone)", {"name": "craft_item", "arguments": {"item_name": "wooden_pickaxe", "count": 1}}
 
-        if target == "furnace":
-            if cobble_count < 8:
-                return "Mine 8 stone (cobblestone missing)", {"name": "collect_block", "arguments": {"block_name": "stone", "count": 8}}
-            return "Craft furnace (materials ready)", {"name": "craft_item", "arguments": {"item_name": "furnace", "count": 1}}
+            if target == "stone_pickaxe":
+                if cobble_count < 3:
+                    return "Mine 3 stone (cobblestone missing)", {"name": "collect_block", "arguments": {"block_name": "stone", "count": 3}}
+                return "Craft stone pickaxe (materials ready)", {"name": "craft_item", "arguments": {"item_name": "stone_pickaxe", "count": 1}}
+
+            if target == "furnace":
+                if cobble_count < 8:
+                    return "Mine 8 stone (cobblestone missing)", {"name": "collect_block", "arguments": {"block_name": "stone", "count": 8}}
+                return "Craft furnace (materials ready)", {"name": "craft_item", "arguments": {"item_name": "furnace", "count": 1}}
 
         raw_iron = inv.get("raw_iron", 0) + inv.get("iron_ore", 0)
         iron_ingots = inv.get("iron_ingot", 0)
