@@ -18,6 +18,26 @@ const MC_USERNAME = process.env.MINECRAFT_USERNAME || process.env.MC_USERNAME ||
 const MC_VERSION = process.env.MINECRAFT_VERSION || process.env.MC_VERSION || false;
 const BRIDGE_URL = process.env.BRIDGE_URL || `ws://${process.env.BRIDGE_HOST || '127.0.0.1'}:${process.env.BRIDGE_PORT || '8765'}`;
 
+// Process-level crash prevention guards (max 3 consecutive errors before clean exit for Watchdog)
+let consecutiveProcessErrors = 0;
+const MAX_PROCESS_ERRORS = 3;
+
+function handleFatalProcessError(type, err) {
+    consecutiveProcessErrors++;
+    console.error(`[Worker Crash Guard] ${type} (${consecutiveProcessErrors}/${MAX_PROCESS_ERRORS}):`, err ? (err.stack || err.message) : err);
+    if (consecutiveProcessErrors >= MAX_PROCESS_ERRORS) {
+        console.error(`[Worker Crash Guard] Reached ${MAX_PROCESS_ERRORS} process-level errors. Exiting cleanly for Watchdog recovery.`);
+        process.exit(1);
+    }
+}
+
+process.on('uncaughtException', (err) => {
+    handleFatalProcessError('Uncaught Exception', err);
+});
+process.on('unhandledRejection', (reason) => {
+    handleFatalProcessError('Unhandled Rejection', reason);
+});
+
 let ws = null;
 let bot = null;
 let defaultMovements = null;
@@ -35,6 +55,11 @@ let netherOutpostBuilt = false;
 // Anti-Stuck Tracking Variables
 let lastPosition = null;
 let stuckCounter = 0;
+
+// Pre-death state caching (H2)
+let lastKnownNonEmptyInventory = [];
+let lastKnownPosition = null;
+let lastKnownDimension = 'overworld';
 
 // Known Food Items List
 const FOOD_NAMES = [
@@ -77,9 +102,23 @@ function connectBridge() {
     });
 }
 
+let sendToPythonOverride = null;
+
 function sendToPython(payload) {
+    if (typeof sendToPythonOverride === 'function') {
+        sendToPythonOverride(payload);
+        return;
+    }
     if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
+        try {
+            ws.send(JSON.stringify(payload));
+        } catch (err) {
+            console.error('[Bridge] ❌ Error sending payload to Python:', err.message);
+        }
+    } else {
+        if (payload && payload.type !== 'state_update') {
+            console.warn(`[Bridge] ⚠️ Cannot send '${payload?.type}' to Python: WebSocket is not open (state: ${ws ? ws.readyState : 'null'})`);
+        }
     }
 }
 
@@ -206,19 +245,59 @@ function setMovementsForTask(taskType = 'walk') {
     }
 }
 
+function isPhysicallySheltered(bot) {
+    if (!bot || !bot.entity || !bot.entity.position) return false;
+    const feetPos = bot.entity.position.floored();
+    const head1 = bot.blockAt(feetPos.offset(0, 2, 0));
+    const head2 = bot.blockAt(feetPos.offset(0, 3, 0));
+    const hasRoof = (head1 && head1.name !== 'air' && head1.name !== 'cave_air') ||
+                    (head2 && head2.name !== 'air' && head2.name !== 'cave_air');
+    if (!hasRoof) return false;
+
+    let solidWalls = 0;
+    const dirs = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
+    for (const d of dirs) {
+        const side1 = bot.blockAt(feetPos.plus(d));
+        const side2 = bot.blockAt(feetPos.plus(d).offset(0, 1, 0));
+        if ((side1 && side1.name !== 'air' && side1.name !== 'cave_air') ||
+            (side2 && side2.name !== 'air' && side2.name !== 'cave_air')) {
+            solidWalls++;
+        }
+    }
+    return solidWalls >= 3;
+}
+
 // --- ADVANCED 3D SPATIAL PERCEPTION & VISION ENGINE ---
 function getBotState() {
     if (!bot || !bot.entity) return {};
 
-    const inventoryItems = bot.inventory.items().map(i => ({ name: i.name, count: i.count }));
-    const inventorySummary = inventoryItems.map(i => `${i.name} x${i.count}`).join(', ') || 'Empty';
-    const nearbyPlayers = Object.keys(bot.players).filter(p => p !== bot.username);
+    try {
+        const inventoryItems = (bot.inventory && typeof bot.inventory.items === 'function') 
+            ? bot.inventory.items().map(i => ({ name: i.name, count: i.count })) 
+            : [];
+        if (inventoryItems.length > 0) {
+            lastKnownNonEmptyInventory = [...inventoryItems];
+        }
+        if (bot.entity && bot.entity.position) {
+            lastKnownPosition = {
+                x: Math.round(bot.entity.position.x * 10) / 10,
+                y: Math.round(bot.entity.position.y * 10) / 10,
+                z: Math.round(bot.entity.position.z * 10) / 10
+            };
+        }
+        if (bot.game && bot.game.dimension) {
+            lastKnownDimension = String(bot.game.dimension);
+        }
+        const inventorySummary = inventoryItems.map(i => `${i.name} x${i.count}`).join(', ') || 'Empty';
+        const nearbyPlayers = (bot.players && typeof bot.players === 'object') 
+            ? Object.keys(bot.players).filter(p => p !== bot.username) 
+            : [];
 
-    // 1. Spatial & Environmental Metrics (Light, Altitude, Zone)
-    const currentBlock = bot.blockAt(bot.entity.position);
-    const lightLevel = currentBlock ? currentBlock.light : 15;
-    const currentY = Math.round(bot.entity.position.y);
-    const altitudeZone = currentY < 0 ? 'Deepslate Core (Y < 0)' : currentY < 62 ? 'Underground Caves' : 'Surface / Overworld';
+        // 1. Spatial & Environmental Metrics (Light, Altitude, Zone)
+        const currentBlock = (typeof bot.blockAt === 'function' && bot.entity && bot.entity.position) ? bot.blockAt(bot.entity.position) : null;
+        const lightLevel = currentBlock ? currentBlock.light : 15;
+        const currentY = (bot.entity && bot.entity.position) ? Math.round(bot.entity.position.y) : 64;
+        const altitudeZone = currentY < 0 ? 'Deepslate Core (Y < 0)' : currentY < 62 ? 'Underground Caves' : 'Surface / Overworld';
 
     // 2. Visible & Air-Exposed Resource Scanning (Read from non-blocking round-robin background cache)
     const visibleResources = { ...cachedVisibleResources };
@@ -431,7 +510,16 @@ function getBotState() {
         ender_dragon: enderDragonInfo,
         dragon_defeated: dragonDefeated,
         dragon_health: enderDragonInfo ? enderDragonInfo.health : (dragonDefeated ? 0 : 200),
-        is_sheltered: isSheltered,
+        is_sheltered: (() => {
+            if (isSheltered) {
+                if (!isPhysicallySheltered(bot)) {
+                    isSheltered = false;
+                    return false;
+                }
+                return true;
+            }
+            return false;
+        })(),
         nether_outpost_built: netherOutpostBuilt,
         xp_level: bot.experience ? bot.experience.level : 0,
         xp_points: bot.experience ? bot.experience.points : 0,
@@ -446,6 +534,16 @@ function getBotState() {
         is_falling: Boolean(bot.entity && bot.entity.velocity && bot.entity.velocity.y < -0.6),
         fire_resistance_active: Boolean(bot.entity && bot.entity.effects && bot.entity.effects[12])
     };
+    } catch (err) {
+        return {
+            health: bot.health || 20,
+            food: bot.food || 20,
+            position: lastKnownPosition || { x: 0, y: 64, z: 0 },
+            dimension: lastKnownDimension || 'overworld',
+            inventory: [],
+            inventory_summary: 'Empty'
+        };
+    }
 }
 
 // --- INFINITE LOOP & STUCK PREVENTION (ANTI-STUCK GUARD) ---
@@ -468,9 +566,7 @@ function antiStuckCheck() {
                 stuckCounter = 0;
 
                 sendToPython({
-                    type: 'action_completed',
-                    command: 'stuck_recovery',
-                    success: false,
+                    type: 'bot_unstuck',
                     reason: 'Obstacle obstruction detected; goal reset.'
                 });
             }
@@ -862,8 +958,13 @@ async function performWaterBarrierDefense(bot) {
 
 let isDefending = false;
 
-async function autoSelfDefenseCheck() {
-    if (!bot || !bot.entity || isDefending) return;
+async function autoSelfDefenseCheck(customBot = null) {
+    if (customBot) bot = customBot;
+    if (!bot || !bot.entity || !bot.entity.position || isDefending) return;
+    if (isSheltered) {
+        // While sheltered inside a bunker, do not seek outside hostiles or override movements
+        return;
+    }
     if (isBusy && ['building_nether_portal', 'fighting_ender_dragon', 'destroying_end_crystals', 'activating_end_portal'].includes(currentActionName)) {
         return;
     }
@@ -955,7 +1056,7 @@ async function autoSelfDefenseCheck() {
         const threatScore = calculateThreatScore(bot, hostileEntities);
 
         // 1. Critical health + high threat -> Tactical Retreat
-        if (bot.health <= 6 || (bot.health <= 10 && threatScore >= 40)) {
+        if (!isBusy && !isSheltered && (bot.health <= 6 || (bot.health <= 10 && threatScore >= 40))) {
             const now = Date.now();
             if (now - lastDefenseRetreatTime > 3000) {
                 lastDefenseRetreatTime = now;
@@ -1051,27 +1152,45 @@ async function autoSelfDefenseCheck() {
         // 3.4: SKELETON TACTIC: Shield sprint gap-close with cover / LOS break
         if (mobName.includes('skeleton') || mobName.includes('stray')) {
             if (dist > 3.5) {
-                // If far (> 7.5m), seek solid block cover to break LOS and force skeleton into melee
-                if (dist > 7.5) {
-                    const coverBlock = bot.findBlock({
-                        matching: b => b && b.boundingBox === 'block' && b.name !== 'air' && b.position.distanceTo(bot.entity.position) <= 8 && b.position.distanceTo(dangerMob.position) >= 3,
-                        maxDistance: 8
-                    });
-                    if (coverBlock) {
-                        console.log("🏹 [Skeleton Combat] Moving behind solid cover block to break line of sight!");
-                        try {
-                            const { GoalNear } = goals;
-                            bot.pathfinder.setGoal(new GoalNear(coverBlock.position.x, coverBlock.position.y, coverBlock.position.z, 1));
-                        } catch (_) {}
-                    }
-                }
                 raiseShield(bot);
                 await bot.lookAt(dangerMob.position.offset(0, 1.4, 0), true);
-                bot.setControlState('forward', true);
-                bot.setControlState('sprint', true);
-                await new Promise(r => setTimeout(r, 400));
-                bot.setControlState('forward', false);
-                bot.setControlState('sprint', false);
+                // Do NOT disrupt active pathfinding/mining tasks if bot is busy or sheltered!
+                if (!isBusy && !isSheltered) {
+                    if (dist > 7.5) {
+                        try {
+                            const coverBlock = bot.findBlock({
+                                matching: b => {
+                                    if (!b || b.boundingBox !== 'block' || b.name === 'air') return false;
+                                    if (!b.position) return true; // Palette optimization pre-check in Mineflayer
+                                    if (!bot || !bot.entity || !bot.entity.position || !dangerMob || !dangerMob.position) return false;
+                                    return b.position.distanceTo(bot.entity.position) <= 8 && b.position.distanceTo(dangerMob.position) >= 3;
+                                },
+                                maxDistance: 8,
+                                useExtraInfo: b => {
+                                    try {
+                                        if (!b || !b.position || !bot || !bot.entity || !bot.entity.position || !dangerMob || !dangerMob.position) return false;
+                                        return b.position.distanceTo(bot.entity.position) <= 8 && b.position.distanceTo(dangerMob.position) >= 3;
+                                    } catch (_) {
+                                        return false;
+                                    }
+                                }
+                            });
+                            if (coverBlock) {
+                                console.log("🏹 [Skeleton Combat] Moving behind solid cover block to break line of sight!");
+                                const { GoalNear } = goals;
+                                await bot.pathfinder.goto(new GoalNear(coverBlock.position.x, coverBlock.position.y, coverBlock.position.z, 1)).catch(() => {});
+                                return;
+                            }
+                        } catch (covErr) {
+                            console.warn("[Skeleton Combat] Cover block search warning:", covErr.message);
+                        }
+                    }
+                    bot.setControlState('forward', true);
+                    bot.setControlState('sprint', true);
+                    await new Promise(r => setTimeout(r, 400));
+                    bot.setControlState('forward', false);
+                    bot.setControlState('sprint', false);
+                }
                 return;
             } else {
                 bot.setControlState('forward', false);
@@ -1108,7 +1227,7 @@ async function autoSelfDefenseCheck() {
         }
 
         // 3.6: ZOMBIE SWARM CHOKEPOINT / FUNNEL TACTIC: When outnumbered (>= 3 melee hostiles)
-        const closeMeleeHostiles = hostileEntities.filter(m => m.position.distanceTo(bot.entity.position) < 6.0);
+        const closeMeleeHostiles = hostileEntities.filter(m => m && m.position && bot && bot.entity && bot.entity.position && typeof m.position.distanceTo === 'function' && m.position.distanceTo(bot.entity.position) < 6.0);
         if (closeMeleeHostiles.length >= 3) {
             console.log(`🧟 [Combat Swarm] Outnumbered by ${closeMeleeHostiles.length} hostiles! Backpedaling into chokepoint funnel...`);
             bot.setControlState('back', true);
@@ -1143,13 +1262,47 @@ async function autoSelfDefenseCheck() {
             await performChargedAttack(bot, dangerMob);
         }
 
+    } catch (err) {
+        console.error("⚠️ [Combat Engine Error]:", err ? (err.stack || err.message) : err);
     } finally {
         isDefending = false;
     }
 }
 
+let activeIntervals = [];
+let reconnectTimer = null;
+
+function clearAllIntervals() {
+    for (const id of activeIntervals) {
+        clearInterval(id);
+    }
+    activeIntervals = [];
+}
+
+function registerInterval(fn, ms) {
+    const safeFn = async () => {
+        try {
+            await fn();
+        } catch (err) {
+            console.error(`[Interval Error in ${fn.name || 'callback'}]:`, err ? (err.stack || err.message) : err);
+        }
+    };
+    const id = setInterval(safeFn, ms);
+    activeIntervals.push(id);
+    return id;
+}
+
+function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        createBot();
+    }, 5000);
+}
+
 // --- BOT CREATION & LIFECYCLE EVENTS ---
 function createBot() {
+    clearAllIntervals();
     console.log(`[Minecraft] Connecting to ${MC_HOST}:${MC_PORT} as '${MC_USERNAME}'...`);
     
     const botOptions = {
@@ -1163,28 +1316,40 @@ function createBot() {
 
     bot = mineflayer.createBot(botOptions);
 
+    // Suppress deprecated physicTick warning by redirecting to physicsTick
+    const origOn = bot.on.bind(bot);
+    bot.on = function (event, listener) {
+        if (event === 'physicTick') return origOn('physicsTick', listener);
+        return origOn(event, listener);
+    };
+
     bot.loadPlugin(pathfinder);
     bot.loadPlugin(toolPlugin);
     bot.loadPlugin(collectBlock);
     bot.loadPlugin(pvp);
 
     bot.once('spawn', () => {
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
         console.log('[Minecraft] 🌟 Bot successfully spawned into the world!');
         setMovementsForTask('walk');
+        clearAllIntervals();
 
         // Round-robin background resource scanner (1 block category every 200ms, non-blocking)
-        setInterval(tickResourceScanner, 200);
+        registerInterval(tickResourceScanner, 200);
 
         // High-frequency reactive maintenance loops (optimized for low latency)
-        setInterval(autoEatCheck, 1500);          // Check hunger & health every 1.5s (was 6s)
-        setInterval(guardLoop, 500);              // Guard tracking every 0.5s (was 1.5s)
-        setInterval(autoSelfDefenseCheck, 500);   // Proactive close-range threat defense every 0.5s (was 1.5s)
-        setInterval(antiStuckCheck, 1500);        // Anti-stuck watchdog every 1.5s (was 3s)
-        setInterval(autoEquipGearCheck, 1500);    // Armor & shield auto-equip every 1.5s (was 4s)
-        setInterval(autoTorchCheck, 5000);        // Dark cave auto-torching every 5s (was 8s)
+        registerInterval(autoEatCheck, 1500);          // Check hunger & health every 1.5s (was 6s)
+        registerInterval(guardLoop, 500);              // Guard tracking every 0.5s (was 1.5s)
+        registerInterval(autoSelfDefenseCheck, 500);   // Proactive close-range threat defense every 0.5s (was 1.5s)
+        registerInterval(antiStuckCheck, 1500);        // Anti-stuck watchdog every 1.5s (was 3s)
+        registerInterval(autoEquipGearCheck, 1500);    // Armor & shield auto-equip every 1.5s (was 4s)
+        registerInterval(autoTorchCheck, 5000);        // Dark cave auto-torching every 5s (was 8s)
 
         // Live high-speed state synchronization heartbeat (500ms for instant telemetry)
-        setInterval(() => {
+        registerInterval(() => {
             if (bot && bot.entity) {
                 sendToPython({
                     type: 'state_update',
@@ -1240,16 +1405,24 @@ function createBot() {
         isBusy = false;
         isSheltered = false;
         currentActionName = 'idle';
+        try {
+            if (bot.pathfinder) bot.pathfinder.stop();
+            if (bot.pvp) bot.pvp.stop();
+        } catch (_) {}
         lowerShield(bot);
 
         const deathPos = bot.entity ? {
             x: Math.round(bot.entity.position.x * 10) / 10,
             y: Math.round(bot.entity.position.y * 10) / 10,
             z: Math.round(bot.entity.position.z * 10) / 10
-        } : null;
-        const invSnapshot = bot.inventory ? bot.inventory.items().map(i => ({ name: i.name, count: i.count })) : [];
-        const dim = (bot.game && bot.game.dimension) ? String(bot.game.dimension) : 'overworld';
+        } : (lastKnownPosition || null);
+        let invSnapshot = bot.inventory ? bot.inventory.items().map(i => ({ name: i.name, count: i.count })) : [];
+        if (invSnapshot.length === 0 && lastKnownNonEmptyInventory.length > 0) {
+            invSnapshot = [...lastKnownNonEmptyInventory];
+        }
+        const dim = (bot.game && bot.game.dimension) ? String(bot.game.dimension) : (lastKnownDimension || 'overworld');
 
+        console.log(`[Bridge] 📤 Emitting bot_death: pos=(${deathPos?.x}, ${deathPos?.y}, ${deathPos?.z}) in ${dim} with ${invSnapshot.length} item stacks`);
         sendToPython({
             type: 'bot_death',
             death_pos: deathPos,
@@ -1294,19 +1467,43 @@ function createBot() {
         currentActionName = 'idle';
         lastSleepTime = Date.now();
         setMovementsForTask('walk');
+        console.log('[Bridge] 📤 Emitting bot_respawned');
+        sendToPython({
+            type: 'bot_respawned',
+            state: getBotState()
+        });
     });
 
     bot.on('kicked', (reason) => {
-        console.log('[Minecraft] 🚫 Kicked from server:', reason);
+        const reasonStr = typeof reason === 'object' ? (reason.value || reason.text || JSON.stringify(reason)) : String(reason || 'kicked');
+        console.log('[Minecraft] 🚫 Kicked from server:', reasonStr);
+        clearAllIntervals();
+        sendToPython({
+            type: 'bot_disconnected',
+            reason: `kicked: ${reasonStr}`
+        });
+        scheduleReconnect();
     });
 
     bot.on('error', (err) => {
         console.error('[Minecraft] ❌ Error:', err.message);
+        clearAllIntervals();
+        sendToPython({
+            type: 'bot_disconnected',
+            reason: `error: ${err.message}`
+        });
+        scheduleReconnect();
     });
 
-    bot.on('end', () => {
-        console.log('[Minecraft] 🔄 Connection closed. Reconnecting in 5 seconds...');
-        setTimeout(createBot, 5000);
+    bot.on('end', (reason) => {
+        const reasonStr = reason ? (typeof reason === 'object' ? JSON.stringify(reason) : String(reason)) : 'connection_closed';
+        console.log(`[Minecraft] 🔄 Connection ended (${reasonStr}). Reconnecting in 5 seconds...`);
+        clearAllIntervals();
+        sendToPython({
+            type: 'bot_disconnected',
+            reason: reasonStr
+        });
+        scheduleReconnect();
     });
 }
 
@@ -1399,7 +1596,8 @@ function findPlacementLocation(bot) {
                 const airBlock = bot.blockAt(placePos);
                 if (airBlock) {
                     const bName = airBlock.name.toLowerCase();
-                    const isReplaceable = REPLACEABLE_BLOCKS.has(bName) || bName.includes('air') || bName.includes('petal') || bName.includes('grass') || bName.includes('flower');
+                    if (bName.includes('block') || bName.includes('stone') || bName.includes('dirt') || bName.includes('sand') || bName.includes('wood') || bName.includes('plank')) continue;
+                    const isReplaceable = REPLACEABLE_BLOCKS.has(bName) || bName.includes('air') || bName.includes('petal') || (bName.includes('grass') && !bName.includes('block')) || bName.includes('flower');
                     if (isReplaceable) {
                         const dist = botPos.distanceTo(placePos);
                         if (dist >= 0.8 && dist <= 4.2) {
@@ -1691,7 +1889,7 @@ async function smartSmelt(bot, inputItemName, count = 1) {
     const inputItem = bot.inventory.items().find(i => i.name.toLowerCase().includes(rawName));
     if (!inputItem) {
         bot.chat(`I don't have '${rawName}' in my inventory to smelt.`);
-        return false;
+        return { success: false, error: `Can't find ${rawName} in slots` };
     }
 
     const fuelItem = bot.inventory.items().find(i => 
@@ -1703,7 +1901,7 @@ async function smartSmelt(bot, inputItemName, count = 1) {
     );
     if (!fuelItem) {
         bot.chat("No fuel available (coal, charcoal, or wood) to smelt with.");
-        return false;
+        return { success: false, error: "No fuel available to smelt with" };
     }
 
     let furnaceBlock = bot.findBlock({ matching: mcData.blocksByName.furnace.id, maxDistance: 4 });
@@ -1736,13 +1934,13 @@ async function smartSmelt(bot, inputItemName, count = 1) {
 
         if (!furnaceItem) {
             bot.chat("No furnace available and not enough stone to craft one.");
-            return false;
+            return { success: false, error: "No furnace available and not enough stone to craft one" };
         }
 
         const loc = findPlacementLocation(bot);
         if (!loc) {
             bot.chat("No suitable spot to place the furnace.");
-            return false;
+            return { success: false, error: "No suitable spot to place furnace" };
         }
 
         bot.chat("Placing furnace on the ground...");
@@ -1752,7 +1950,7 @@ async function smartSmelt(bot, inputItemName, count = 1) {
         placedFurnaceByMe = true;
     }
 
-    if (!furnaceBlock) return false;
+    if (!furnaceBlock) return { success: false, error: "Server refused to place furnace" };
 
     bot.chat(`Opening furnace to smelt ${count}x ${inputItem.name}...`);
     const furnace = await bot.openFurnace(furnaceBlock);
@@ -3427,25 +3625,24 @@ async function buildShelter(bot, mode = 'auto') {
         bot.chat("🕳️ BURROWING: Digging 3-deep emergency burrow hole and sealing roof! 🛡️");
         const basePos = bot.entity.position.floored();
 
-        // Dig down 3 blocks
-        for (let d = 0; d >= -2; d--) {
+        // Dig down 3 blocks under feet
+        for (let d = -1; d >= -3; d--) {
             const digPos = basePos.offset(0, d, 0);
             const b = bot.blockAt(digPos);
             if (b && b.name !== 'bedrock' && b.name !== 'air' && b.name !== 'lava') {
                 try {
                     await bot.dig(b);
-                    await new Promise(r => setTimeout(r, 250));
+                    await new Promise(r => setTimeout(r, 200));
                 } catch (_) {}
             }
         }
 
         await new Promise(r => setTimeout(r, 400));
 
-        // Place 1 seal block directly above head
+        // Place 1 seal block directly above burrow hole if bot fell down
         const sealBlockItem = bot.inventory.items().find(i => SOLID_NAMES.includes(i.name) || i.name.endsWith('_planks'));
-        if (sealBlockItem) {
-            const roofPos = basePos.offset(0, 1, 0);
-            await placeBlockDirect(bot, sealBlockItem, roofPos);
+        if (sealBlockItem && bot.entity.position.y < basePos.y - 1.0) {
+            await placeBlockDirect(bot, sealBlockItem, basePos);
         }
 
         // Place torch if available
@@ -3456,6 +3653,13 @@ async function buildShelter(bot, mode = 'auto') {
             if (floorBlock) {
                 await bot.placeBlock(floorBlock, new Vec3(0, 1, 0)).catch(() => {});
             }
+        }
+
+        const sealed = isPhysicallySheltered(bot);
+        if (!sealed) {
+            isSheltered = false;
+            bot.chat("⚠️ Emergency burrow failed to fully seal!");
+            return false;
         }
 
         isSheltered = true;
@@ -3489,6 +3693,13 @@ async function buildShelter(bot, mode = 'auto') {
                 await bot.placeBlock(interiorWall, new Vec3(0, 1, 0)).catch(() => {});
             }
         } catch (_) {}
+    }
+
+    const sealed = isPhysicallySheltered(bot);
+    if (!sealed) {
+        isSheltered = false;
+        bot.chat("⚠️ Emergency bunker failed to fully seal!");
+        return false;
     }
 
     isSheltered = true;
@@ -3751,11 +3962,27 @@ function calculateInventoryDelta(beforeMap, afterMap) {
 
 // --- ACTION EXECUTION ENGINE (TIMEOUT & CONCURRENCY GUARDED) ---
 async function handleAction(action) {
-    if (!bot) return;
-
     const { command, args = {} } = action;
     const actionId = action.action_id || null;
     const actionStartTime = Date.now();
+
+    if (!bot || !bot.entity) {
+        console.warn(`⚠️ [Action Guard] Bot is not connected or spawned in world. Rejecting '${command}'.`);
+        sendToPython({
+            type: 'action_completed',
+            command: command,
+            action_id: actionId,
+            success: false,
+            ok: false,
+            error: 'Bot is not connected or spawned in world',
+            reason: 'bot_not_ready',
+            items_delta: {},
+            duration_ms: 0,
+            state: getBotState()
+        });
+        return;
+    }
+
     const invBefore = getInventoryCountMap(bot);
     let actionSuccess = true;
     let actionError = null;
@@ -3951,7 +4178,8 @@ async function handleAction(action) {
                 if (!prep.canHarvest) {
                     console.log(`[ToolLearner] Aborting mining of '${blocks[0].name}' due to missing tool requirement: ${prep.minToolName}`);
                     actionSuccess = false;
-                    actionError = `Cannot harvest ${blocks[0].name}: requires ${prep.minToolName}`;
+                    actionError = `missing_tool:${prep.minToolName || 'required_tool'}`;
+                    bot.chat(`Cannot mine ${blocks[0].name}: requires ${prep.minToolName}`);
                     break;
                 }
 
@@ -3960,7 +4188,22 @@ async function handleAction(action) {
 
                 try {
                     setMovementsForTask('mine');
-                    await bot.collectBlock.collect(blocks);
+                    let timeoutId;
+                    const timeoutPromise = new Promise((_, reject) => {
+                        timeoutId = setTimeout(() => {
+                            if (bot && bot.pathfinder) {
+                                try { bot.pathfinder.stop(); } catch (_) {}
+                            }
+                            reject(new Error(`Mining timed out after 20s (target: ${categoryLabel})`));
+                        }, 20000);
+                    });
+
+                    try {
+                        await Promise.race([bot.collectBlock.collect(blocks), timeoutPromise]);
+                    } finally {
+                        clearTimeout(timeoutId);
+                    }
+
                     const durationMs = Date.now() - startTime;
                     const invAfter = bot.inventory.items().map(i => ({ name: i.name, count: i.count }));
 
@@ -4001,6 +4244,9 @@ async function handleAction(action) {
                         }
                     }
                 } catch (cErr) {
+                    if (bot && bot.pathfinder) {
+                        try { bot.pathfinder.stop(); } catch (_) {}
+                    }
                     bot.chat(`Mining interrupted: ${cErr.message}`);
                     actionSuccess = false;
                     actionError = `Mining interrupted: ${cErr.message}`;
@@ -4054,8 +4300,23 @@ async function handleAction(action) {
                 isBusy = true;
                 currentActionName = 'walking';
                 const { x, y, z } = args;
-                const { GoalNear } = goals;
-                bot.pathfinder.setGoal(new GoalNear(x, y, z, 1));
+                const range = (typeof args.range === 'number' && args.range > 0) ? args.range : 1;
+                const { GoalNear, GoalNearXZ } = goals;
+                const targetGoal = (y === undefined || y === null || args.ignore_y)
+                    ? new GoalNearXZ(x, z, range)
+                    : new GoalNear(x, y, z, range);
+                try {
+                    await withTimeout(bot.pathfinder.goto(targetGoal), 30000, 'go_to_coordinates');
+                    actionSuccess = true;
+                } catch (err) {
+                    actionSuccess = false;
+                    try { bot.pathfinder.stop(); } catch (_) {}
+                    if (err.message && err.message.includes('timed out')) {
+                        actionError = 'timeout';
+                    } else {
+                        actionError = 'unreachable';
+                    }
+                }
                 break;
             }
 
@@ -4294,7 +4555,11 @@ async function handleAction(action) {
                 currentActionName = `smelt_${args.input_item}`;
                 const inputItem = args.input_item;
                 const count = args.count || 1;
-                await smartSmelt(bot, inputItem, count);
+                const smeltRes = await smartSmelt(bot, inputItem, count);
+                if (smeltRes === false || (smeltRes && smeltRes.success === false)) {
+                    actionSuccess = false;
+                    actionError = (smeltRes && smeltRes.error) ? smeltRes.error : "Failed to smelt item";
+                }
                 break;
             }
 
@@ -4617,6 +4882,11 @@ async function handleAction(action) {
         const invAfter = getInventoryCountMap(bot);
         const itemsDelta = calculateInventoryDelta(invBefore, invAfter);
 
+        let resultReason = actionSuccess ? 'success' : (actionError || 'failed');
+        if (command === 'go_to_coordinates') {
+            resultReason = actionSuccess ? 'arrived' : (actionError || 'unreachable');
+        }
+
         sendToPython({
             type: 'action_completed',
             command: command,
@@ -4624,7 +4894,7 @@ async function handleAction(action) {
             success: actionSuccess,
             ok: actionSuccess,
             error: actionError,
-            reason: actionError || 'success',
+            reason: resultReason,
             items_delta: itemsDelta,
             duration_ms: durationMs,
             state: getBotState()
@@ -4632,6 +4902,20 @@ async function handleAction(action) {
     }
 }
 
-// Startup & Initialization
-connectBridge();
-createBot();
+// Startup & Initialization (only run directly, allow unit testing via require)
+if (require.main === module) {
+    connectBridge();
+    createBot();
+}
+
+module.exports = {
+    autoSelfDefenseCheck,
+    handleAction,
+    sendToPython,
+    setSendToPythonOverride: (fn) => { sendToPythonOverride = fn; },
+    handleFatalProcessError,
+    setBotInstance: (b) => { bot = b; },
+    getBotInstance: () => bot,
+    getConsecutiveProcessErrors: () => consecutiveProcessErrors,
+    resetConsecutiveProcessErrors: () => { consecutiveProcessErrors = 0; }
+};
