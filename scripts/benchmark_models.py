@@ -12,7 +12,20 @@ import sys
 import json
 import time
 import argparse
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from utils.run_context import (
+    generate_run_id,
+    get_run_directory,
+    get_git_commit_hash,
+    set_current_run_id,
+    get_current_run_id
+)
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -127,11 +140,42 @@ def validate_model_response(raw_text: str, expected_tool: str) -> Tuple[bool, bo
     return is_valid_json, is_valid_tool_schema, is_accurate, call
 
 
+def check_ollama_online(base_url: str = "http://localhost:11434") -> bool:
+    """Checks whether the Ollama server is reachable and active."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"{base_url.rstrip('/')}/api/tags")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def default_ollama_evaluator(model_name: str, prompt: str, base_url: str = "http://localhost:11434") -> str:
+    """Evaluates a prompt against Ollama /api/chat endpoint."""
+    import urllib.request
+    payload = json.dumps({
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"temperature": 0.0}
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/chat",
+        data=payload,
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        return data.get("message", {}).get("content", "")
+
+
 def benchmark_model(
     model_name: str,
     test_cases: List[Dict[str, Any]],
     client_evaluator=None,
-    is_mock: bool = False
+    is_mock: bool = False,
+    samples_collector: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     """Evaluates a model over test cases and returns performance metrics."""
     total_samples = len(test_cases)
@@ -145,7 +189,7 @@ def benchmark_model(
         expected_tool = test["expected_tool"]
 
         start_t = time.perf_counter()
-        if is_mock or client_evaluator is None:
+        if is_mock:
             # Deterministic evaluation simulator based on model tier parameters
             time.sleep(0.01)  # Simulated latency
             if "7b" in model_name.lower():
@@ -160,22 +204,44 @@ def benchmark_model(
                     "tool_calls": [{"name": expected_tool, "arguments": test.get("expected_args", {})}]
                 })
                 lat_ms = 95.0
-        else:
+        elif client_evaluator is not None:
             try:
                 raw_output = client_evaluator(model_name, prompt)
                 lat_ms = (time.perf_counter() - start_t) * 1000.0
             except Exception as e:
                 raw_output = str(e)
                 lat_ms = (time.perf_counter() - start_t) * 1000.0
+        else:
+            try:
+                raw_output = default_ollama_evaluator(model_name, prompt)
+                lat_ms = (time.perf_counter() - start_t) * 1000.0
+            except Exception as e:
+                raw_output = str(e)
+                lat_ms = (time.perf_counter() - start_t) * 1000.0
 
         latencies.append(lat_ms)
-        is_json, is_schema, is_acc, _ = validate_model_response(raw_output, expected_tool)
+        is_json, is_schema, is_acc, parsed_call = validate_model_response(raw_output, expected_tool)
         if is_json:
             valid_json_count += 1
         if is_schema:
             valid_schema_count += 1
         if is_acc:
             accurate_count += 1
+
+        if samples_collector is not None:
+            samples_collector.append({
+                "model": model_name,
+                "test_id": test.get("id", "unknown"),
+                "prompt": prompt,
+                "expected_tool": expected_tool,
+                "raw_output": raw_output,
+                "latency_ms": round(lat_ms, 2),
+                "is_valid_json": is_json,
+                "is_valid_tool_schema": is_schema,
+                "is_accurate": is_acc,
+                "parsed_call": parsed_call,
+                "mock": is_mock
+            })
 
     avg_latency = sum(latencies) / max(1, len(latencies))
     latencies_sorted = sorted(latencies)
@@ -189,21 +255,80 @@ def benchmark_model(
         "schema_compliance_pct": round((valid_schema_count / total_samples) * 100, 1),
         "milestone_accuracy_pct": round((accurate_count / total_samples) * 100, 1),
         "avg_latency_ms": round(avg_latency, 1),
-        "p95_latency_ms": round(p95_latency, 1)
+        "p95_latency_ms": round(p95_latency, 1),
+        "mock": is_mock
     }
+
+
+def run_benchmark_suite(
+    models: List[str],
+    test_cases: List[Dict[str, Any]] = BENCHMARK_PROMPTS,
+    is_mock: bool = False,
+    client_evaluator=None,
+    base_url: str = "http://localhost:11434",
+    run_id: Optional[str] = None,
+    base_dir: Optional[str] = None
+) -> Tuple[List[Dict[str, Any]], str]:
+    """Executes benchmark across models and writes results.json & samples.jsonl to runs directory."""
+    active_run_id = run_id or generate_run_id(prefix="benchmark")
+    set_current_run_id(active_run_id)
+    run_dir = get_run_directory(active_run_id, base_dir=base_dir)
+
+    if not is_mock and client_evaluator is None:
+        if not check_ollama_online(base_url):
+            raise ConnectionError(
+                f"Ollama server is offline or unreachable at {base_url}. "
+                "Start Ollama or pass is_mock=True."
+            )
+        client_evaluator = lambda m, p: default_ollama_evaluator(m, p, base_url=base_url)
+
+    all_samples: List[Dict[str, Any]] = []
+    results: List[Dict[str, Any]] = []
+
+    for m in models:
+        res = benchmark_model(
+            model_name=m,
+            test_cases=test_cases,
+            client_evaluator=client_evaluator,
+            is_mock=is_mock,
+            samples_collector=all_samples
+        )
+        results.append(res)
+
+    # Persist results.json
+    results_path = os.path.join(run_dir, "results.json")
+    results_data = {
+        "run_id": active_run_id,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "commit_hash": get_git_commit_hash(short=False),
+        "mock": is_mock,
+        "models": models,
+        "metrics": results
+    }
+    with open(results_path, "w", encoding="utf-8") as f:
+        json.dump(results_data, f, indent=2, ensure_ascii=False)
+
+    # Persist samples.jsonl
+    samples_path = os.path.join(run_dir, "samples.jsonl")
+    with open(samples_path, "w", encoding="utf-8") as f:
+        for sample in all_samples:
+            f.write(json.dumps(sample, ensure_ascii=False) + "\n")
+
+    return results, run_dir
 
 
 def format_markdown_table(results: List[Dict[str, Any]]) -> str:
     """Formats benchmark results into a clean markdown table."""
     lines = [
-        "| Model | Samples | JSON Validity | Tool Schema Compliance | Decision Accuracy | Avg Latency | p95 Latency |",
-        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |"
+        "| Model | Samples | JSON Validity | Tool Schema Compliance | Decision Accuracy | Avg Latency | p95 Latency | Mock |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
     ]
     for r in results:
+        mock_tag = "Yes" if r.get("mock") else "No"
         lines.append(
             f"| **{r['model']}** | {r['samples']} | {r['json_validity_pct']}% | "
             f"{r['schema_compliance_pct']}% | {r['milestone_accuracy_pct']}% | "
-            f"{r['avg_latency_ms']} ms | {r['p95_latency_ms']} ms |"
+            f"{r['avg_latency_ms']} ms | {r['p95_latency_ms']} ms | {mock_tag} |"
         )
     return "\n".join(lines)
 
@@ -212,18 +337,36 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark 3B vs 7B local LLM models on Minecraft decision scenarios.")
     parser.add_argument("--models", nargs="+", default=["qwen2.5:3b", "qwen2.5:7b"], help="Model names to evaluate")
     parser.add_argument("--mock", action="store_true", default=False, help="Use deterministic mock simulation if Ollama daemon is offline")
+    parser.add_argument("--run-id", type=str, default="", help="Custom run identifier for results storage")
     args = parser.parse_args()
 
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+    # Explicit offline check: Fail cleanly if Ollama is offline and --mock was NOT passed
+    if not args.mock:
+        if not check_ollama_online(base_url):
+            print(f"❌ Error: Ollama server is offline or unreachable at {base_url}.")
+            print("💡 Hint: Start Ollama with 'ollama serve' or pass '--mock' to execute deterministic benchmark simulation.")
+            sys.exit(1)
+
     print(f"🚀 Running benchmark on models: {args.models} (Mock: {args.mock})...\n")
-    results = []
-    for m in args.models:
-        res = benchmark_model(m, BENCHMARK_PROMPTS, is_mock=args.mock)
-        results.append(res)
+
+    run_id = args.run_id if args.run_id else None
+    results, run_dir = run_benchmark_suite(
+        models=args.models,
+        test_cases=BENCHMARK_PROMPTS,
+        is_mock=args.mock,
+        base_url=base_url,
+        run_id=run_id
+    )
 
     table = format_markdown_table(results)
     print("## Benchmark Results\n")
     print(table)
+    print(f"\n📁 Results saved to: {os.path.join(run_dir, 'results.json')}")
+    print(f"📄 Sample decisions saved to: {os.path.join(run_dir, 'samples.jsonl')}")
 
 
 if __name__ == "__main__":
     main()
+

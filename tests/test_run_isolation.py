@@ -171,6 +171,40 @@ class TestRunIsolation(unittest.TestCase):
         run_data = json.loads(run_lines[0])
         self.assertEqual(run_data.get("run_id"), test_run_id)
 
+    def test_benchmark_models_persistence_and_mock_flag(self):
+        """Test benchmark results.json and samples.jsonl persistence with mock tagging."""
+        from scripts.benchmark_models import run_benchmark_suite, BENCHMARK_PROMPTS
+
+        bench_run_id = "test_benchmark_persist"
+        results, run_dir = run_benchmark_suite(
+            models=["qwen2.5:3b"],
+            test_cases=BENCHMARK_PROMPTS[:2],
+            is_mock=True,
+            run_id=bench_run_id,
+            base_dir=self.temp_dir.name
+        )
+
+        results_file = os.path.join(run_dir, "results.json")
+        samples_file = os.path.join(run_dir, "samples.jsonl")
+
+        self.assertTrue(os.path.isfile(results_file))
+        self.assertTrue(os.path.isfile(samples_file))
+
+        with open(results_file, "r", encoding="utf-8") as f:
+            res_data = json.load(f)
+        self.assertEqual(res_data["run_id"], bench_run_id)
+        self.assertTrue(res_data["mock"])
+        self.assertEqual(len(res_data["metrics"]), 1)
+        self.assertTrue(res_data["metrics"][0]["mock"])
+
+        with open(samples_file, "r", encoding="utf-8") as f:
+            sample_lines = f.readlines()
+        self.assertEqual(len(sample_lines), 2)
+        sample_0 = json.loads(sample_lines[0])
+        self.assertTrue(sample_0["mock"])
+        self.assertEqual(sample_0["model"], "qwen2.5:3b")
+
 
 if __name__ == "__main__":
     unittest.main()
+
