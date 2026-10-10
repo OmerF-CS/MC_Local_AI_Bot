@@ -226,8 +226,43 @@ class TestRunIsolation(unittest.TestCase):
             content = f.read()
         self.assertIn("Done (2.123s)!", content)
 
+    def test_machine_readable_test_runner_report(self):
+        """Test scripts/run_tests.py execution and test_report.json output generation."""
+        from scripts.run_tests import execute_test_runner
+
+        # Create an isolated dummy test file inside temp_dir to prevent recursive test execution
+        dummy_test_path = os.path.join(self.temp_dir.name, "test_dummy.py")
+        with open(dummy_test_path, "w", encoding="utf-8") as f:
+            f.write(
+                "import unittest\n\n"
+                "class DummyTest(unittest.TestCase):\n"
+                "    def test_dummy_success(self):\n"
+                "        self.assertTrue(True)\n"
+            )
+
+        runner_run_id = "test_runner_isolation_check"
+        report, report_path, exit_code = execute_test_runner(
+            test_dir=self.temp_dir.name,
+            pattern="test_dummy.py",
+            run_id=runner_run_id,
+            verbosity=0,
+            base_dir=self.temp_dir.name
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(os.path.isfile(report_path))
+        self.assertIn("summary", report)
+        self.assertIn("environment", report)
+        self.assertIn("tests", report)
+        self.assertEqual(report["summary"]["failed"], 0)
+        self.assertEqual(report["summary"]["errors"], 0)
+        self.assertEqual(report["summary"]["total"], 1)
+        self.assertEqual(report["summary"]["passed"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
 
 
