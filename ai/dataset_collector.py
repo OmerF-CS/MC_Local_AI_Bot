@@ -12,6 +12,8 @@ import threading
 from typing import Dict, Any, List, Optional
 from utils.logger import get_logger
 
+from utils.run_context import get_current_run_id, get_run_directory
+
 logger = get_logger("DatasetCollector")
 
 # Resource-to-drop mapping for common Minecraft block break items
@@ -38,12 +40,19 @@ BLOCK_DROP_MAPPINGS = {
 class DatasetCollector:
     """Collects and validates high-quality decision samples for model tuning."""
 
-    def __init__(self, output_path: Optional[str] = None, max_duplicates_per_bucket: int = 3):
+    def __init__(self, output_path: Optional[str] = None, max_duplicates_per_bucket: int = 3, run_id: Optional[str] = None):
+        self.run_id = run_id or get_current_run_id()
         if output_path is None:
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             self.output_path = os.path.join(base_dir, "data", "minecraft_decisions.jsonl")
         else:
             self.output_path = output_path
+
+        try:
+            run_dir = get_run_directory(self.run_id)
+            self.run_output_path = os.path.join(run_dir, "decisions.jsonl")
+        except Exception:
+            self.run_output_path = None
 
         self.max_duplicates = max_duplicates_per_bucket
         self._lock = threading.Lock()
@@ -330,6 +339,7 @@ class DatasetCollector:
             pos = pre_state.get("position") or {"x": 0, "y": 0, "z": 0}
             owner_info = pre_state.get("owner_info") or {}
             record = {
+                "run_id": self.run_id or get_current_run_id(),
                 "timestamp": round(time.time(), 3),
                 "milestone": {
                     "stage": pre_state.get("goal_stage", "unknown"),
@@ -365,8 +375,18 @@ class DatasetCollector:
             }
 
             try:
+                # 1. Primary shared file
                 with open(self.output_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+                # 2. Run-isolated file (runs/<run_id>/decisions.jsonl)
+                if self.run_output_path:
+                    try:
+                        os.makedirs(os.path.dirname(self.run_output_path), exist_ok=True)
+                        with open(self.run_output_path, "a", encoding="utf-8") as rf:
+                            rf.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    except Exception as run_err:
+                        logger.debug(f"Notice: Could not write run-isolated decisions.jsonl: {run_err}")
 
                 self.stats["total_recorded"] += 1
                 if progress_made:

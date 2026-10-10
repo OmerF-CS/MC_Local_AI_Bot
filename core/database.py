@@ -4,11 +4,22 @@ import os
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 
+from utils.run_context import get_current_run_id
+
 logger = logging.getLogger("Database")
 
 class Database:
     def __init__(self, db_path="minecraft_bot.db"):
-        self.db_path = os.path.join(os.path.dirname(__file__), db_path)
+        env_db = os.getenv("MC_DB_PATH")
+        if env_db and (db_path == "minecraft_bot.db" or not db_path):
+            chosen = env_db
+        else:
+            chosen = db_path
+
+        if os.path.isabs(chosen):
+            self.db_path = chosen
+        else:
+            self.db_path = os.path.join(os.path.dirname(__file__), chosen)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
@@ -133,10 +144,49 @@ class Database:
                 )
             """)
 
+            # Run Isolation & Metadata (Task 1)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS runs (
+                    run_id TEXT PRIMARY KEY,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    commit_hash TEXT DEFAULT '',
+                    is_test INTEGER DEFAULT 0,
+                    model_name TEXT DEFAULT '',
+                    notes TEXT DEFAULT ''
+                )
+            """)
+
+            # Column migrations: Ensure run_id exists in operational tables
+            tables_to_migrate = [
+                "progression_checkpoints",
+                "death_points",
+                "beds",
+                "chests",
+                "ore_map",
+                "chat_history"
+            ]
+            for tbl in tables_to_migrate:
+                try:
+                    cur = self.conn.execute(f"PRAGMA table_info({tbl})")
+                    cols = [r["name"] for r in cur.fetchall()]
+                    if "run_id" not in cols:
+                        self.conn.execute(f"ALTER TABLE {tbl} ADD COLUMN run_id TEXT DEFAULT ''")
+                except Exception as e:
+                    logger.debug(f"Migration notice for {tbl}: {e}")
+
             try:
                 self.conn.execute("ALTER TABLE task_queue ADD COLUMN args_json TEXT DEFAULT '{}'")
             except Exception:
                 pass
+
+    def record_run(self, run_id: Optional[str] = None, commit_hash: str = "", is_test: bool = False, model_name: str = "", notes: str = ""):
+        """Records or updates a run record in the database."""
+        rid = run_id or get_current_run_id()
+        with self.conn:
+            self.conn.execute("""
+                INSERT OR REPLACE INTO runs (run_id, commit_hash, is_test, model_name, notes)
+                VALUES (?, ?, ?, ?, ?)
+            """, (rid, commit_hash, 1 if is_test else 0, model_name, notes))
 
     def save_location(self, name: str, x: float, y: float, z: float, description: str = "", created_by: str = ""):
         """Saves a world coordinate with a name into memory."""
@@ -159,13 +209,14 @@ class Database:
         cur.execute("SELECT * FROM locations ORDER BY name ASC")
         return [dict(row) for row in cur.fetchall()]
 
-    def log_chat(self, sender: str, message: str, role: str = "user"):
+    def log_chat(self, sender: str, message: str, role: str = "user", run_id: Optional[str] = None):
         """Logs chat messages to database."""
+        rid = run_id or get_current_run_id()
         with self.conn:
             self.conn.execute("""
-                INSERT INTO chat_history (sender, message, role)
-                VALUES (?, ?, ?)
-            """, (sender, message, role))
+                INSERT INTO chat_history (sender, message, role, run_id)
+                VALUES (?, ?, ?, ?)
+            """, (sender, message, role, rid))
 
     def update_player(self, username: str):
         """Updates player metadata and interaction count."""
@@ -180,14 +231,15 @@ class Database:
 
     # --- PROGRESSION CHECKPOINTS ---
 
-    def save_progression(self, stage: str, target: str, inventory: Optional[Dict[str, int]] = None):
+    def save_progression(self, stage: str, target: str, inventory: Optional[Dict[str, int]] = None, run_id: Optional[str] = None):
         """Saves current milestone progression era to database."""
         inv_str = json.dumps(inventory or {})
+        rid = run_id or get_current_run_id()
         with self.conn:
             self.conn.execute("""
-                INSERT INTO progression_checkpoints (stage, target, inventory_json)
-                VALUES (?, ?, ?)
-            """, (stage, target, inv_str))
+                INSERT INTO progression_checkpoints (stage, target, inventory_json, run_id)
+                VALUES (?, ?, ?, ?)
+            """, (stage, target, inv_str, rid))
             logger.info(f"💾 Progression checkpoint saved: {stage} -> {target}")
 
     def get_latest_progression(self) -> Optional[Dict[str, Any]]:
@@ -264,14 +316,15 @@ class Database:
 
     # --- DEATH RECOVERY & CORPSE RECOVERY (F0.3) ---
 
-    def save_death_point(self, dim: str, x: float, y: float, z: float, inventory: Optional[List[Dict[str, Any]]] = None) -> int:
+    def save_death_point(self, dim: str, x: float, y: float, z: float, inventory: Optional[List[Dict[str, Any]]] = None, run_id: Optional[str] = None) -> int:
         """Records a bot death location and inventory snapshot for corpse recovery."""
         inv_str = json.dumps(inventory or [])
+        rid = run_id or get_current_run_id()
         with self.conn:
             cur = self.conn.execute("""
-                INSERT INTO death_points (dim, x, y, z, inventory_json, recovered)
-                VALUES (?, ?, ?, ?, ?, 0)
-            """, (dim, x, y, z, inv_str))
+                INSERT INTO death_points (dim, x, y, z, inventory_json, recovered, run_id)
+                VALUES (?, ?, ?, ?, ?, 0, ?)
+            """, (dim, x, y, z, inv_str, rid))
             return cur.lastrowid
 
     def get_unrecovered_death_point(self, dim: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -309,13 +362,14 @@ class Database:
 
     # --- BEDS & SPAWN POINTS (F1.1) ---
 
-    def save_bed_location(self, dim: str, x: float, y: float, z: float, is_spawn: bool = True):
+    def save_bed_location(self, dim: str, x: float, y: float, z: float, is_spawn: bool = True, run_id: Optional[str] = None):
         """Saves a bed location and spawn status."""
+        rid = run_id or get_current_run_id()
         with self.conn:
             self.conn.execute("""
-                INSERT INTO beds (dim, x, y, z, used_for_spawn)
-                VALUES (?, ?, ?, ?, ?)
-            """, (dim, x, y, z, 1 if is_spawn else 0))
+                INSERT INTO beds (dim, x, y, z, used_for_spawn, run_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (dim, x, y, z, 1 if is_spawn else 0, rid))
 
     def get_latest_bed(self, dim: str = "overworld") -> Optional[Dict[str, Any]]:
         """Returns the latest known bed location in the given dimension."""
@@ -330,14 +384,15 @@ class Database:
 
     # --- CHESTS & INVENTORY STORAGE (F1.5) ---
 
-    def save_chest_location(self, dim: str, x: float, y: float, z: float, items: Optional[List[Dict[str, Any]]] = None) -> int:
+    def save_chest_location(self, dim: str, x: float, y: float, z: float, items: Optional[List[Dict[str, Any]]] = None, run_id: Optional[str] = None) -> int:
         """Saves or updates a chest location and snapshot of contents."""
         items_str = json.dumps(items or [])
+        rid = run_id or get_current_run_id()
         with self.conn:
             cur = self.conn.execute("""
-                INSERT INTO chests (dim, x, y, z, items_json)
-                VALUES (?, ?, ?, ?, ?)
-            """, (dim, x, y, z, items_str))
+                INSERT INTO chests (dim, x, y, z, items_json, run_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (dim, x, y, z, items_str, rid))
             return cur.lastrowid
 
     def get_nearby_chests(self, dim: str = "overworld", x: float = 0.0, y: float = 0.0, z: float = 0.0, max_dist: float = 48.0) -> List[Dict[str, Any]]:
@@ -364,13 +419,14 @@ class Database:
 
     # --- PERSISTENT ORE MAP (Phase 2 / F2.2) ---
 
-    def save_ore(self, dim: str, x: int, y: int, z: int, block: str) -> bool:
+    def save_ore(self, dim: str, x: int, y: int, z: int, block: str, run_id: Optional[str] = None) -> bool:
         """Saves a discovered ore vein coordinate to memory."""
+        rid = run_id or get_current_run_id()
         with self.conn:
             self.conn.execute("""
-                INSERT OR IGNORE INTO ore_map (dim, x, y, z, block)
-                VALUES (?, ?, ?, ?, ?)
-            """, (dim, int(x), int(y), int(z), block.lower()))
+                INSERT OR IGNORE INTO ore_map (dim, x, y, z, block, run_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (dim, int(x), int(y), int(z), block.lower(), rid))
             return True
 
     def get_unmined_ores(self, dim: str = "overworld", block_type: Optional[str] = None, x: float = 0.0, y: float = 0.0, z: float = 0.0, max_dist: float = 64.0) -> List[Dict[str, Any]]:

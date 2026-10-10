@@ -5,10 +5,17 @@ import signal
 import sys
 import time
 import threading
+import argparse
 from typing import Optional, Dict, Any, List
 
 from utils.config import Config
 from utils.logger import setup_logging, get_logger
+from utils.run_context import (
+    get_current_run_id,
+    set_current_run_id,
+    generate_run_id,
+    write_run_metadata,
+)
 from core.database import Database
 from core.bridge import MinecraftBridge
 from core.chat_handler import MinecraftChatHandler
@@ -24,7 +31,19 @@ class MinecraftAIBot:
     
     def __init__(self, config: Config):
         self.config = config
-        self.db = Database("minecraft_bot.db")
+        if config.RUN_ID:
+            set_current_run_id(config.RUN_ID)
+        self.run_id = get_current_run_id()
+        self.db = Database(config.DB_PATH)
+        is_test_run = self.run_id.startswith("test_")
+        self.db.record_run(self.run_id, is_test=is_test_run, model_name=config.OLLAMA_MODEL)
+        write_run_metadata(self.run_id, {
+            "status": "starting",
+            "model_name": config.OLLAMA_MODEL,
+            "db_path": config.DB_PATH,
+            "is_test": is_test_run,
+        })
+
         self.bridge = MinecraftBridge(host=config.BRIDGE_HOST, port=config.BRIDGE_PORT)
 
         self.brain = OllamaBrain(
@@ -35,7 +54,7 @@ class MinecraftAIBot:
         )
 
         self.planner = AutonomousCoopBrain(self.brain, bot_owner=config.BOT_OWNER, db=self.db)
-        self.dataset_collector = DatasetCollector()
+        self.dataset_collector = DatasetCollector(run_id=self.run_id)
         self.chat_handler = MinecraftChatHandler(self)
         self.node_process: subprocess.Popen | None = None
         self.autonomous_mode = True
@@ -511,11 +530,33 @@ class MinecraftAIBot:
             except Exception as e:
                 logger.error(f"Subprocess cleanup error: {e}")
 
+        try:
+            write_run_metadata(self.run_id, {
+                "status": "completed",
+                "summary": "Bot shutdown complete cleanly"
+            })
+        except Exception as e:
+            logger.debug(f"Failed to record final run metadata: {e}")
+
         logger.info("👋 Bot shutdown complete.")
 
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="MC Local AI Bot Orchestrator")
+    parser.add_argument("--run-id", type=str, default="", help="Custom run identifier")
+    parser.add_argument("--db-path", type=str, default="", help="Custom SQLite database file path")
+    parser.add_argument("--test", action="store_true", help="Flag this session as a test run")
+    args, _ = parser.parse_known_args()
+
+    if args.run_id:
+        os.environ["MC_RUN_ID"] = args.run_id
+    elif args.test and not os.getenv("MC_RUN_ID"):
+        os.environ["MC_RUN_ID"] = generate_run_id(is_test=True)
+
+    if args.db_path:
+        os.environ["MC_DB_PATH"] = args.db_path
+
     config = Config.load_from_env()
     setup_logging(config)
 

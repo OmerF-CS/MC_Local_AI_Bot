@@ -50,3 +50,5 @@ test_server/logs/
 test_server/*.jar
 test_server/*.json
 
+# Run artifacts and isolated test/benchmark sessions
+runs/

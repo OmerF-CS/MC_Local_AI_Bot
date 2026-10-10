@@ -40,6 +40,10 @@ class Config:
     # Communication / Cooldown
     COOLDOWN_SECONDS: float = 0.2
 
+    # Run and Database Isolation
+    RUN_ID: str = ""
+    DB_PATH: str = "minecraft_bot.db"
+
     @classmethod
     def load_from_env(cls) -> "Config":
         """Loads configuration from environment variables or .env file."""
@@ -61,7 +65,9 @@ class Config:
             BOT_OWNER=os.getenv("BOT_OWNER", "Omer"),
             LOG_LEVEL=os.getenv("LOG_LEVEL", "INFO"),
             COMMAND_PREFIX=os.getenv("COMMAND_PREFIX", "!"),
-            COOLDOWN_SECONDS=_safe_float(os.getenv("COOLDOWN_SECONDS"), 0.2)
+            COOLDOWN_SECONDS=_safe_float(os.getenv("COOLDOWN_SECONDS"), 0.2),
+            RUN_ID=os.getenv("MC_RUN_ID", ""),
+            DB_PATH=os.getenv("MC_DB_PATH", "minecraft_bot.db")
         )
     
     def validate(self) -> List[str]:
