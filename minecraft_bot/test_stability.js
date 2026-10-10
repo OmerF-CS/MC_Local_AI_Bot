@@ -358,6 +358,37 @@ asyncio.run(check())
         assert.strictEqual(result.sealed, true, "Sealed bunker should have sealed=true");
     });
 
+    await runTest("verifyAndRepairBunker: partial repair (remaining gaps > 0) reports sealed=false and remaining count", async () => {
+        const placedBlocks = [];
+        const mockBot = {
+            entity: { position: new Vec3(20, 64, 20) },
+            inventory: {
+                items: () => [{ name: 'cobblestone', count: 1 }] // Only 1 block to repair 2 gaps
+            },
+            equip: async () => {},
+            placeBlock: async (refBlock, faceVec) => {
+                placedBlocks.push({ ref: refBlock, face: faceVec });
+            },
+            blockAt: (pos) => {
+                // Gap 1 at (21, 64, 20) gets repaired
+                if (pos.x === 21 && pos.y === 64 && pos.z === 20) {
+                    if (placedBlocks.length > 0) return { name: 'cobblestone', boundingBox: 'block' };
+                    return { name: 'air', boundingBox: 'empty' };
+                }
+                // Gap 2 at (19, 64, 20) remains open (no materials)
+                if (pos.x === 19 && pos.y === 64 && pos.z === 20) {
+                    return { name: 'air', boundingBox: 'empty' };
+                }
+                return { name: 'cobblestone', boundingBox: 'block' };
+            }
+        };
+
+        const result = await verifyAndRepairBunker(mockBot);
+        assert.strictEqual(result.sealed, false, "Partial repair must report sealed=false");
+        assert.strictEqual(result.remaining, 1, "Must report remaining=1");
+        assert.strictEqual(result.repaired, 1, "Must report repaired=1");
+    });
+
     // ------------------------------------------------------------------
     // TEST SUITE 7: Eat & Eat Food Action Handling (F1-1)
     // ------------------------------------------------------------------

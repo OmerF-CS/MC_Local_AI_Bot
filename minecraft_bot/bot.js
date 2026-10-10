@@ -3788,10 +3788,24 @@ async function verifyAndRepairBunker(bot) {
         }
     }
 
-    const physicallySheltered = isPhysicallySheltered(bot);
-    isSheltered = physicallySheltered;
-    console.log(`🏰 [Bunker Verification] Final bunker status: sealed=${physicallySheltered}, repaired=${repairedCount}/${missingGaps.length} gap(s).`);
-    return { sealed: physicallySheltered, repaired: repairedCount, gaps: missingGaps.length };
+    // Re-verify actual remaining open gaps after repair attempts
+    let remainingGaps = 0;
+    for (const off of requiredOffsets) {
+        const p = myPos.offset(off.x, off.y, off.z);
+        const b = (typeof bot.blockAt === 'function') ? bot.blockAt(p) : null;
+        if (!b || b.name === 'air' || b.name === 'cave_air' || b.name === 'water' || b.name === 'lava') {
+            remainingGaps++;
+        }
+    }
+
+    const fullySealed = (remainingGaps === 0);
+    isSheltered = fullySealed;
+    if (fullySealed) {
+        console.log(`🏰 [Bunker Verification] Final bunker status: sealed=true, repaired=${repairedCount}/${missingGaps.length} gap(s).`);
+    } else {
+        console.log(`🏰 [Bunker Verification] Final bunker status: sealed=false, remaining=${remainingGaps}, repaired=${repairedCount}/${missingGaps.length} gap(s).`);
+    }
+    return { sealed: fullySealed, repaired: repairedCount, gaps: missingGaps.length, remaining: remainingGaps };
 }
 
 async function buildShelter(bot, mode = 'auto') {
