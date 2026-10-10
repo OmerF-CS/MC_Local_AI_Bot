@@ -2735,7 +2735,9 @@ async function farmCrops(bot, actionType = 'auto') {
                     console.warn(`[Farm] Bread crafting error: ${err.message}`);
                 }
             }
-            return true;
+            if (harvestedHay > 0) {
+                return true;
+            }
         }
     }
 
@@ -4560,7 +4562,8 @@ async function handleAction(action) {
                             actionError = `did_not_reach_destination (dist=${dist.toFixed(1)}m > range=${range}m)`;
                         }
                     } else {
-                        actionSuccess = true;
+                        actionSuccess = false;
+                        actionError = 'position_unknown';
                     }
                 } catch (err) {
                     actionSuccess = false;

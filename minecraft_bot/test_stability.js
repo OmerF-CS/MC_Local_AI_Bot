@@ -489,12 +489,14 @@ asyncio.run(check())
     console.log("\n[Suite 9] Honest Action Outcomes (farm_crops & go_to_coordinates):");
 
     await runTest("farm_crops: returns success=false and reason=no_crop_found when no crops available", async () => {
+        let chatMessage = '';
         const mockBot = {
             entity: { position: { x: 0, y: 64, z: 0 } },
             version: '1.20.4',
             inventory: { items: () => [] },
             findBlocks: () => [],
-            chat: () => {},
+            blockAt: () => null,
+            chat: (msg) => { chatMessage = msg; },
             pathfinder: { stop: () => {} }
         };
         setBotInstance(mockBot);
@@ -510,6 +512,7 @@ asyncio.run(check())
             assert.strictEqual(sentResult.success, false, "Expected success=false when no crops found");
             assert.strictEqual(sentResult.reason, "no_crop_found", "Expected reason=no_crop_found");
             assert.strictEqual(sentResult.error, "no_crop_found", "Expected error=no_crop_found");
+            assert.ok(chatMessage.includes("No harvestable crops"), "Expected line 2876 chat message executed");
         } finally {
             setSendToPythonOverride(null);
         }
@@ -589,19 +592,60 @@ asyncio.run(check())
         }
     });
 
+    await runTest("go_to_coordinates: returns success=false and reason=position_unknown when currentPos is missing", async () => {
+        let callCount = 0;
+        const mockBot = {
+            get entity() {
+                callCount++;
+                if (callCount <= 2) return { position: { x: 0, y: 64, z: 0, distanceTo: () => 10 } };
+                return null;
+            },
+            version: '1.20.4',
+            pathfinder: {
+                goto: async () => {},
+                stop: () => {}
+            },
+            chat: () => {}
+        };
+        setBotInstance(mockBot);
+
+        let sentResult = null;
+        setSendToPythonOverride((payload) => {
+            if (payload.type === 'action_completed') sentResult = payload;
+        });
+
+        try {
+            await handleAction({
+                command: 'go_to_coordinates',
+                args: { x: 50, y: 64, z: 50, range: 2 },
+                action_id: 'test_goto_no_pos'
+            });
+            assert.ok(sentResult !== null, "Expected action_completed payload");
+            assert.strictEqual(sentResult.success, false, "Must return success=false when currentPos missing");
+            assert.strictEqual(sentResult.error, "position_unknown", "Expected position_unknown error");
+        } finally {
+            setSendToPythonOverride(null);
+        }
+    });
+
     // ------------------------------------------------------------------
     // TEST SUITE 10: F1-R9 Precision Fixes (farmCrops empty area, 0 food/health, autoEatCheck 18 threshold)
     // ------------------------------------------------------------------
     console.log("\n[Suite 10] F1-R9 Precision Fixes (farmCrops empty, 0 food/health, autoEatCheck 18 threshold):");
 
     await runTest("farmCrops: returns false when no harvestable crops or tilling spots found", async () => {
+        let chatMessage = '';
         const mockBot = {
+            version: '1.20.4',
+            entity: { position: { x: 0, y: 64, z: 0 } },
             findBlocks: () => [],
             inventory: { items: () => [] },
-            chat: () => {}
+            blockAt: () => null,
+            chat: (msg) => { chatMessage = msg; }
         };
         const res = await farmCrops(mockBot);
         assert.strictEqual(res, false, "farmCrops must return false in empty area");
+        assert.ok(chatMessage.includes("No harvestable crops"), "Expected line 2876 chat message executed");
     });
 
     await runTest("getBotState: preserves health=0 and food=0 exactly without defaulting to 20", () => {

@@ -478,13 +478,20 @@ class MinecraftAIBot:
                 now_state_t = time.time()
                 if now_state_t - getattr(self, "_last_minute_state_log_time", 0.0) >= 60.0:
                     self._last_minute_state_log_time = now_state_t
-                    cur_hp = state.get("health", 0.0)
-                    cur_food = state.get("food", 0.0)
-                    pos = state.get("position", {})
+                    raw_hp = state.get("health")
+                    raw_food = state.get("food")
+                    hp_str = f"{raw_hp:.2f}" if isinstance(raw_hp, (int, float)) else "n/a"
+                    food_str = f"{raw_food:.1f}" if isinstance(raw_food, (int, float)) else "n/a"
+                    pos = state.get("position")
+                    pos_str = (
+                        f"({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})"
+                        if isinstance(pos, dict) and "x" in pos
+                        else "n/a"
+                    )
                     logger.info(
                         f"📊 [getBotState Minute Monitor] timestamp={now_state_t:.0f} | "
-                        f"hp={cur_hp:.2f} | food={cur_food:.1f} | "
-                        f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f}) | "
+                        f"hp={hp_str} | food={food_str} | "
+                        f"pos={pos_str} | "
                         f"is_sheltered={state.get('is_sheltered', False)}"
                     )
 
