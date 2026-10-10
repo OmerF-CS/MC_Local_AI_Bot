@@ -65,7 +65,8 @@ let lastKnownDimension = 'overworld';
 const FOOD_NAMES = [
     'cooked_beef', 'cooked_porkchop', 'bread', 'apple', 'golden_apple',
     'cooked_chicken', 'baked_potato', 'cooked_mutton', 'carrot',
-    'cooked_cod', 'cooked_salmon', 'melon_slice'
+    'cooked_cod', 'cooked_salmon', 'melon_slice', 'sweet_berries',
+    'beef', 'porkchop', 'mutton', 'chicken'
 ];
 
 // --- WEBSOCKET BRIDGE CONNECTION ---
