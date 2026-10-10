@@ -840,6 +840,8 @@ async function autoTorchCheck() {
 
 // --- AUTO-SELF DEFENSE AGAINST SURROUNDING HOSTILE MOBS ---
 let lastDefenseRetreatTime = 0;
+let lastRetreatThreatKey = null;
+let lastRetreatCannotEscape = false;
 let hadHostilesRecently = false;
 let isCollectingDefenseDrops = false;
 let lastMeleeAttackTime = 0;
@@ -1068,21 +1070,64 @@ async function autoSelfDefenseCheck(customBot = null) {
         const mobName = dangerMob.name.toLowerCase();
         const threatScore = calculateThreatScore(bot, hostileEntities);
 
-        // 1. Critical health + high threat -> Tactical Retreat
+        // 1. Critical health + high threat -> Tactical Retreat (F1-3)
         if (!isBusy && !isSheltered && (bot.health <= 6 || (bot.health <= 10 && threatScore >= 40))) {
             const now = Date.now();
-            if (now - lastDefenseRetreatTime > 3000) {
+            const dangerMobKey = `${mobName}_${dangerMob.id || dangerMob.type || 0}`;
+            const threatLevelKey = `${Math.round(threatScore / 10)}_${Math.round(dist / 4)}`;
+            const currentThreatKey = `${dangerMobKey}_${threatLevelKey}`;
+            const sameThreat = (currentThreatKey === lastRetreatThreatKey);
+
+            // F1-3: Kaçacak yer yoksa tekrar log basılmaz; durum değişince yeniden yazılır.
+            if (sameThreat && lastRetreatCannotEscape) {
+                return;
+            }
+
+            // F1-3: aynı tehdit durumu için log en fazla 15 sn'de bir yazılır.
+            if (!sameThreat || (now - lastDefenseRetreatTime >= 15000)) {
                 lastDefenseRetreatTime = now;
+                lastRetreatThreatKey = currentThreatKey;
                 console.log(`⚠️ [Combat Engine] High threat (${threatScore}) & low HP (${bot.health})! Retreating...`);
                 if (bot.pvp) bot.pvp.stop();
                 lowerShield(bot);
+
                 const awayVec = bot.entity.position.minus(dangerMob.position).normalize();
                 const retreatGoalPos = bot.entity.position.plus(awayVec.scaled(8));
+
+                // Check if bot is completely trapped / boxed in (nowhere to escape)
+                let canEscape = true;
                 try {
-                    const { GoalNear } = goals;
-                    bot.pathfinder.setGoal(new GoalNear(retreatGoalPos.x, retreatGoalPos.y, retreatGoalPos.z, 2));
+                    const feetPos = bot.entity.position.floored();
+                    const dirs = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)];
+                    const cardinalBlocked = dirs.every(d => {
+                        const b1 = (typeof bot.blockAt === 'function') ? bot.blockAt(feetPos.plus(d)) : null;
+                        const b2 = (typeof bot.blockAt === 'function') ? bot.blockAt(feetPos.plus(d).offset(0, 1, 0)) : null;
+                        return (b1 && b1.boundingBox === 'block') && (b2 && b2.boundingBox === 'block');
+                    });
+                    if (cardinalBlocked) {
+                        canEscape = false;
+                        lastRetreatCannotEscape = true;
+                    }
                 } catch (_) {}
+
+                if (canEscape) {
+                    try {
+                        const { GoalNear } = goals;
+                        bot.pathfinder.setGoal(new GoalNear(retreatGoalPos.x, retreatGoalPos.y, retreatGoalPos.z, 2));
+                    } catch (_) {
+                        lastRetreatCannotEscape = true;
+                    }
+                }
                 return;
+            } else {
+                // Throttled within 15s for the same threat state - do not spam log or re-set goals
+                return;
+            }
+        } else {
+            // Threat resolved or dropped - re-arm retreat escape state
+            if (lastRetreatThreatKey && threatScore < 20) {
+                lastRetreatThreatKey = null;
+                lastRetreatCannotEscape = false;
             }
         }
 
@@ -1370,6 +1415,34 @@ function createBot() {
                 });
             }
         }, 500);
+
+        // F1-1 & F1-2: Track HP recovery and hunger
+        let lastReportedHp = bot.health || 20;
+        let lastReportedFood = bot.food || 20;
+        bot.on('health', () => {
+            try {
+                const currentHp = bot.health;
+                const currentFood = bot.food;
+                if (lastReportedHp < 8 && currentHp > lastReportedHp) {
+                    console.log(`❤️ [Health Monitor] HP increased from ${lastReportedHp.toFixed(1)} to ${currentHp.toFixed(1)}! (Hunger: ${currentFood}/20)`);
+                }
+                lastReportedHp = currentHp;
+                lastReportedFood = currentFood;
+            } catch (_) {}
+        });
+
+        // F1-4: Explosion packet listener to re-verify bunker integrity
+        if (bot._client) {
+            bot._client.on('explosion', async (packet) => {
+                try {
+                    const rad = packet && packet.radius ? packet.radius : 0;
+                    console.log(`💥 [Bunker Verification] Explosion packet received (radius=${rad})! Re-verifying bunker wall integrity...`);
+                    await verifyAndRepairBunker(bot);
+                } catch (err) {
+                    console.warn(`[Bunker] Error during post-explosion repair: ${err.message}`);
+                }
+            });
+        }
 
         sendToPython({
             type: 'bot_spawned',
@@ -2033,8 +2106,9 @@ async function collectNearbyDrops(bot, maxDistance = 12) {
 // --- PHASE 3: NETHER & END PROGRESSION HELPERS ---
 
 async function placeBlockDirect(bot, item, targetPos) {
-    if (!item) return false;
-    const currentBlock = bot.blockAt(targetPos);
+    if (!item || !targetPos) return false;
+    const pos = (typeof targetPos.minus === 'function') ? targetPos : new Vec3(targetPos.x, targetPos.y, targetPos.z);
+    const currentBlock = bot.blockAt(pos);
     if (currentBlock && currentBlock.name !== 'air' && currentBlock.name !== 'cave_air' && currentBlock.name !== 'water' && currentBlock.name !== 'lava') {
         return true;
     }
@@ -2052,7 +2126,7 @@ async function placeBlockDirect(bot, item, targetPos) {
     let faceVector = null;
 
     for (const dir of directions) {
-        const neighborPos = targetPos.minus(dir);
+        const neighborPos = pos.minus(dir);
         const neighbor = bot.blockAt(neighborPos);
         if (neighbor && neighbor.name !== 'air' && neighbor.name !== 'cave_air' && neighbor.name !== 'water' && neighbor.name !== 'lava') {
             refBlock = neighbor;
@@ -2063,10 +2137,13 @@ async function placeBlockDirect(bot, item, targetPos) {
 
     if (!refBlock) return false;
 
-    const dist = bot.entity.position.distanceTo(targetPos);
-    if (dist > 3.8) {
+    const botPos = (bot.entity && typeof bot.entity.position?.distanceTo === 'function')
+        ? bot.entity.position
+        : new Vec3(bot.entity?.position?.x || 0, bot.entity?.position?.y || 0, bot.entity?.position?.z || 0);
+    const dist = botPos.distanceTo(pos);
+    if (dist > 3.8 && bot.pathfinder && typeof bot.pathfinder.goto === 'function') {
         const { GoalNear } = goals;
-        await bot.pathfinder.goto(new GoalNear(targetPos.x, targetPos.y, targetPos.z, 2.5)).catch(() => {});
+        await bot.pathfinder.goto(new GoalNear(pos.x, pos.y, pos.z, 2.5)).catch(() => {});
     }
 
     await bot.equip(item, 'hand');
@@ -3592,6 +3669,78 @@ async function flyWithElytra(bot, targetX, targetY, targetZ) {
     return { success: true, reason: 'elytra_flight_performed' };
 }
 
+const SOLID_BUILDING_BLOCK_NAMES = [
+    'cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'blackstone',
+    'granite', 'diorite', 'andesite', 'tuff', 'calcite', 'dirt', 'mud', 'packed_mud',
+    'netherrack', 'end_stone', 'sandstone', 'red_sandstone', 'basalt',
+    'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks',
+    'dark_oak_planks', 'mangrove_planks', 'cherry_planks', 'bamboo_planks'
+];
+
+async function verifyAndRepairBunker(bot) {
+    if (!bot || !bot.entity || !bot.entity.position) {
+        return { sealed: false, repaired: 0, gaps: 0 };
+    }
+    const myPos = bot.entity.position.floored();
+    console.log(`🏰 [Bunker Verification] Checking bunker walls and roof integrity at (${myPos.x}, ${myPos.y}, ${myPos.z})...`);
+
+    // 4 cardinal walls (feet level Y and head level Y+1) + roof (Y+2)
+    const requiredOffsets = [
+        new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+        new Vec3(1, 1, 0), new Vec3(-1, 1, 0), new Vec3(0, 1, 1), new Vec3(0, 1, -1),
+        new Vec3(0, 2, 0)
+    ];
+
+    const missingGaps = [];
+    for (const off of requiredOffsets) {
+        const p = myPos.offset(off.x, off.y, off.z);
+        const b = (typeof bot.blockAt === 'function') ? bot.blockAt(p) : null;
+        if (!b || b.name === 'air' || b.name === 'cave_air' || b.name === 'water' || b.name === 'lava') {
+            missingGaps.push({ offset: off, position: p });
+        }
+    }
+
+    if (missingGaps.length === 0) {
+        console.log(`🏰 [Bunker Verification] Bunker walls and roof verified: 100% sealed (0 gaps found).`);
+        isSheltered = true;
+        return { sealed: true, repaired: 0, gaps: 0 };
+    }
+
+    console.log(`⚠️ [Bunker Verification] Bunker integrity compromised: ${missingGaps.length} missing wall/roof block(s) detected. Attempting repair...`);
+    let repairedCount = 0;
+
+    for (const gap of missingGaps) {
+        const placePos = gap.position;
+        const blockItem = (bot.inventory && typeof bot.inventory.items === 'function')
+            ? bot.inventory.items().find(i => SOLID_BUILDING_BLOCK_NAMES.includes(i.name) || i.name.endsWith('_planks'))
+            : null;
+
+        if (!blockItem) {
+            console.log(`❌ [Bunker Repair] Missing building materials in inventory. Cannot repair gap at (${placePos.x}, ${placePos.y}, ${placePos.z}).`);
+            continue;
+        }
+
+        console.log(`🧱 [Bunker Repair] Attempting repair at (${placePos.x}, ${placePos.y}, ${placePos.z}) with ${blockItem.name}...`);
+        try {
+            await placeBlockDirect(bot, blockItem, placePos);
+            const verified = (typeof bot.blockAt === 'function') ? bot.blockAt(placePos) : null;
+            if (verified && verified.name !== 'air' && verified.name !== 'cave_air') {
+                console.log(`✅ [Bunker Repair] Successfully repaired wall at (${placePos.x}, ${placePos.y}, ${placePos.z}).`);
+                repairedCount++;
+            } else {
+                console.log(`⚠️ [Bunker Repair] Gap at (${placePos.x}, ${placePos.y}, ${placePos.z}) remained open after placement attempt.`);
+            }
+        } catch (err) {
+            console.log(`❌ [Bunker Repair] Repair attempt failed at (${placePos.x}, ${placePos.y}, ${placePos.z}): ${err.message}`);
+        }
+    }
+
+    const physicallySheltered = isPhysicallySheltered(bot);
+    isSheltered = physicallySheltered;
+    console.log(`🏰 [Bunker Verification] Final bunker status: sealed=${physicallySheltered}, repaired=${repairedCount}/${missingGaps.length} gap(s).`);
+    return { sealed: physicallySheltered, repaired: repairedCount, gaps: missingGaps.length };
+}
+
 async function buildShelter(bot, mode = 'auto') {
     if (!bot || !bot.entity) return false;
     const { GoalNear } = goals;
@@ -3599,13 +3748,7 @@ async function buildShelter(bot, mode = 'auto') {
     bot.pathfinder.stop();
 
     // 1. Identify all usable solid building blocks in inventory
-    const SOLID_NAMES = [
-        'cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'blackstone',
-        'granite', 'diorite', 'andesite', 'tuff', 'calcite', 'dirt', 'mud', 'packed_mud',
-        'netherrack', 'end_stone', 'sandstone', 'red_sandstone', 'basalt',
-        'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks',
-        'dark_oak_planks', 'mangrove_planks', 'cherry_planks', 'bamboo_planks'
-    ];
+    const SOLID_NAMES = SOLID_BUILDING_BLOCK_NAMES;
 
     let availableBlocks = bot.inventory.items().filter(i => {
         return SOLID_NAMES.includes(i.name) || i.name.endsWith('_planks') || i.name.endsWith('_cobblestone');
@@ -3668,8 +3811,8 @@ async function buildShelter(bot, mode = 'auto') {
             }
         }
 
-        const sealed = isPhysicallySheltered(bot);
-        if (!sealed) {
+        const verifyResult = await verifyAndRepairBunker(bot);
+        if (!verifyResult.sealed) {
             isSheltered = false;
             bot.chat("⚠️ Emergency burrow failed to fully seal!");
             return false;
@@ -3708,8 +3851,8 @@ async function buildShelter(bot, mode = 'auto') {
         } catch (_) {}
     }
 
-    const sealed = isPhysicallySheltered(bot);
-    if (!sealed) {
+    const verifyResult = await verifyAndRepairBunker(bot);
+    if (!verifyResult.sealed) {
         isSheltered = false;
         bot.chat("⚠️ Emergency bunker failed to fully seal!");
         return false;
@@ -4018,7 +4161,7 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest', 'barter_with_piglins', 'hunt_hoglin', 'setup_respawn_anchor', 'explore_end_city', 'eat_chorus_fruit'].includes(command)) {
+    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest', 'barter_with_piglins', 'hunt_hoglin', 'setup_respawn_anchor', 'explore_end_city', 'eat_chorus_fruit', 'eat', 'eat_food'].includes(command)) {
         isBusy = true;
         currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || args.action_type || args.mode || args.gear_type || ''}`;
         sendToPython({
@@ -4376,6 +4519,7 @@ async function handleAction(action) {
                 break;
             }
 
+            case 'eat':
             case 'eat_food': {
                 const foodItem = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
                 if (foodItem) {
@@ -4930,5 +5074,8 @@ module.exports = {
     setBotInstance: (b) => { bot = b; },
     getBotInstance: () => bot,
     getConsecutiveProcessErrors: () => consecutiveProcessErrors,
-    resetConsecutiveProcessErrors: () => { consecutiveProcessErrors = 0; }
+    resetConsecutiveProcessErrors: () => { consecutiveProcessErrors = 0; },
+    verifyAndRepairBunker,
+    getDefenseRetreatState: () => ({ lastDefenseRetreatTime, lastRetreatThreatKey, lastRetreatCannotEscape }),
+    resetDefenseRetreatState: () => { lastDefenseRetreatTime = 0; lastRetreatThreatKey = null; lastRetreatCannotEscape = false; }
 };

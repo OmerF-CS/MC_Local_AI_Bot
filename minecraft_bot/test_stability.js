@@ -5,6 +5,7 @@
 const assert = require('assert');
 const { spawnSync } = require('child_process');
 const path = require('path');
+const { Vec3 } = require('vec3');
 
 const botModule = require('./bot');
 const {
@@ -14,7 +15,10 @@ const {
     setBotInstance,
     setSendToPythonOverride,
     getConsecutiveProcessErrors,
-    resetConsecutiveProcessErrors
+    resetConsecutiveProcessErrors,
+    verifyAndRepairBunker,
+    getDefenseRetreatState,
+    resetDefenseRetreatState
 } = botModule;
 
 let passedTests = 0;
@@ -208,6 +212,211 @@ asyncio.run(check())
         } finally {
             process.exit = originalExit;
             resetConsecutiveProcessErrors();
+        }
+    });
+
+    // ------------------------------------------------------------------
+    // TEST SUITE 5: "Retreating" Throttle (F1-3)
+    // ------------------------------------------------------------------
+    console.log("\n[Suite 5] Retreating Log Throttle & Escape Guards (F1-3):");
+
+    await runTest("autoSelfDefenseCheck: throttles Retreating log for same threat state to 15s interval", async () => {
+        resetDefenseRetreatState();
+        let logOutput = [];
+        const originalLog = console.log;
+        console.log = (...args) => {
+            logOutput.push(args.join(' '));
+            originalLog(...args);
+        };
+
+        try {
+            const mockBot = {
+                entity: {
+                    position: {
+                        x: 0, y: 64, z: 0,
+                        distanceTo: () => 4.0,
+                        minus: () => ({ normalize: () => ({ scaled: () => ({ x: 0, y: 0, z: 0 }) }) }),
+                        plus: () => ({ x: 0, y: 64, z: 0 }),
+                        floored: () => ({
+                            x: 0, y: 64, z: 0,
+                            plus: (d) => ({ x: d.x, y: 64 + d.y, z: d.z, offset: (ox, oy, oz) => ({ x: d.x + ox, y: 64 + oy, z: d.z + oz }) })
+                        })
+                    },
+                    yaw: 0, pitch: 0
+                },
+                entities: {
+                    '101': { id: 101, name: 'zombie', position: { x: 3, y: 64, z: 0, distanceTo: () => 4.0 } }
+                },
+                pathfinder: { setGoal: () => {} },
+                pvp: { stop: () => {} },
+                inventory: { items: () => [], slots: {} },
+                blockAt: () => ({ boundingBox: 'empty', name: 'air' }),
+                health: 4 // Critical health <= 6
+            };
+            setBotInstance(mockBot);
+
+            // 1st check: should trigger retreat and log
+            await autoSelfDefenseCheck();
+            const firstRetreatCount = logOutput.filter(l => l.includes("Retreating...")).length;
+            assert.strictEqual(firstRetreatCount, 1, "First retreat must log 'Retreating...'");
+
+            // Immediate 2nd check with identical threat: must NOT log 'Retreating...' again (throttled)
+            await autoSelfDefenseCheck();
+            const secondRetreatCount = logOutput.filter(l => l.includes("Retreating...")).length;
+            assert.strictEqual(secondRetreatCount, 1, "Subsequent check within 15s must NOT log 'Retreating...' again");
+        } finally {
+            console.log = originalLog;
+            resetDefenseRetreatState();
+        }
+    });
+
+    await runTest("autoSelfDefenseCheck: trapped bot marks cannotEscape and avoids repeated retreat attempts", async () => {
+        resetDefenseRetreatState();
+        try {
+            const mockBot = {
+                entity: {
+                    position: {
+                        x: 0, y: 64, z: 0,
+                        distanceTo: () => 3.0,
+                        minus: () => ({ normalize: () => ({ scaled: () => ({ x: 0, y: 0, z: 0 }) }) }),
+                        plus: () => ({ x: 0, y: 64, z: 0 }),
+                        floored: () => ({
+                            x: 0, y: 64, z: 0,
+                            plus: (d) => ({ x: d.x, y: 64, z: d.z, offset: () => ({ x: d.x, y: 65, z: d.z }) })
+                        })
+                    },
+                    yaw: 0, pitch: 0
+                },
+                entities: {
+                    '102': { id: 102, name: 'skeleton', position: { x: 2, y: 64, z: 0, distanceTo: () => 3.0 } }
+                },
+                pathfinder: { setGoal: () => {} },
+                pvp: { stop: () => {} },
+                inventory: { items: () => [], slots: {} },
+                // Trapped by solid blocks on all sides:
+                blockAt: () => ({ boundingBox: 'block', name: 'stone' }),
+                health: 5
+            };
+            setBotInstance(mockBot);
+
+            await autoSelfDefenseCheck();
+            const retreatState = getDefenseRetreatState();
+            assert.strictEqual(retreatState.lastRetreatCannotEscape, true, "Trapped bot should have lastRetreatCannotEscape = true");
+        } finally {
+            resetDefenseRetreatState();
+        }
+    });
+
+    // ------------------------------------------------------------------
+    // TEST SUITE 6: Bunker Verification & Repair (F1-4)
+    // ------------------------------------------------------------------
+    console.log("\n[Suite 6] Bunker Verification & Auto-Repair (F1-4):");
+
+    await runTest("verifyAndRepairBunker: detects missing wall/roof block and places repair block", async () => {
+        const placedBlocks = [];
+        const mockBot = {
+            entity: {
+                position: new Vec3(10, 64, 10)
+            },
+            inventory: {
+                items: () => [{ name: 'cobblestone', count: 5 }]
+            },
+            equip: async () => {},
+            placeBlock: async (refBlock, faceVec) => {
+                placedBlocks.push({ ref: refBlock, face: faceVec });
+            },
+            blockAt: (pos) => {
+                // If pos is (+1, 0, 0) relative to bot: pretend it's air (gap) initially, unless already repaired
+                if (pos.x === 11 && pos.y === 64 && pos.z === 10) {
+                    if (placedBlocks.length > 0) return { name: 'cobblestone', boundingBox: 'block' };
+                    return { name: 'air', boundingBox: 'empty' };
+                }
+                return { name: 'cobblestone', boundingBox: 'block' };
+            }
+        };
+
+        const result = await verifyAndRepairBunker(mockBot);
+        assert.ok(result.gaps >= 1, "Expected at least 1 gap to be detected");
+        assert.ok(result.repaired >= 1, "Expected at least 1 gap to be successfully repaired");
+        assert.strictEqual(result.sealed, true, "Expected bunker to be sealed after repair");
+    });
+
+    await runTest("verifyAndRepairBunker: 100% sealed bunker reports sealed=true and 0 gaps", async () => {
+        const mockBot = {
+            entity: {
+                position: {
+                    x: 0, y: 64, z: 0,
+                    floored: () => new Vec3(0, 64, 0)
+                }
+            },
+            inventory: { items: () => [] },
+            blockAt: () => ({ name: 'cobblestone', boundingBox: 'block' })
+        };
+
+        const result = await verifyAndRepairBunker(mockBot);
+        assert.strictEqual(result.gaps, 0, "Sealed bunker should have 0 gaps");
+        assert.strictEqual(result.sealed, true, "Sealed bunker should have sealed=true");
+    });
+
+    // ------------------------------------------------------------------
+    // TEST SUITE 7: Eat & Eat Food Action Handling (F1-1)
+    // ------------------------------------------------------------------
+    console.log("\n[Suite 7] Eat & Eat Food Action Handling (F1-1):");
+
+    await runTest("handleAction: 'eat' equips and consumes food from inventory", async () => {
+        let consumed = false;
+        let equippedItem = null;
+        const mockBot = {
+            entity: { position: { x: 0, y: 64, z: 0 } },
+            inventory: {
+                items: () => [{ name: 'bread', count: 3 }]
+            },
+            equip: async (item, slot) => { equippedItem = item.name; },
+            consume: async () => { consumed = true; },
+            chat: () => {},
+            pathfinder: { stop: () => {} }
+        };
+        setBotInstance(mockBot);
+
+        let sentResult = null;
+        setSendToPythonOverride((payload) => {
+            if (payload.type === 'action_completed') sentResult = payload;
+        });
+
+        try {
+            await handleAction({ command: 'eat', args: {}, action_id: 'test_eat_1' });
+            assert.strictEqual(equippedItem, 'bread', "Expected bread to be equipped");
+            assert.strictEqual(consumed, true, "Expected bot.consume() to be called");
+            assert.ok(sentResult !== null, "Expected action_completed result");
+            assert.strictEqual(sentResult.success, true);
+        } finally {
+            setSendToPythonOverride(null);
+        }
+    });
+
+    await runTest("handleAction: 'eat_food' returns error when no food in inventory", async () => {
+        const mockBot = {
+            entity: { position: { x: 0, y: 64, z: 0 } },
+            inventory: {
+                items: () => [{ name: 'dirt', count: 10 }] // No food
+            },
+            chat: () => {},
+            pathfinder: { stop: () => {} }
+        };
+        setBotInstance(mockBot);
+
+        let sentResult = null;
+        setSendToPythonOverride((payload) => {
+            if (payload.type === 'action_completed') sentResult = payload;
+        });
+
+        try {
+            await handleAction({ command: 'eat_food', args: {}, action_id: 'test_eat_2' });
+            assert.ok(sentResult !== null, "Expected action_completed result");
+            assert.strictEqual(sentResult.success, false, "Expected failure when no food");
+            assert.strictEqual(sentResult.error, "no_food_in_inventory");
+        } finally {
+            setSendToPythonOverride(null);
         }
     });
 

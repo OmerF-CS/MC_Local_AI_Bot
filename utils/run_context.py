@@ -131,9 +131,22 @@ def write_run_metadata(
         "log_level": os.getenv("LOG_LEVEL", "INFO"),
         "duration_seconds": duration,
         "is_test": is_test,
-        "summary": "Completed"
+        "summary": "Completed",
+        "llm_timeouts": 0,
+        "fallback_count": 0,
+        "llm_tool_call_count": 0
     }
 
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+                if isinstance(existing, dict):
+                    meta.update(existing)
+        except Exception:
+            pass
+
+    meta["duration_seconds"] = duration
     if extra_meta:
         meta.update(extra_meta)
 

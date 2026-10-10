@@ -27,12 +27,20 @@ class AutonomousCoopBrain:
         self.last_action_command = None
         self.consecutive_repeats = 0
         self.consecutive_hunt_failures = 0
-        self._tried_emergency_farm = False
         self.fallback_consecutive_count = 0
+        self.fallback_count = 0
         self.last_llm_failure_time = 0
         self.last_goal_target = None
         self.last_hunt_emergency_time = 0.0
         self.last_eat_emergency_time = 0.0
+
+        # F1-2: Low HP recovery monitor
+        self._low_hp_monitor = None
+
+        # F1-6: Consecutive fallback category diversification tracking
+        self._last_fallback_key = None
+        self._consecutive_same_fallback_count = 0
+        self._last_fallback_category_shift = "wait"
 
         self.checkpoint_stage = None
         self.checkpoint_target = None
@@ -67,6 +75,116 @@ class AutonomousCoopBrain:
         now = time.time()
         inv_map = inv or {}
 
+        # --- F1 SURVIVAL & LIFE ESSENTIALS ENGINE (F1-1 & F1-2) ---
+        inv_summary = state.get("inventory_summary", "").lower()
+        edible_food_items = [
+            "cooked_beef", "cooked_porkchop", "bread", "apple", "cooked_chicken",
+            "cooked_mutton", "baked_potato", "golden_apple", "carrot", "beetroot",
+            "sweet_berries", "cooked_salmon", "cooked_cod", "melon_slice",
+            "beef", "porkchop", "mutton", "chicken"
+        ]
+        has_food = any(inv_map.get(f, 0) > 0 for f in edible_food_items) if inv_map else any(f in inv_summary for f in edible_food_items)
+
+        # 1. Low HP Management & HP Tracking Monitor (F1-2: HP < 8)
+        if health < 8:
+            if not hasattr(self, "_low_hp_monitor") or self._low_hp_monitor is None:
+                self._low_hp_monitor = {
+                    "start_time": now,
+                    "start_hp": health,
+                    "last_hp": health,
+                    "active_strategy": "priority_recovery"
+                }
+
+            mon = self._low_hp_monitor
+            # Check HP progression during monitoring
+            if health > mon["last_hp"]:
+                logger.info(f"❤️ [Health Monitor] HP increased from {mon['last_hp']:.1f} to {health:.1f}! (Recovery active)")
+                mon["last_hp"] = health
+                mon["start_time"] = now  # Reset 60s timer upon positive progress
+
+            # 60s HP stagnancy check (F1-2)
+            elapsed_low_hp = now - mon["start_time"]
+            if elapsed_low_hp >= 60.0 and health <= mon["start_hp"]:
+                logger.warning(
+                    f"⚠️ [Health Monitor] HP did not increase within 60s (initial={mon['start_hp']:.1f}, current={health:.1f}). "
+                    "Switching survival recovery strategy..."
+                )
+                mon["start_time"] = now
+                mon["start_hp"] = health
+
+                if has_food and food < 20:
+                    strategy = "eat_to_regenerate"
+                    mon["active_strategy"] = strategy
+                    logger.info("❤️ [Health Strategy Result] Selected strategy: consume food to force health regeneration.")
+                    return {
+                        "text": "HP stagnant after 60s. Eating food immediately for regeneration.",
+                        "tool_calls": [{"name": "eat_food", "arguments": {}}]
+                    }
+                elif not has_food:
+                    strategy = "gather_food"
+                    mon["active_strategy"] = strategy
+                    logger.info("❤️ [Health Strategy Result] Selected strategy: gather emergency food supplies.")
+                    from ai.farming import should_prioritize_farming, get_farming_action_plan
+                    if inv_map and should_prioritize_farming(inv_map, state):
+                        farm_plan = get_farming_action_plan(inv_map, state)
+                        return {
+                            "text": "HP stagnant and no food. Harvesting nearby crops.",
+                            "tool_calls": [farm_plan]
+                        }
+                    return {
+                        "text": "HP stagnant and no food. Hunting food animals immediately.",
+                        "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
+                    }
+                else:
+                    strategy = "relocate"
+                    mon["active_strategy"] = strategy
+                    logger.info("❤️ [Health Strategy Result] Selected strategy: relocate 30m away to safer zone.")
+                    pos = state.get("position", {"x": 0, "y": 64, "z": 0})
+                    angle = random.random() * 2 * math.pi
+                    target_x = round(pos.get("x", 0) + math.cos(angle) * 30)
+                    target_z = round(pos.get("z", 0) + math.sin(angle) * 30)
+                    return {
+                        "text": "HP stagnant. Relocating away from hazardous area.",
+                        "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": target_x, "z": target_z, "ignore_y": True, "range": 3}}]
+                    }
+
+            # F1-2: HP < 8 iken güvenli konuma çekilme:
+            if nearby_hostiles and not state.get("is_sheltered", False):
+                logger.warning(f"🛡️ [Survival Priority] Low HP ({health}/20) with nearby hostiles! Withdrawing to emergency shelter.")
+                return {
+                    "text": "Critical HP and surrounded! Securing position in emergency bunker.",
+                    "tool_calls": [{"name": "build_shelter", "arguments": {"mode": "auto"}}]
+                }
+
+            # F1-1: HP < 8 iken öncelikli yeme:
+            if has_food and food < 20:
+                if now - getattr(self, "last_eat_emergency_time", 0.0) >= 3.0:
+                    self.last_eat_emergency_time = now
+                    logger.info(f"❤️ [Survival Priority] Low HP ({health}/20) & Hunger ({food}/20). Prioritizing eat action to trigger regen.")
+                    return {
+                        "text": "Critical health! Eating food immediately to restore HP.",
+                        "tool_calls": [{"name": "eat_food", "arguments": {}}]
+                    }
+
+            # F1-1: Yiyecek yoksa bunu loga yaz ve yiyecek toplama hedefi ver (sadece tool call ile, sessiz geçme):
+            if not has_food and not state.get("is_sheltered"):
+                logger.warning(f"🍽️ [Survival Priority] Critical HP ({health}/20) but NO food in inventory! Setting food gathering goal.")
+                from ai.farming import should_prioritize_farming, get_farming_action_plan
+                if inv_map and should_prioritize_farming(inv_map, state):
+                    farm_plan = get_farming_action_plan(inv_map, state)
+                    return {
+                        "text": "Critical HP and out of food! Harvesting nearby food sources.",
+                        "tool_calls": [farm_plan]
+                    }
+                return {
+                    "text": "Critical HP and out of food! Hunting animals for nourishment.",
+                    "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
+                }
+        else:
+            # Health is healthy (>= 8 HP) - reset low HP monitor
+            if hasattr(self, "_low_hp_monitor") and self._low_hp_monitor is not None:
+                self._low_hp_monitor = None
+
         # 0. If currently sheltered inside a bunker: check if it's safe to break out!
         if state.get("is_sheltered"):
             from ai.shelter import should_break_out_of_shelter
@@ -78,14 +196,14 @@ class AutonomousCoopBrain:
                 }
             else:
                 # Still unsafe - remain safely inside bunker, eat if needed
-                if food < 18 and any(f in inv for f in ["bread", "cooked_beef", "cooked_porkchop", "apple"]):
+                if food < 18 and has_food:
                     return {
                         "text": "Resting safely inside my shelter and eating food to heal.",
                         "tool_calls": [{"name": "eat_food", "arguments": {}}]
                     }
                 # Check for bed to skip night
                 vis_res = state.get("visible_resources", {})
-                if vis_res.get("bed") or any("bed" in i for i in (inv or {})):
+                if vis_res.get("bed") or any("bed" in i for i in inv_map):
                     return {
                         "text": "Sleeping safely inside my shelter to skip the night.",
                         "tool_calls": [{"name": "sleep_in_bed", "arguments": {}}]
@@ -100,7 +218,6 @@ class AutonomousCoopBrain:
                             "tool_calls": [{"name": "attack_target", "arguments": {"target_name": mob_name}}]
                         }
                 # Safe inside shelter: stay sheltered and wait, rate-limit chat to avoid spam
-                now = time.time()
                 if now - getattr(self, "last_bunker_wait_chat_time", 0.0) >= 30.0:
                     self.last_bunker_wait_chat_time = now
                     return {
@@ -112,57 +229,36 @@ class AutonomousCoopBrain:
                     "tool_calls": []
                 }
 
-        # 1. Critical health (<= 6 HP / 3 hearts) with nearby hostile mobs -> build emergency shelter
-        if health <= 6 and nearby_hostiles:
-            logger.warning(f"🚨 [EMERGENCY] Critical health ({health}/20) with hostiles nearby! Building emergency bunker.")
-            return {
-                "text": "I'm in critical danger! Sealing myself in an emergency bunker NOW!",
-                "tool_calls": [
-                    {"name": "build_shelter", "arguments": {"mode": "auto"}}
-                ]
-            }
-
-        # 2. Critical starvation (<= 4 hunger)
-        if food <= 4:
-            inv_summary = state.get("inventory_summary", "").lower()
-            food_items = ["cooked_beef", "cooked_porkchop", "bread", "apple", "cooked_chicken", "cooked_mutton", "baked_potato"]
-            has_food = any(f in inv for f in food_items) if inv else any(f in inv_summary for f in food_items)
-
-            now = time.time()
+        # 2. Hunger Management (F1-1: food < 14)
+        if food < 14:
             if has_food:
                 self.consecutive_hunt_failures = 0
                 self._tried_emergency_farm = False
                 if now - getattr(self, "last_eat_emergency_time", 0.0) >= 3.0:
                     self.last_eat_emergency_time = now
-                    logger.warning(f"🍽️ [EMERGENCY] Starvation ({food}/20)! Eating immediately.")
+                    logger.info(f"🍽️ [Hunger Check] Hunger level is {food}/20 (< 14). Consuming food from inventory.")
                     return {
-                        "text": "I'm STARVING! Eating immediately!",
+                        "text": "Hunger below 14. Eating food to restore stamina.",
                         "tool_calls": [{"name": "eat_food", "arguments": {}}]
                     }
                 return None
             else:
-                # Check for instant hay bale / farm harvest before roaming for animals
+                # F1-1: Yiyecek yoksa bunu loga yaz ve yiyecek toplama hedefi ver (sadece tool call ile, sessiz geçme)
+                logger.warning(f"🍽️ [Hunger Alert] Hunger is {food}/20 (< 14) and NO food in inventory! Setting food gathering goal.")
                 from ai.farming import should_prioritize_farming, get_farming_action_plan
-                if inv and should_prioritize_farming(inv, state):
-                    farm_plan = get_farming_action_plan(inv, state)
+                if inv_map and should_prioritize_farming(inv_map, state):
+                    farm_plan = get_farming_action_plan(inv_map, state)
                     return {
-                        "text": "I'm starving! Harvesting nearby crops/hay bales for food!",
+                        "text": "Hungry and out of food. Harvesting nearby crops.",
                         "tool_calls": [farm_plan]
                     }
-
-                # Check if passives are actually visible nearby
-                nearby_passives = state.get("nearby_passives", [])
-                has_nearby_animals = any(
-                    any(a in p.lower() for a in ["cow", "pig", "sheep", "chicken"])
-                    for p in nearby_passives
-                )
 
                 # Stuck hunt loop breaker: if 3 consecutive hunts produced no food, switch strategy
                 hunt_failures = getattr(self, "consecutive_hunt_failures", 0)
                 if hunt_failures >= 3:
                     if not getattr(self, "_tried_emergency_farm", False):
                         self._tried_emergency_farm = True
-                        logger.warning(f"⚠️ [STUCK LOOP BREAK] 3 consecutive hunts failed! Shifting to crop harvesting.")
+                        logger.warning("⚠️ [STUCK LOOP BREAK] 3 consecutive hunts failed! Shifting to crop harvesting.")
                         return {
                             "text": "No animals found after 3 hunts! Harvesting any available crops for food.",
                             "tool_calls": [{"name": "farm_crops", "arguments": {"crop_type": "all"}}]
@@ -170,7 +266,6 @@ class AutonomousCoopBrain:
                     else:
                         self._tried_emergency_farm = False
                         self.consecutive_hunt_failures = 0
-                        logger.warning(f"⚠️ [STUCK LOOP BREAK] Starvation hunt loop broken! Relocating 45 blocks to find food.")
                         pos = state.get("position", {"x": 0, "y": 64, "z": 0})
                         angle = random.random() * 2 * math.pi
                         target_x = pos.get("x", 0) + math.cos(angle) * 45
@@ -180,17 +275,22 @@ class AutonomousCoopBrain:
                             "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": round(target_x), "z": round(target_z), "ignore_y": True, "range": 3}}]
                         }
 
+                nearby_passives = state.get("nearby_passives", [])
+                has_nearby_animals = any(
+                    any(a in p.lower() for a in ["cow", "pig", "sheep", "chicken"])
+                    for p in nearby_passives
+                )
                 cooldown = 15.0 if not has_nearby_animals else 8.0
                 if now - getattr(self, "last_hunt_emergency_time", 0.0) >= cooldown:
                     self.last_hunt_emergency_time = now
                     self.consecutive_hunt_failures = hunt_failures + 1
-                    logger.warning(f"🍽️ [EMERGENCY] Starvation ({food}/20)! Hunting for meat (attempt {self.consecutive_hunt_failures}).")
                     return {
-                        "text": "I'm STARVING and have NO food! Hunting for meat NOW!",
+                        "text": "Hungry and out of food. Hunting nearby animals for meat.",
                         "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
                     }
                 else:
                     logger.debug("⏳ Starvation hunt cooldown active. Skipping hunt spam.")
+                    return None
 
         # 3. Night and low health with hostiles
         if not is_day and health < 10 and nearby_hostiles and not state.get("is_guarding"):
@@ -361,11 +461,54 @@ class AutonomousCoopBrain:
             response = dict(raw_response or {})
             tool_calls = [dict(tc) for tc in response.get("tool_calls", [])]
 
-            # If LLM returned no tool calls, trigger fallback heuristics
+            # If LLM returned no tool calls, trigger fallback heuristics (F1-6)
             if not tool_calls:
-                logger.info("ℹ️ LLM produced 0 tool calls. Using fallback heuristic action.")
+                self.fallback_count += 1
+                if hasattr(self.brain, "fallback_count"):
+                    self.brain.fallback_count = self.fallback_count
                 fallback_action = self.generate_fallback_action(goal, inv_dict, owner_info, state)
+                rule_name = getattr(self, "last_fallback_rule", "fallback_rule")
+                action_name = fallback_action.get("name") if fallback_action else "none"
+                action_args = fallback_action.get("arguments") if fallback_action else {}
+                logger.info(f"ℹ️ [Fallback Rule] Triggered rule '{rule_name}' -> action '{action_name}' ({action_args}) due to 0 LLM tool calls.")
+
                 if fallback_action:
+                    action_sig = f"{action_name}:{json.dumps(action_args, sort_keys=True)}"
+                    if action_sig == getattr(self, "_last_fallback_key", None):
+                        self._consecutive_same_fallback_count += 1
+                    else:
+                        self._last_fallback_key = action_sig
+                        self._consecutive_same_fallback_count = 1
+
+                    # F1-6: Aynı fallback üst üste 3 kez seçilirse planner farklı bir kategoriye geçsin (örn. keşif, bekleme)
+                    if self._consecutive_same_fallback_count >= 3:
+                        shift_cat = "exploration" if getattr(self, "_last_fallback_category_shift", "wait") == "wait" else "waiting"
+                        self._last_fallback_category_shift = shift_cat
+                        self._consecutive_same_fallback_count = 0
+
+                        if shift_cat == "exploration":
+                            logger.warning(
+                                f"⚠️ [Fallback Category Shift] Fallback '{action_sig}' repeated 3 consecutive times. "
+                                "Shifting planner to category 'exploration' (scouting new area)..."
+                            )
+                            pos = state.get("position", {"x": 0, "y": 64, "z": 0})
+                            angle = random.random() * 2 * math.pi
+                            target_x = round(pos.get("x", 0) + math.cos(angle) * 30)
+                            target_z = round(pos.get("z", 0) + math.sin(angle) * 30)
+                            fallback_action = {
+                                "name": "go_to_coordinates",
+                                "arguments": {"x": target_x, "z": target_z, "ignore_y": True, "range": 3}
+                            }
+                        else:
+                            logger.warning(
+                                f"⚠️ [Fallback Category Shift] Fallback '{action_sig}' repeated 3 consecutive times. "
+                                "Shifting planner to category 'waiting' (observing surroundings)..."
+                            )
+                            fallback_action = {
+                                "name": "say_chat",
+                                "arguments": {"message": "Observing surroundings and waiting for opportunities."}
+                            }
+
                     tool_calls = [fallback_action]
                     response["tool_calls"] = tool_calls
                     self.fallback_consecutive_count += 1
@@ -373,6 +516,8 @@ class AutonomousCoopBrain:
                     self.fallback_consecutive_count = 0
             else:
                 self.fallback_consecutive_count = 0
+                self._consecutive_same_fallback_count = 0
+                self._last_fallback_key = None
 
                 # Validate tool calls - prevent blind impossible craft loops
                 sanitized_calls = []
@@ -439,16 +584,6 @@ class AutonomousCoopBrain:
                 tool_calls = sanitized_calls
                 response["tool_calls"] = tool_calls
 
-            # If too many consecutive fallbacks occurred, gather baseline resources
-            if self.fallback_consecutive_count >= 3:
-                logger.info("ℹ️ Consecutive fallbacks: gathering baseline resources (wood).")
-                return {
-                    "text": "Gathering baseline resources to advance.",
-                    "tool_calls": [
-                        {"name": "collect_block", "arguments": {"block_name": "log", "count": 2}}
-                    ]
-                }
-
             # Anti-repetition loop breaker - only trigger if identical action repeats 3 times without inventory progress
             if tool_calls:
                 first_tc = tool_calls[0]
@@ -513,8 +648,13 @@ class AutonomousCoopBrain:
 
             return response
         except asyncio.TimeoutError:
+            self.fallback_count += 1
+            if hasattr(self.brain, "fallback_count"):
+                self.brain.fallback_count = self.fallback_count
             logger.warning("⏱️ LLM reasoning timed out. Using backup strategy.")
             fallback_action = self.generate_fallback_action(goal, inv_dict, owner_info, state)
+            rule_name = getattr(self, "last_fallback_rule", "fallback_rule")
+            logger.info(f"ℹ️ [Fallback Rule] Triggered rule '{rule_name}' -> action '{fallback_action.get('name') if fallback_action else 'none'}' due to timeout.")
             return {
                 "text": "Thinking timed out. Using backup strategy.",
                 "tool_calls": [fallback_action] if fallback_action else []
@@ -530,7 +670,23 @@ class AutonomousCoopBrain:
         owner_info: Optional[Dict[str, Any]],
         state: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
-        """Generates proactive fallback action when LLM is unavailable or timed out."""
+        """Generates proactive fallback action when LLM is unavailable or timed out.
+
+        Returns the action dict (backward compatible). The triggered rule name (F1-6)
+        is stored in ``self.last_fallback_rule``.
+        """
+        rule_name, action = self._generate_fallback_action_with_rule(goal, inv, owner_info, state)
+        self.last_fallback_rule = rule_name
+        return action
+
+    def _generate_fallback_action_with_rule(
+        self,
+        goal: Dict[str, Any],
+        inv: Dict[str, int],
+        owner_info: Optional[Dict[str, Any]],
+        state: Optional[Dict[str, Any]] = None
+    ) -> tuple[str, Optional[Dict[str, Any]]]:
+        """Returns (rule_name, action) for the fallback decision."""
         if not state:
             state = {}
 
@@ -539,32 +695,33 @@ class AutonomousCoopBrain:
         if active_task:
             instruction = active_task.get("instruction", "").lower()
             if any(w in instruction for w in ["guard", "koru", "protect"]):
-                return {"name": "guard_player", "arguments": {"player_name": self.bot_owner}}
+                return "teammate_directive", {"name": "guard_player", "arguments": {"player_name": self.bot_owner}}
             if any(w in instruction for w in ["follow", "gel", "takip", "come"]):
-                return {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
+                return "teammate_directive", {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
             if any(w in instruction for w in ["hunt", "food", "yemek", "avlan"]):
-                return {"name": "hunt_food", "arguments": {"animal_type": "any"}}
+                return "teammate_directive", {"name": "hunt_food", "arguments": {"animal_type": "any"}}
             if any(w in instruction for w in ["sleep", "bed", "uyu"]):
-                return {"name": "sleep_in_bed", "arguments": {}}
+                return "teammate_directive", {"name": "sleep_in_bed", "arguments": {}}
 
         # 2. Emergency tactical Chorus Fruit teleport (F5)
         if inv.get("chorus_fruit", 0) > 0:
             if state.get("is_falling", False) or (state.get("health", 20) <= 6 and state.get("nearby_hostiles_count", 0) >= 2):
-                return {"name": "eat_chorus_fruit", "arguments": {}}
+                return "emergency_chorus", {"name": "eat_chorus_fruit", "arguments": {}}
 
         # 3. Hunger check - consume food if hungry
         food_level = state.get("food", 20)
         has_eatable = any(
             f in inv for f in [
                 "cooked_beef", "cooked_porkchop", "bread", "apple",
-                "cooked_chicken", "cooked_mutton", "baked_potato"
+                "cooked_chicken", "cooked_mutton", "baked_potato",
+                "golden_apple", "carrot", "beetroot", "sweet_berries"
             ]
         )
         if food_level < 15:
             if has_eatable:
-                return {"name": "eat_food", "arguments": {}}
+                return "hunger_eat", {"name": "eat_food", "arguments": {}}
             elif inv.get("chorus_fruit", 0) > 0:
-                return {"name": "eat_chorus_fruit", "arguments": {}}
+                return "emergency_chorus", {"name": "eat_chorus_fruit", "arguments": {}}
 
         # 4. Smelt raw meats if food level dropping and fuel is available
         raw_meats = [
@@ -576,7 +733,7 @@ class AutonomousCoopBrain:
         ]
         has_fuel = inv.get("coal", 0) > 0 or any("log" in i or "plank" in i for i in inv)
         if food_level < 18 and raw_meats and has_fuel:
-            return {
+            return "smelt_food", {
                 "name": "smelt_item",
                 "arguments": {
                     "input_item": raw_meats[0],
@@ -587,11 +744,11 @@ class AutonomousCoopBrain:
         # 5. Sustainable farming / hay bale harvesting
         from ai.farming import should_prioritize_farming, get_farming_action_plan
         if should_prioritize_farming(inv, state):
-            return get_farming_action_plan(inv, state)
+            return "farming_harvest", get_farming_action_plan(inv, state)
 
         # 6. Hunt food animals if hungry and out of food
         if food_level < 15 and not has_eatable and not raw_meats:
-            return {"name": "hunt_food", "arguments": {"animal_type": "any"}}
+            return "hunt_food", {"name": "hunt_food", "arguments": {"animal_type": "any"}}
 
         # 7. Night shelter check (Overworld only; beds explode in Nether and End!)
         dimension = str(state.get("dimension", "overworld")).lower()
@@ -599,13 +756,13 @@ class AutonomousCoopBrain:
         if not state.get("is_day", True) and not is_nether_or_end:
             vis_res = state.get("visible_resources", {})
             if vis_res.get("bed"):
-                return {"name": "sleep_in_bed", "arguments": {}}
+                return "night_shelter", {"name": "sleep_in_bed", "arguments": {}}
             else:
-                return {"name": "build_shelter", "arguments": {"mode": "auto"}}
+                return "night_shelter", {"name": "build_shelter", "arguments": {"mode": "auto"}}
 
         # 8. Tech tree progression milestones
         guidance, action = self.get_milestone_action(goal, inv, state)
-        return action
+        return "milestone_progression", action
 
     def get_milestone_action(
         self,

@@ -365,7 +365,7 @@ class MinecraftChatHandler:
         action_tools = {
             "collect_block", "craft_item", "guard_player", "follow_player",
             "hunt_food", "smelt_item", "go_to_coordinates",
-            "go_to_saved_location", "attack_target", "eat_food",
+            "go_to_saved_location", "attack_target", "eat_food", "eat",
             "build_nether_portal", "throw_eye_of_ender", "activate_end_portal",
             "destroy_end_crystals", "fight_ender_dragon", "enter_exit_portal",
             "farm_crops", "build_shelter", "break_out_shelter",
@@ -627,6 +627,9 @@ class MinecraftChatHandler:
             except (KeyError, ValueError, TypeError) as err:
                 logger.warning(f"⚠️ 'go_to_coordinates' invalid coordinates: {err}")
                 return {"success": False, "error": f"Invalid coordinates: {err}"}
+
+        elif cmd in ("eat", "eat_food"):
+            cmd = "eat_food"
 
         elif cmd == "hunt_food":
             animal = str(validated_args.get("animal_type", "any")).strip().lower()

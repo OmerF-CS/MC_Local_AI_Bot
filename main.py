@@ -42,6 +42,10 @@ class MinecraftAIBot:
             "model_name": config.OLLAMA_MODEL,
             "db_path": config.DB_PATH,
             "is_test": is_test_run,
+            "llm_timeouts": 0,
+            "fallback_count": 0,
+            "llm_tool_call_count": 0,
+            "llm_timeout_rate": 0.0
         })
 
         self.bridge = MinecraftBridge(host=config.BRIDGE_HOST, port=config.BRIDGE_PORT)
@@ -732,9 +736,19 @@ class MinecraftAIBot:
                 logger.error(f"Subprocess cleanup error: {e}")
 
         try:
+            llm_timeouts = getattr(self.brain, "llm_timeouts", 0)
+            fallback_count = getattr(self.planner, "fallback_count", 0) or getattr(self.brain, "fallback_count", 0)
+            llm_tool_call_count = getattr(self.brain, "llm_tool_call_count", 0)
+            total_llm_calls = getattr(self.brain, "llm_calls_count", 0)
+            timeout_rate = round(llm_timeouts / max(1, total_llm_calls), 3) if total_llm_calls > 0 else 0.0
+
             write_run_metadata(self.run_id, {
                 "status": "completed",
-                "summary": "Bot shutdown complete cleanly"
+                "summary": "Bot shutdown complete cleanly",
+                "llm_timeouts": llm_timeouts,
+                "fallback_count": fallback_count,
+                "llm_tool_call_count": llm_tool_call_count,
+                "llm_timeout_rate": timeout_rate
             })
         except Exception as e:
             logger.debug(f"Failed to record final run metadata: {e}")

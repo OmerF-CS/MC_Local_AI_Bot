@@ -34,6 +34,12 @@ class OllamaBrain:
         self._llm_call_latency = []
         self._max_latency_samples = 10
 
+        # F1-5: LLM timeout & performance metrics
+        self.llm_timeouts: int = 0
+        self.llm_calls_count: int = 0
+        self.llm_tool_call_count: int = 0
+        self.fallback_count: int = 0
+
     async def ensure_session(self) -> aiohttp.ClientSession:
         """Reuses persistent aiohttp session for connection pooling and fast Ollama inference."""
         if self.session is None or self.session.closed:
@@ -147,6 +153,7 @@ class OllamaBrain:
             }
         }
 
+        self.llm_calls_count += 1
         try:
             session = await self.ensure_session()
             start_time = time.time()
@@ -203,6 +210,9 @@ class OllamaBrain:
                             "arguments": args
                         })
 
+                # F1-5: Track successfully generated tool calls
+                self.llm_tool_call_count += len(parsed_tools)
+
                 logger.info(
                     f"🤖 Response: '{response_text[:60]}...' | "
                     f"Tools: {[t['name'] for t in parsed_tools]} | "
@@ -214,7 +224,15 @@ class OllamaBrain:
                 }
 
         except asyncio.TimeoutError:
+            self.llm_timeouts += 1
+            timeout_rate = self.llm_timeouts / max(1, self.llm_calls_count)
             logger.error("⏱️ Ollama timeout (20s).")
+            # F1-5: Timeout oranı bir koşuda %30'u geçerse uyarı logu bas
+            if timeout_rate > 0.30 and self.llm_calls_count >= 3:
+                logger.warning(
+                    f"⚠️ [LLM Timeout Alert] Ollama timeout rate is {timeout_rate:.1%} (> 30% threshold)! "
+                    f"(Timeouts: {self.llm_timeouts}/{self.llm_calls_count})"
+                )
             return {"text": "LLM timeout.", "tool_calls": []}
         except Exception as e:
             logger.error(f"❌ Ollama error: {e}")
@@ -225,3 +243,14 @@ class OllamaBrain:
         if not self._llm_call_latency:
             return 0.0
         return sum(self._llm_call_latency) / len(self._llm_call_latency)
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """F1-5: Get LLM performance and timeout metrics."""
+        timeout_rate = round(self.llm_timeouts / max(1, self.llm_calls_count), 3) if self.llm_calls_count > 0 else 0.0
+        return {
+            "llm_timeouts": self.llm_timeouts,
+            "llm_calls_count": self.llm_calls_count,
+            "llm_tool_call_count": self.llm_tool_call_count,
+            "fallback_count": self.fallback_count,
+            "llm_timeout_rate": timeout_rate,
+        }
