@@ -215,10 +215,20 @@ function tickResourceScanner() {
     } catch (_) {}
 }
 
+let movementsNotReadyLogged = false;
+
 function setMovementsForTask(taskType = 'walk') {
     if (!bot) return;
     try {
-        const mcData = require('minecraft-data')(bot.version);
+        const mcData = (bot.registry) ? bot.registry : (bot.version ? require('minecraft-data')(bot.version) : null);
+        if (!mcData || !mcData.blocksByName || !bot.pathfinder) {
+            if (!movementsNotReadyLogged) {
+                console.warn("[Movements] Bot registry/movements not ready yet (missing blocksByName or pathfinder). Skipping movement update.");
+                movementsNotReadyLogged = true;
+            }
+            return;
+        }
+        movementsNotReadyLogged = false;
         const m = new Movements(bot, mcData);
 
         // Fluid Human-Like Movement Profile
@@ -241,7 +251,10 @@ function setMovementsForTask(taskType = 'walk') {
             bot.pathfinder.thinkTimeout = 5000;
         }
     } catch (err) {
-        console.warn(`[Movements] Error updating movements: ${err.message}`);
+        if (!movementsNotReadyLogged) {
+            console.warn(`[Movements] Error updating movements: ${err.message}`);
+            movementsNotReadyLogged = true;
+        }
     }
 }
 
