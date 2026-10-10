@@ -52,3 +52,4 @@ test_server/*.json
 
 # Run artifacts and isolated test/benchmark sessions
 runs/
+test_server/crash-reports/
