@@ -629,8 +629,15 @@ class MinecraftAIBot:
         # Main supervisor watchdog loop - monitors health and auto-recovers crashes
         consecutive_worker_crashes = 0
         stable_since: Optional[float] = None
+        start_time = time.time()
+        max_duration = float(os.getenv("MC_MAX_DURATION_SECONDS", "0"))
         try:
             while not self._shutdown_event.is_set():
+                if max_duration > 0 and (time.time() - start_time) >= max_duration:
+                    logger.info(f"⏱️ [Timer] Reached configured maximum runtime duration ({round(max_duration)}s / {round(max_duration / 60, 1)}m). Initiating clean shutdown...")
+                    self._shutdown_event.set()
+                    break
+
                 # Check if Mineflayer worker subprocess died unexpectedly
                 if self.node_process and self.node_process.poll() is not None:
                     exit_code = self.node_process.poll()
@@ -741,7 +748,11 @@ def main():
     parser.add_argument("--run-id", type=str, default="", help="Custom run identifier")
     parser.add_argument("--db-path", type=str, default="", help="Custom SQLite database file path")
     parser.add_argument("--test", action="store_true", help="Flag this session as a test run")
+    parser.add_argument("--duration-seconds", type=float, default=0.0, help="Maximum execution duration before clean shutdown")
     args, _ = parser.parse_known_args()
+
+    if args.duration_seconds > 0:
+        os.environ["MC_MAX_DURATION_SECONDS"] = str(args.duration_seconds)
 
     if args.run_id:
         os.environ["MC_RUN_ID"] = args.run_id
