@@ -99,7 +99,39 @@ npm install
 cd ..
 ```
 
-### 2.4 Configuration (.env)
+### 2.4 Local LLM Model Setup (Ollama)
+
+Before launching the bot or running model benchmarks, download the required local models into Ollama:
+
+```powershell
+# 1. Pull the primary model used by the bot (configured in utils/config.py: OLLAMA_MODEL = "qwen2.5:3b")
+ollama pull qwen2.5:3b
+
+# 2. Pull the 7B comparison model used for benchmarks (measures latency & VRAM headroom on 6GB RTX 3060)
+ollama pull qwen2.5:7b
+
+# 3. Verify installed models
+ollama list
+```
+
+Expected verification output (`ollama list` displays both models):
+```text
+NAME               ID              SIZE      MODIFIED
+qwen2.5:3b:latest  f8820c78a3f6    1.9 GB    ...
+qwen2.5:7b:latest  b83d78e96da8    4.7 GB    ...
+```
+
+#### Custom Speedrunner Model (`mc-qwen:3b`)
+The repository includes a specialized Modelfile at `models/Modelfile` containing custom system instructions and tuned inference parameters (`temperature: 0.1`, `top_p: 0.8`, `num_ctx: 2048`, `num_gpu: 999` based on `FROM qwen2.5:3b`).
+To create and use this custom model:
+```powershell
+# Build custom model from repository Modelfile
+ollama create mc-qwen:3b -f models/Modelfile
+```
+To run the bot with this custom model, set `OLLAMA_MODEL=mc-qwen:3b` in `.env`.
+*(Note: By default in `utils/config.py`, the default model is `OLLAMA_MODEL = "qwen2.5:3b"`).*
+
+### 2.5 Configuration (.env)
 Create a `.env` file at the root or verify default settings against `.env.example`:
 
 ```env
@@ -171,6 +203,79 @@ runs/
   ALTER TABLE <table_name> ADD COLUMN run_id TEXT DEFAULT '';
   ```
   Legacy data without `run_id` is preserved with empty strings, ensuring backward compatibility.
+
+### 3.4 Starting the Bot (Live Gameplay) / Botu Başlatma (Canlı Oyun)
+
+#### 1. Prerequisites (Ön Koşullar)
+- Ollama daemon is running locally (`ollama serve` or active background service at `http://localhost:11434`).
+- Target model is downloaded and verified (`ollama list` shows `qwen2.5:3b` or `mc-qwen:3b`).
+- Target Minecraft Java 1.20.4 server is running on the host/port configured in `.env`.
+
+#### 2. Launch Commands (Başlatma Komutları)
+- **Windows Automated Script (`run.bat`):**
+  Checks for `.env` (copies from `.env.example` if missing), verifies Ollama connectivity on `http://localhost:11434` (attempts background start if offline), and executes `python main.py`:
+  ```cmd
+  run.bat
+  ```
+- **Direct CLI Execution (PowerShell / Terminal):**
+  ```powershell
+  # Standard autonomous survival run:
+  python main.py
+
+  # Flagged as test session (generates test_* run_id, flags is_test: true):
+  python main.py --test
+
+  # Custom run identifier with test isolation:
+  python main.py --run-id live_eval_session_01 --test
+
+  # With isolated SQLite database path:
+  python main.py --db-path data/eval_gameplay.db --test
+  ```
+
+#### 3. Configuration Variables (`utils/config.py`)
+All settings are loaded dynamically via `Config.load_from_env()`:
+- `MINECRAFT_HOST`: Minecraft server IP or hostname (default: `"localhost"`).
+- `MINECRAFT_PORT`: Minecraft server port (default: `25565`).
+- `MINECRAFT_USERNAME`: Bot player username in world (default: `"AIAssistant"`).
+- `MINECRAFT_VERSION`: Minecraft version (default: `""`; auto-detected by Mineflayer when empty).
+- `BOT_NAME`: In-game bot name (default: `"AIAssistant"`).
+- `BOT_OWNER`: Teammate/human player username to protect and co-op with (default: `"Omer"`).
+- `OLLAMA_BASE_URL`: Ollama endpoint (default: `"http://localhost:11434"`).
+- `OLLAMA_MODEL`: Target model name (default: `"qwen2.5:3b"`).
+- `BRIDGE_HOST` & `BRIDGE_PORT`: Local WebSocket bridge (defaults: `"127.0.0.1"` and `8765`).
+- `COOLDOWN_SECONDS`: Throttle interval between bot actions (default: `0.2`).
+- `MC_RUN_ID`: Active run identifier override (default: dynamic `generate_run_id()`).
+- `MC_DB_PATH`: SQLite database file path (default: `"minecraft_bot.db"`).
+
+#### 4. Expected Initial Log Sequence (Başlatma Sonrası Beklenen Loglar)
+Upon launch, the orchestrator outputs structured logs and creates run artifacts:
+```text
+[2026-10-10 18:30:00] [INFO] [20261010-183000_5edfa5e] [Main]: Starting Minecraft Local AI Bot...
+[2026-10-10 18:30:00] [INFO] [20261010-183000_5edfa5e] [Bridge]: WebSocket bridge server listening on 127.0.0.1:8765
+[2026-10-10 18:30:00] [INFO] [20261010-183000_5edfa5e] [Main]: Spawning Mineflayer worker process (node minecraft_bot/bot.js)...
+[2026-10-10 18:30:02] [INFO] [20261010-183000_5edfa5e] [Main]: [Node.js] [Minecraft] 🌟 Bot successfully spawned into the world!
+[2026-10-10 18:30:02] [INFO] [20261010-183000_5edfa5e] [Main]: ✨ AIAssistant spawned into the world! Health: 20
+[2026-10-10 18:30:02] [INFO] [20261010-183000_5edfa5e] [Bridge]: Broadcast chat: "Hello Omer! I am AIAssistant, ready to explore and beat the game."
+```
+Verified Artifacts Created:
+- `runs/<run_id>/bot.log` receives all formatted Python and Node.js logs.
+- `runs/<run_id>/run_meta.json` is initialized with `"status": "starting"`, commit hash, timestamp, and model name.
+- `runs/<run_id>/decisions.jsonl` begins logging structured state-action-outcome decisions.
+
+#### 5. Graceful Termination & Finalization (Durdurma)
+- Press `Ctrl+C` in the console to trigger graceful shutdown.
+- Signal handler receives `SIGINT`/`SIGTERM` and sets shutdown event:
+  `⚠️ Received signal 2. Initiating graceful shutdown...`
+- Orchestrator cancels progression loop, disconnects WebSocket bridge, closes Ollama session, and terminates Node.js subprocess cleanly.
+- Code explicitly finalizes `runs/<run_id>/run_meta.json` (`main.py:533-539` via `write_run_metadata`):
+  ```json
+  {
+    "status": "completed",
+    "summary": "Bot shutdown complete cleanly",
+    "duration_seconds": 124.5
+  }
+  ```
+- Console confirms: `👋 Bot shutdown complete.`
 
 ---
 
