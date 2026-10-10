@@ -48,6 +48,9 @@ class AutonomousCoopBrain:
         self._consecutive_action_failure_count = 0
         self._pending_category_shift = False
         self._pending_category_shift_action = None
+        self._pending_category_shift_reason = None
+        self._pending_category_shift_cat = None
+        self._processed_action_ids = set()
 
         self.checkpoint_stage = None
         self.checkpoint_target = None
@@ -105,20 +108,14 @@ class AutonomousCoopBrain:
         """Normalizes action target and produces a stable comparison string (F1-R11)."""
         if target is None and args:
             if action == "farm_crops":
-                target = args.get("crop_type") or "all"
+                target = args.get("crop_type") or args.get("crop") or args.get("target")
             elif action == "go_to_coordinates":
                 if "x" in args and "z" in args:
-                    target = (args.get("x"), args.get("y"), args.get("z"))
+                    target = (args.get("x"), args.get("y", 64), args.get("z"))
+                elif "target" in args:
+                    target = args.get("target")
             elif "target" in args:
                 target = args.get("target")
-
-        if target is None:
-            if action == "farm_crops":
-                target = "all"
-            elif action == "go_to_coordinates":
-                target = "coords"
-            else:
-                target = "default"
 
         def _fmt(v: Any) -> str:
             try:
@@ -134,25 +131,28 @@ class AutonomousCoopBrain:
                 target_str = json.dumps(target, sort_keys=True)
         elif isinstance(target, (list, tuple)):
             target_str = f"({', '.join(_fmt(v) for v in target)})"
-        else:
+        elif target is not None:
             target_str = str(target).strip()
+        else:
+            if action == "farm_crops":
+                target = "all"
+                target_str = "all"
+            elif action == "go_to_coordinates":
+                target = "coords"
+                target_str = "coords"
+            else:
+                target = "default"
+                target_str = "default"
 
         return target, target_str
 
+    @staticmethod
     def generate_category_shift_action(
-        self,
-        state: Optional[Dict[str, Any]] = None,
-        reason_label: str = "Repeated action failure"
+        shift_cat: str,
+        state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Generates category shift action (exploration or waiting) and toggles shift category (F1-6, F1-R11)."""
-        shift_cat = "exploration" if getattr(self, "_last_fallback_category_shift", "wait") == "wait" else "waiting"
-        self._last_fallback_category_shift = shift_cat
-
+        """Generates category shift action purely without side effects or logging (F1-R11)."""
         if shift_cat == "exploration":
-            logger.warning(
-                f"⚠️ [Fallback Category Shift] {reason_label}. "
-                "Shifting planner to category 'exploration' (scouting new area)..."
-            )
             pos = (state or {}).get("position", {"x": 0, "y": 64, "z": 0})
             angle = random.random() * 2 * math.pi
             target_x = round(pos.get("x", 0) + math.cos(angle) * 30)
@@ -162,10 +162,6 @@ class AutonomousCoopBrain:
                 "arguments": {"x": target_x, "z": target_z, "ignore_y": True, "range": 3}
             }
         else:
-            logger.warning(
-                f"⚠️ [Fallback Category Shift] {reason_label}. "
-                "Shifting planner to category 'waiting' (observing surroundings)..."
-            )
             return {
                 "name": "say_chat",
                 "arguments": {"message": "Observing surroundings and waiting for opportunities."}
@@ -174,15 +170,30 @@ class AutonomousCoopBrain:
     def trigger_category_shift(
         self,
         state: Optional[Dict[str, Any]] = None,
-        reason_label: str = "Repeated action failure"
+        reason_label: str = "Repeated action failure",
+        action: Optional[Dict[str, Any]] = None,
+        shift_cat: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Triggers category shift, returning shift action and resetting repeat counters (F1-6, F1-R11)."""
-        shift_action = self.generate_category_shift_action(state, reason_label=reason_label)
+        """Triggers category shift with logging and counter reset (F1-6, F1-R11)."""
+        if not shift_cat:
+            shift_cat = getattr(self, "_pending_category_shift_cat", None) or (
+                "exploration" if getattr(self, "_last_fallback_category_shift", "wait") == "wait" else "waiting"
+            )
+        if not action:
+            action = getattr(self, "_pending_category_shift_action", None) or self.generate_category_shift_action(shift_cat, state)
+
+        logger.warning(
+            f"⚠️ [Fallback Category Shift] {reason_label}. "
+            f"Shifting planner to category '{shift_cat}'..."
+        )
+        self._last_fallback_category_shift = shift_cat
         self._pending_category_shift = False
         self._pending_category_shift_action = None
+        self._pending_category_shift_reason = None
+        self._pending_category_shift_cat = None
         self._consecutive_same_fallback_count = 0
         self._consecutive_action_failure_count = 0
-        return shift_action
+        return action
 
     def record_action_failure(
         self,
@@ -191,13 +202,23 @@ class AutonomousCoopBrain:
         target: Any = None,
         args: Optional[Dict[str, Any]] = None,
         raw_error: Optional[str] = None,
-        state: Optional[Dict[str, Any]] = None
+        state: Optional[Dict[str, Any]] = None,
+        action_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Records action failure reason into failure history and repetition tracking (F1-R11).
 
-        If the same reason + same target repeats 3 consecutive times, triggers category shift
-        (exploration or waiting) and resets the counter.
+        Single source of truth with action_id deduplication.
+        If the same reason + same target repeats 3 consecutive times, prepares category shift
+        (exploration or waiting) without side effects or logging until applied in decide_next_action.
         """
+        if action_id:
+            if not hasattr(self, "_processed_action_ids"):
+                self._processed_action_ids = set()
+            if action_id in self._processed_action_ids:
+                logger.debug(f"ℹ️ Skipping duplicate action failure for action_id={action_id}")
+                return self._pending_category_shift_action
+            self._processed_action_ids.add(action_id)
+
         norm_reason = self.normalize_failure_reason(action, reason or raw_error)
         norm_target, target_str = self._normalize_target(target, action, args)
 
@@ -209,7 +230,8 @@ class AutonomousCoopBrain:
             "target": norm_target,
             "target_str": target_str,
             "timestamp": now,
-            "time": now
+            "time": now,
+            "action_id": action_id
         }
         self.action_failure_history.append(failure_entry)
 
@@ -229,21 +251,31 @@ class AutonomousCoopBrain:
 
         shift_action = None
         if self._consecutive_same_fallback_count >= 3 or self._consecutive_action_failure_count >= 3:
-            shift_action = self.generate_category_shift_action(
-                state=state or {},
-                reason_label=f"Action failure '{failure_key}' repeated 3 consecutive times"
-            )
+            next_cat = "exploration" if getattr(self, "_last_fallback_category_shift", "wait") == "wait" else "waiting"
+            shift_action = self.generate_category_shift_action(next_cat, state or {})
             self._pending_category_shift = True
             self._pending_category_shift_action = shift_action
+            self._pending_category_shift_reason = f"Action failure '{failure_key}' repeated 3 consecutive times"
+            self._pending_category_shift_cat = next_cat
 
         return shift_action
 
-    def record_action_success(self, action: str, target: Any = None) -> None:
+    def record_action_success(self, action: str, target: Any = None, action_id: Optional[str] = None) -> None:
         """Resets consecutive failure tracking upon successful action execution (F1-R11)."""
+        if action_id:
+            if not hasattr(self, "_processed_action_ids"):
+                self._processed_action_ids = set()
+            if action_id in self._processed_action_ids:
+                return
+            self._processed_action_ids.add(action_id)
+
         self._consecutive_action_failure_count = 0
+        self._consecutive_same_fallback_count = 0
         self._last_action_failure_key = None
         self._pending_category_shift = False
         self._pending_category_shift_action = None
+        self._pending_category_shift_reason = None
+        self._pending_category_shift_cat = None
 
     def _should_use_emergency_action(self, state: Dict[str, Any], inv: Optional[Dict[str, int]] = None) -> Optional[Dict[str, Any]]:
         """Immediate reflex for critical health, imminent starvation, or night danger."""
@@ -587,9 +619,13 @@ class AutonomousCoopBrain:
             or getattr(self, "_consecutive_action_failure_count", 0) >= 3
             or getattr(self, "_consecutive_same_fallback_count", 0) >= 3
         ):
+            reason_lbl = (
+                getattr(self, "_pending_category_shift_reason", None)
+                or f"Action failure '{getattr(self, '_last_action_failure_key', 'repeated_failure')}' repeated 3 consecutive times"
+            )
             shift_act = self.trigger_category_shift(
                 state,
-                reason_label=f"Action failure '{getattr(self, '_last_action_failure_key', 'repeated_failure')}' repeated 3 consecutive times"
+                reason_label=reason_lbl
             )
             return {
                 "text": f"Repeated action failure detected. Shifting category to {self._last_fallback_category_shift}.",

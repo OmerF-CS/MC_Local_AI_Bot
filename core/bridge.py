@@ -35,6 +35,8 @@ class MinecraftBridge:
         # Action Tracking and Wait Events
         self._pending_action_events: Dict[str, asyncio.Event] = {}
         self._last_action_results: Dict[str, Dict[str, Any]] = {}
+        self._pending_action_args: Dict[str, Dict[str, Any]] = {}
+        self._last_action_args: Dict[str, Dict[str, Any]] = {}
 
     async def start(self):
         """Starts the WebSocket bridge server."""
@@ -76,8 +78,15 @@ class MinecraftBridge:
             if not self.clients:
                 self.latest_state = {}
 
-    async def _dispatch_message(self, data: Dict[str, Any]):
+    async def _dispatch_message(self, data: Any):
         """Dispatches incoming message to appropriate handler callback."""
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except Exception:
+                return
+        if not isinstance(data, dict):
+            return
         msg_type = data.get("type")
         state = data.get("state", {})
         if state:
@@ -149,6 +158,7 @@ class MinecraftBridge:
             error = data.get("error", data.get("reason"))
             items_delta = data.get("items_delta", {})
             duration_ms = data.get("duration_ms", 0)
+            action_args = data.get("args") or self._pending_action_args.pop(action_id, None) or self._last_action_args.get(cmd, {})
             res = {
                 "success": success,
                 "ok": success,
@@ -156,7 +166,9 @@ class MinecraftBridge:
                 "reason": error or "success",
                 "items_delta": items_delta,
                 "duration_ms": duration_ms,
-                "command": cmd
+                "command": cmd,
+                "args": action_args,
+                "action_id": action_id
             }
             self._last_action_results[action_id] = res
 
@@ -169,13 +181,23 @@ class MinecraftBridge:
                 logger.warning(f"⚠️ Bot action failed: {cmd} (Error: {error})")
 
             if self.on_action_completed_callback:
-                await self.on_action_completed_callback(cmd, success, error, self.latest_state)
+                import inspect
+                sig = inspect.signature(self.on_action_completed_callback)
+                if len(sig.parameters) >= 5 or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                    await self.on_action_completed_callback(cmd, success, error, self.latest_state, args=action_args, action_id=action_id)
+                else:
+                    await self.on_action_completed_callback(cmd, success, error, self.latest_state)
 
     async def send_action(self, command: str, args: Optional[Dict[str, Any]] = None, action_id: Optional[str] = None):
         """Sends an action command to Mineflayer bot (asynchronous / non-blocking)."""
         if not self.clients:
             logger.warning(f"⚠️ Cannot send action ({command}): Mineflayer worker not connected!")
             return
+
+        if args is not None:
+            self._last_action_args[command] = dict(args)
+            if action_id:
+                self._pending_action_args[action_id] = dict(args)
 
         payload = {
             "command": command,
@@ -213,6 +235,9 @@ class MinecraftBridge:
         action_id = str(uuid.uuid4())[:8]
         self._pending_action_events[action_id] = event
         self._last_action_results.pop(action_id, None)
+        if args is not None:
+            self._pending_action_args[action_id] = dict(args)
+            self._last_action_args[command] = dict(args)
 
         await self.send_action(command, args, action_id=action_id)
 

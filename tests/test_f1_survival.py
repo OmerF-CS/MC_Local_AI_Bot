@@ -418,6 +418,154 @@ class TestF1SurvivalBasics(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.planner.consecutive_failure_repeats, 0)
         self.assertIsNone(self.planner._last_action_failure_key)
 
+    # ------------------------------------------------------------------
+    # F1-R11 Canlı Yol Doğrulama Testleri (Live-Path Verification)
+    # ------------------------------------------------------------------
+    async def test_f1_r11_live_bridge_message_deduplication_single_record(self):
+        """F1-R11 (a): Fake action_completed to bridge -> exactly ONE failure record in planner (even with duplicate action_id)."""
+        from core.bridge import MinecraftBridge
+        from main import MinecraftAIBot
+
+        bridge = MinecraftBridge()
+
+        class DummyBot:
+            def __init__(self, planner_inst):
+                self.planner = planner_inst
+                self.bridge = bridge
+                self.db = None
+                self._loop_wakeup = asyncio.Event()
+                self.active_player_task = None
+                self.active_recovery_task_id = None
+                self.active_recovery_start_time = None
+                self.last_known_state = {}
+
+            def _update_last_known_state(self, state):
+                pass
+
+        dummy_bot = DummyBot(self.planner)
+        dummy_bot.on_action_completed = MinecraftAIBot.on_action_completed.__get__(dummy_bot, DummyBot)
+        bridge.on_action_completed_callback = dummy_bot.on_action_completed
+
+        payload = {
+            "type": "action_completed",
+            "command": "go_to_coordinates",
+            "action_id": "act-dedup-42",
+            "success": False,
+            "error": "did_not_reach_destination (dist=15.2m > range=3m)",
+            "args": {"x": 120, "y": 64, "z": 240}
+        }
+
+        # Simulate bridge receiving duplicate action_completed messages from mineflayer
+        await bridge._dispatch_message(payload)
+        await bridge._dispatch_message(payload)
+
+        # Planner must have deduplicated and recorded exactly ONE failure entry
+        self.assertEqual(len(self.planner.action_failure_history), 1)
+        entry = self.planner.action_failure_history[0]
+        self.assertEqual(entry["action"], "go_to_coordinates")
+        self.assertEqual(entry["reason"], "did_not_reach_destination")
+        self.assertEqual(entry["target_str"], "(120, 64, 240)")
+        self.assertEqual(entry["action_id"], "act-dedup-42")
+        self.assertEqual(self.planner._consecutive_same_fallback_count, 1)
+
+    async def test_f1_r11_different_coordinates_did_not_reach_destination_no_shift(self):
+        """F1-R11 (b): 3 different coordinate targets for did_not_reach_destination -> NO category shift."""
+        state = {
+            "health": 20.0,
+            "food": 20.0,
+            "inventory_items": [],
+            "inventory_summary": "Empty",
+            "nearby_hostiles": [],
+            "position": {"x": 0, "y": 64, "z": 0}
+        }
+        self.mock_brain.process_chat = AsyncMock(return_value={"text": "OK", "tool_calls": []})
+
+        coords = [
+            {"x": 10, "y": 64, "z": 20},
+            {"x": 50, "y": 64, "z": 80},
+            {"x": -30, "y": 64, "z": -40}
+        ]
+        raw_error = "did_not_reach_destination (dist=16.8m > range=3m)"
+
+        for i, coord in enumerate(coords):
+            shift = self.planner.record_action_failure(
+                "go_to_coordinates",
+                raw_error,
+                args=coord,
+                action_id=f"act-diff-{i}"
+            )
+            self.assertIsNone(shift, f"Step {i+1}: different target must not trigger category shift")
+            self.assertEqual(self.planner._consecutive_same_fallback_count, 1)
+
+        self.assertFalse(self.planner._pending_category_shift)
+        self.assertIsNone(self.planner._pending_category_shift_action)
+        self.assertEqual(len(self.planner.action_failure_history), 3)
+
+        decision = await self.planner.decide_next_action(state)
+        self.assertFalse(self.planner._pending_category_shift)
+        self.assertNotEqual(decision.get("text"), "Repeated action failure detected. Shifting category to exploration.")
+
+    async def test_f1_r11_same_coordinate_three_failures_single_shift_log_and_action(self):
+        """F1-R11 (c): Same coordinate target 3 times -> exactly ONE category shift log line, ONE shift action."""
+        state = {
+            "health": 20.0,
+            "food": 20.0,
+            "inventory_items": [],
+            "inventory_summary": "Empty",
+            "nearby_hostiles": [],
+            "position": {"x": 0, "y": 64, "z": 0}
+        }
+        self.mock_brain.process_chat = AsyncMock(return_value={"text": "OK", "tool_calls": []})
+
+        target_coord = {"x": 100, "y": 64, "z": 200}
+        raw_error = "did_not_reach_destination (dist=16.8m > range=3m)"
+
+        s1 = self.planner.record_action_failure("go_to_coordinates", raw_error, args=target_coord, action_id="act-c-1")
+        self.assertIsNone(s1)
+        self.assertEqual(self.planner._consecutive_same_fallback_count, 1)
+
+        s2 = self.planner.record_action_failure("go_to_coordinates", raw_error, args=target_coord, action_id="act-c-2")
+        self.assertIsNone(s2)
+        self.assertEqual(self.planner._consecutive_same_fallback_count, 2)
+
+        s3 = self.planner.record_action_failure("go_to_coordinates", raw_error, args=target_coord, action_id="act-c-3")
+        self.assertIsNotNone(s3)
+        self.assertIn(s3["name"], ["go_to_coordinates", "say_chat"])
+        self.assertEqual(self.planner._consecutive_same_fallback_count, 3)
+        self.assertTrue(self.planner._pending_category_shift)
+
+        # decide_next_action applies shift: must emit exactly ONE [Fallback Category Shift] log line
+        with self.assertLogs("AutonomousCoopBrain", level="WARNING") as log_ctx:
+            decision = await self.planner.decide_next_action(state)
+
+        shift_logs = [msg for msg in log_ctx.output if "[Fallback Category Shift]" in msg]
+        self.assertEqual(len(shift_logs), 1, f"Expected exactly ONE shift log line, got: {shift_logs}")
+
+        # The action executed matches s3 (no double generation)
+        self.assertEqual(len(decision["tool_calls"]), 1)
+        self.assertEqual(decision["tool_calls"][0]["name"], s3["name"])
+        self.assertEqual(decision["tool_calls"][0]["arguments"], s3["arguments"])
+
+        # Counter reset
+        self.assertEqual(self.planner._consecutive_same_fallback_count, 0)
+        self.assertEqual(self.planner._consecutive_action_failure_count, 0)
+        self.assertFalse(self.planner._pending_category_shift)
+
+    def test_f1_r11_action_success_resets_streak(self):
+        """F1-R11 (d): Successful action execution resets failure streak to 0."""
+        target_coord = {"x": 100, "y": 64, "z": 200}
+        self.planner.record_action_failure("go_to_coordinates", "did_not_reach_destination", args=target_coord, action_id="act-d-1")
+        self.planner.record_action_failure("go_to_coordinates", "did_not_reach_destination", args=target_coord, action_id="act-d-2")
+        self.assertEqual(self.planner._consecutive_same_fallback_count, 2)
+        self.assertEqual(self.planner.consecutive_failure_repeats, 2)
+
+        # Successful action
+        self.planner.record_action_success("go_to_coordinates", action_id="act-d-ok")
+        self.assertEqual(self.planner._consecutive_same_fallback_count, 0)
+        self.assertEqual(self.planner.consecutive_failure_repeats, 0)
+        self.assertIsNone(self.planner._last_action_failure_key)
+        self.assertFalse(self.planner._pending_category_shift)
+
 
 if __name__ == "__main__":
     unittest.main()

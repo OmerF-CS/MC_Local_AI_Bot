@@ -164,19 +164,31 @@ class MinecraftAIBot:
         self.active_recovery_task_id = task_id
         self.active_recovery_start_time = time.time()
 
-    async def on_action_completed(self, cmd: str, success: bool, error: Optional[str], state: Dict[str, Any]):
+    async def on_action_completed(
+        self,
+        cmd: str,
+        success: bool,
+        error: Optional[str],
+        state: Dict[str, Any],
+        args: Optional[Dict[str, Any]] = None,
+        action_id: Optional[str] = None
+    ):
         """Called when an action finishes execution on Mineflayer."""
         logger.info(f"🏁 Action finished: {cmd} (success={success}, error={error})")
         self._update_last_known_state(state)
 
-        # F1-R11: Record action completion result in planner failure tracking
+        # Fallback to bridge's recorded args if not explicitly provided
+        if args is None and hasattr(self, "bridge") and hasattr(self.bridge, "_last_action_args"):
+            args = self.bridge._last_action_args.get(cmd, {})
+
+        # F1-R11: Record action completion result in planner failure tracking (Single source of truth)
         if hasattr(self, "planner") and self.planner:
             if success:
                 if hasattr(self.planner, "record_action_success"):
-                    self.planner.record_action_success(cmd)
+                    self.planner.record_action_success(cmd, action_id=action_id)
             else:
                 if error and hasattr(self.planner, "record_action_failure"):
-                    self.planner.record_action_failure(cmd, error, state=state)
+                    self.planner.record_action_failure(cmd, error, args=args, state=state, action_id=action_id)
 
         # Check task completion with STRICT correlation
         if self.active_player_task:
@@ -292,7 +304,8 @@ class MinecraftAIBot:
                     )
 
         # Trigger immediate next decision cycle in autonomous loop
-        self._loop_wakeup.set()
+        if hasattr(self, "_loop_wakeup") and self._loop_wakeup:
+            self._loop_wakeup.set()
 
     async def on_bot_spawn(self, state: Dict[str, Any]):
         """Called when the bot successfully spawns into the world."""
@@ -539,15 +552,6 @@ class MinecraftAIBot:
                         post_state=post_snapshot,
                         duration_s=dur_s
                     )
-                    # F1-R11: Feed executed tool results into planner repetition tracking
-                    if hasattr(self, "planner") and self.planner and exec_res:
-                        if exec_res.get("success", False):
-                            if hasattr(self.planner, "record_action_success"):
-                                self.planner.record_action_success(cmd)
-                        else:
-                            res_err = exec_res.get("error") or exec_res.get("reason")
-                            if res_err and hasattr(self.planner, "record_action_failure"):
-                                self.planner.record_action_failure(cmd, str(res_err), args=args, state=state)
                     await asyncio.sleep(0.1)
 
                 has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
