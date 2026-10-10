@@ -78,6 +78,10 @@ class MinecraftChatHandler:
             "suffocated in a wall",
             "tried to swim in lava",
             "experienced kinetic energy",
+            "killed ",
+            "slain by",
+            "was slain",
+            "died",
         )
         if (
             sender.lower() in server_senders
@@ -85,6 +89,11 @@ class MinecraftChatHandler:
             or any(p in msg_lower for p in system_patterns)
         ):
             logger.info(f"🔇 Ignored server broadcast/system message: [{sender}] {clean_message}")
+            return
+
+        # Ignore accidental keystrokes when player opens/closes chat (e.g. 't', 'tt')
+        if len(clean_message) <= 2 and not clean_message.startswith("!") and not clean_message.isdigit() and clean_message not in ("?", "!"):
+            logger.debug(f"🔇 Ignored short / accidental chat: [{sender}] '{clean_message}'")
             return
 
         # Save to database
@@ -363,8 +372,20 @@ class MinecraftChatHandler:
             "enchant_gear", "build_nether_outpost", "bridge_chasm",
             "breed_animals", "catch_fish", "manage_chest"
         }
+        # Track concrete teammate directives - only convert to persistent active task if explicit directive
+        directive_verbs = (
+            "mine", "craft", "collect", "gather", "smelt", "hunt", "kill", "attack",
+            "fight", "follow", "come", "guard", "protect", "build", "place", "make",
+            "get", "find", "bring", "go to", "head to", "sleep", "bed", "kaz", "yap",
+            "topla", "gel", "koru", "git", "kes", "avla"
+        )
+        is_directive = (
+            clean_message.startswith("!")
+            or is_mentioned
+            or any(verb in msg_lower for verb in directive_verbs)
+        )
         assigned_actions = [tc for tc in tool_calls if tc.get("name") in action_tools]
-        if assigned_actions:
+        if assigned_actions and is_directive:
             primary_act = assigned_actions[0].get("name", "co-op task")
             self._assign_task(clean_message, primary_act, sender, priority=3)
 
@@ -631,6 +652,10 @@ class MinecraftChatHandler:
             validated_args["player_name"] = player or sender
 
         # 3. Dispatch to Mineflayer Bridge
+        if hasattr(self.bot.bridge, "clients") and isinstance(self.bot.bridge.clients, (set, list)) and len(self.bot.bridge.clients) == 0:
+            logger.warning(f"⚠️ Cannot execute action ({cmd}): Mineflayer worker not connected.")
+            return {"success": False, "ok": False, "error": "bot_not_ready", "reason": "bot_not_ready"}
+
         if cmd in ("say_chat", "stop_actions", "guard_player", "follow_player"):
             await self.bot.bridge.send_action(cmd, validated_args)
             return {"success": True, "command": cmd, "args": validated_args}

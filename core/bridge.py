@@ -21,6 +21,7 @@ class MinecraftBridge:
         # Event Callbacks
         self.on_chat_callback: Optional[Callable] = None
         self.on_spawn_callback: Optional[Callable] = None
+        self.on_respawn_callback: Optional[Callable] = None
         self.on_death_callback: Optional[Callable] = None
         self.on_action_completed_callback: Optional[Callable] = None
         self.on_action_started_callback: Optional[Callable] = None
@@ -29,6 +30,7 @@ class MinecraftBridge:
         self.on_chest_used_callback: Optional[Callable] = None
         self.on_ore_discovered_callback: Optional[Callable] = None
         self.on_ore_mined_callback: Optional[Callable] = None
+        self.on_bot_disconnected_callback: Optional[Callable] = None
 
         # Action Tracking and Wait Events
         self._pending_action_events: Dict[str, asyncio.Event] = {}
@@ -71,6 +73,8 @@ class MinecraftBridge:
             logger.warning("🔌 Mineflayer worker disconnected.")
         finally:
             self.clients.discard(websocket)
+            if not self.clients:
+                self.latest_state = {}
 
     async def _dispatch_message(self, data: Dict[str, Any]):
         """Dispatches incoming message to appropriate handler callback."""
@@ -94,6 +98,17 @@ class MinecraftBridge:
             logger.warning("💀 Bot died!")
             if self.on_death_callback:
                 await self.on_death_callback(data)
+
+        elif msg_type == "bot_respawned":
+            logger.info("🔄 Bot respawned in Minecraft world!")
+            if self.on_respawn_callback:
+                await self.on_respawn_callback(self.latest_state)
+
+        elif msg_type == "bot_disconnected":
+            reason = data.get("reason", "unknown")
+            logger.warning(f"🔌 Bot disconnected from server (Reason: {reason})")
+            if self.on_bot_disconnected_callback:
+                await self.on_bot_disconnected_callback(reason)
 
         elif msg_type == "bot_status":
             logger.info(f"ℹ️ Bot status: {data.get('status')}")
@@ -176,6 +191,7 @@ class MinecraftBridge:
                 await client.send(payload_str)
             except Exception as e:
                 logger.error(f"❌ Error sending action payload: {e}")
+                self.clients.discard(client)
 
     async def send_action_and_wait(
         self,
@@ -186,7 +202,7 @@ class MinecraftBridge:
         """Sends an action command to Mineflayer bot and waits for completion event."""
         if not self.clients:
             logger.warning(f"⚠️ Cannot send action ({command}): Mineflayer worker not connected!")
-            return {"success": False, "error": "Mineflayer worker not connected"}
+            return {"success": False, "ok": False, "error": "bot_not_ready", "reason": "bot_not_ready"}
 
         # Non-blocking instant actions bypass wait
         if command in ("say_chat", "stop_actions", "guard_player", "follow_player"):
