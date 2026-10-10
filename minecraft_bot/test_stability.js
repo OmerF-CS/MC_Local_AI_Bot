@@ -480,6 +480,112 @@ asyncio.run(check())
         assert.ok(!out.includes('[object Object]'));
     });
 
+    // ------------------------------------------------------------------
+    // TEST SUITE 9: Honest Action Outcomes (F1 Close Fixes)
+    // ------------------------------------------------------------------
+    console.log("\n[Suite 9] Honest Action Outcomes (farm_crops & go_to_coordinates):");
+
+    await runTest("farm_crops: returns success=false and reason=no_crop_found when no crops available", async () => {
+        const mockBot = {
+            entity: { position: { x: 0, y: 64, z: 0 } },
+            version: '1.20.4',
+            inventory: { items: () => [] },
+            findBlocks: () => [],
+            chat: () => {},
+            pathfinder: { stop: () => {} }
+        };
+        setBotInstance(mockBot);
+
+        let sentResult = null;
+        setSendToPythonOverride((payload) => {
+            if (payload.type === 'action_completed') sentResult = payload;
+        });
+
+        try {
+            await handleAction({ command: 'farm_crops', args: {}, action_id: 'test_farm_honest_1' });
+            assert.ok(sentResult !== null, "Expected action_completed payload");
+            assert.strictEqual(sentResult.success, false, "Expected success=false when no crops found");
+            assert.strictEqual(sentResult.reason, "no_crop_found", "Expected reason=no_crop_found");
+            assert.strictEqual(sentResult.error, "no_crop_found", "Expected error=no_crop_found");
+        } finally {
+            setSendToPythonOverride(null);
+        }
+    });
+
+    await runTest("go_to_coordinates: returns success=false when bot did not arrive within range", async () => {
+        const mockBot = {
+            entity: {
+                position: {
+                    x: 0, y: 64, z: 0,
+                    distanceTo: (target) => Math.sqrt((target.x - 0)**2 + (target.y - 64)**2 + (target.z - 0)**2)
+                }
+            },
+            version: '1.20.4',
+            pathfinder: {
+                goto: async () => {}, // Mock pathfinder resolves but bot position stayed at (0, 64, 0)
+                stop: () => {}
+            },
+            chat: () => {}
+        };
+        setBotInstance(mockBot);
+
+        let sentResult = null;
+        setSendToPythonOverride((payload) => {
+            if (payload.type === 'action_completed') sentResult = payload;
+        });
+
+        try {
+            // Target is at (50, 64, 50) with range 2m. Distance is ~70.7m > 2m threshold
+            await handleAction({
+                command: 'go_to_coordinates',
+                args: { x: 50, y: 64, z: 50, range: 2 },
+                action_id: 'test_goto_fail_1'
+            });
+            assert.ok(sentResult !== null, "Expected action_completed payload");
+            assert.strictEqual(sentResult.success, false, "Must return success=false when distance > range");
+            assert.ok(sentResult.error && sentResult.error.includes("did_not_reach_destination"), "Expected did_not_reach_destination error");
+        } finally {
+            setSendToPythonOverride(null);
+        }
+    });
+
+    await runTest("go_to_coordinates: returns success=true and reason=arrived when destination reached", async () => {
+        const mockBot = {
+            entity: {
+                position: {
+                    x: 50.5, y: 64, z: 50.5,
+                    distanceTo: (target) => Math.sqrt((target.x - 50.5)**2 + (target.y - 64)**2 + (target.z - 50.5)**2)
+                }
+            },
+            version: '1.20.4',
+            pathfinder: {
+                goto: async () => {},
+                stop: () => {}
+            },
+            chat: () => {}
+        };
+        setBotInstance(mockBot);
+
+        let sentResult = null;
+        setSendToPythonOverride((payload) => {
+            if (payload.type === 'action_completed') sentResult = payload;
+        });
+
+        try {
+            // Target is at (50, 64, 50) with range 2m. Distance is ~0.7m <= 2m threshold
+            await handleAction({
+                command: 'go_to_coordinates',
+                args: { x: 50, y: 64, z: 50, range: 2 },
+                action_id: 'test_goto_success_1'
+            });
+            assert.ok(sentResult !== null, "Expected action_completed payload");
+            assert.strictEqual(sentResult.success, true, "Must return success=true when distance <= range");
+            assert.strictEqual(sentResult.reason, "arrived", "Expected reason=arrived");
+        } finally {
+            setSendToPythonOverride(null);
+        }
+    });
+
     console.log("\n=================================================");
     console.log(`🎉 All ${passedTests}/${totalTests} unit stability tests PASSED!`);
     console.log("=================================================\n");

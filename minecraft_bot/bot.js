@@ -2863,7 +2863,7 @@ async function farmCrops(bot, actionType = 'auto') {
     }
 
     bot.chat("No harvestable crops, hay bales, or tilling spots found nearby. 🌾");
-    return true;
+    return false;
 }
 
 // --- LIFE CYCLE ENGINES: BEDS, BREEDING, FISHING, CHESTS (F1.3-F1.7) ---
@@ -4531,7 +4531,26 @@ async function handleAction(action) {
                     : new GoalNear(x, y, z, range);
                 try {
                     await withTimeout(bot.pathfinder.goto(targetGoal), 30000, 'go_to_coordinates');
-                    actionSuccess = true;
+                    // Strict arrival verification: verify physical distance is within range threshold
+                    const currentPos = bot.entity ? bot.entity.position : null;
+                    if (currentPos && typeof currentPos.distanceTo === 'function') {
+                        let dist;
+                        if (y === undefined || y === null || args.ignore_y) {
+                            const dx = currentPos.x - x;
+                            const dz = currentPos.z - z;
+                            dist = Math.sqrt(dx * dx + dz * dz);
+                        } else {
+                            dist = currentPos.distanceTo(new Vec3(x, y, z));
+                        }
+                        if (dist <= range + 1.5) {
+                            actionSuccess = true;
+                        } else {
+                            actionSuccess = false;
+                            actionError = `did_not_reach_destination (dist=${dist.toFixed(1)}m > range=${range}m)`;
+                        }
+                    } else {
+                        actionSuccess = true;
+                    }
                 } catch (err) {
                     actionSuccess = false;
                     try { bot.pathfinder.stop(); } catch (_) {}
@@ -4882,7 +4901,7 @@ async function handleAction(action) {
                 const ok = await farmCrops(bot, actionType);
                 if (!ok) {
                     actionSuccess = false;
-                    actionError = "Failed to farm crops";
+                    actionError = "no_crop_found";
                 }
                 break;
             }
@@ -5110,6 +5129,8 @@ async function handleAction(action) {
         let resultReason = actionSuccess ? 'success' : (actionError || 'failed');
         if (command === 'go_to_coordinates') {
             resultReason = actionSuccess ? 'arrived' : (actionError || 'unreachable');
+        } else if (command === 'farm_crops' && !actionSuccess) {
+            resultReason = 'no_crop_found';
         }
 
         sendToPython({
