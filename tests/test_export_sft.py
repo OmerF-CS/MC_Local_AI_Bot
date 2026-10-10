@@ -128,6 +128,33 @@ class TestExportSFTDataset(unittest.TestCase):
             self.assertGreater(val_n, 0)
             self.assertEqual(train_n + val_n, 30)
 
+    def test_curation_filters_test_runs(self):
+        """Verify that records from test runs are filtered out unless include_test_runs=True."""
+        raw_records = [
+            {
+                "run_id": "test_20261010_123456",
+                "state": {"health": 20, "food": 20, "inventory": {"oak_log": 4}},
+                "milestone": {"target": "wooden_pickaxe", "stage": "WOOD"},
+                "decision": {"tool_name": "craft_item", "arguments": {"item_name": "wooden_pickaxe", "count": 1}},
+                "execution": {"progress_made": True, "is_edge_case": False, "bridge_success": True}
+            },
+            {
+                "run_id": "prod_20261010_654321",
+                "state": {"health": 20, "food": 20, "inventory": {"oak_log": 4}},
+                "milestone": {"target": "wooden_pickaxe", "stage": "WOOD"},
+                "decision": {"tool_name": "craft_item", "arguments": {"item_name": "wooden_pickaxe", "count": 1}},
+                "execution": {"progress_made": True, "is_edge_case": False, "bridge_success": True}
+            }
+        ]
+
+        # By default, test run should be excluded
+        curated_default = clean_and_curate_recorded_decisions(raw_records, include_test_runs=False)
+        self.assertEqual(len(curated_default), 1)
+
+        # When include_test_runs=True, both should be included
+        curated_included = clean_and_curate_recorded_decisions(raw_records, include_test_runs=True)
+        self.assertEqual(len(curated_included), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

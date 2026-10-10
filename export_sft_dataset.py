@@ -41,12 +41,22 @@ def create_chatml_sample(system_prompt: str, user_content: str, tool_name: str, 
     }
 
 
-def clean_and_curate_recorded_decisions(raw_records: List[Dict[str, Any]], bot_name: str = "AIAssistant", bot_owner: str = "Omer") -> List[Dict[str, Any]]:
+def clean_and_curate_recorded_decisions(
+    raw_records: List[Dict[str, Any]],
+    bot_name: str = "AIAssistant",
+    bot_owner: str = "Omer",
+    include_test_runs: bool = False
+) -> List[Dict[str, Any]]:
     """Cleans real game decisions, deduplicates stuck loops, and teacher-corrects known edge cases."""
     curated = []
     seen_signatures = {}
 
     for rec in raw_records:
+        if not include_test_runs:
+            run_id = rec.get("run_id", "")
+            if rec.get("is_test", False) or (isinstance(run_id, str) and run_id.startswith("test_")):
+                continue
+
         st = rec.get("state", {})
         ms = rec.get("milestone", {})
         dec = rec.get("decision", {})
@@ -531,7 +541,8 @@ def export_sft_dataset(
     val_output: str = "data/sft_val.jsonl",
     target_count: int = 350,
     val_ratio: float = 0.1,
-    seed: int = 42
+    seed: int = 42,
+    include_test_runs: bool = False
 ) -> Tuple[int, int]:
     """Orchestrates dataset loading, cleaning, golden synthesis, splitting, and saving."""
     random.seed(seed)
@@ -543,7 +554,12 @@ def export_sft_dataset(
                 line = line.strip()
                 if line:
                     try:
-                        raw_records.append(json.loads(line))
+                        record = json.loads(line)
+                        if not include_test_runs:
+                            run_id = record.get("run_id", "")
+                            if record.get("is_test", False) or (isinstance(run_id, str) and run_id.startswith("test_")):
+                                continue
+                        raw_records.append(record)
                     except Exception:
                         pass
         print(f"📖 Loaded {len(raw_records)} recorded in-game decisions from {input_path}")
@@ -551,7 +567,7 @@ def export_sft_dataset(
         print(f"ℹ️ No recorded decisions found at {input_path}. Proceeding with golden synthesis.")
 
     # 1. Clean recorded samples
-    curated_records = clean_and_curate_recorded_decisions(raw_records)
+    curated_records = clean_and_curate_recorded_decisions(raw_records, include_test_runs=include_test_runs)
     print(f"✨ Cleaned & curated {len(curated_records)} high-quality in-game samples.")
 
     # 2. Golden speedrun augmentation to reach target dataset depth
@@ -606,6 +622,7 @@ def main():
     parser.add_argument("--min-samples", type=int, default=350, help="Target minimum sample count")
     parser.add_argument("--val-ratio", type=float, default=0.1, help="Validation ratio (default 0.1)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--include-test-runs", action="store_true", help="Include records from test runs in training data")
 
     args = parser.parse_args()
 
@@ -615,7 +632,8 @@ def main():
         val_output=args.output_val,
         target_count=args.min_samples,
         val_ratio=args.val_ratio,
-        seed=args.seed
+        seed=args.seed,
+        include_test_runs=args.include_test_runs
     )
 
 
