@@ -474,8 +474,8 @@ function getBotState() {
     const dragonDefeated = dragonDefeatedFlag || (dimension === 'the_end' && endPortalBlockFound && !enderDragonInfo);
 
     return {
-        health: bot.health || 20,
-        food: bot.food || 20,
+        health: (typeof bot.health === 'number') ? bot.health : 20,
+        food: (typeof bot.food === 'number') ? bot.food : 20,
         position: {
             x: Math.round(bot.entity.position.x * 10) / 10,
             y: Math.round(bot.entity.position.y * 10) / 10,
@@ -550,8 +550,8 @@ function getBotState() {
     };
     } catch (err) {
         return {
-            health: bot.health || 20,
-            food: bot.food || 20,
+            health: (typeof bot.health === 'number') ? bot.health : 20,
+            food: (typeof bot.food === 'number') ? bot.food : 20,
             position: lastKnownPosition || { x: 0, y: 64, z: 0 },
             dimension: lastKnownDimension || 'overworld',
             inventory: [],
@@ -597,7 +597,8 @@ function antiStuckCheck() {
 async function autoEatCheck() {
     if (!bot || !bot.entity || isEating) return;
 
-    if (bot.food < 16 || (bot.health < 20 && bot.food < 20)) {
+    // F1-R9: Healing hunger threshold is food < 18. Do NOT consume food when hunger is 18 or 19.
+    if (bot.food < 14 || (bot.health < 20 && bot.food < 18)) {
         const foodItem = bot.inventory.items().find(i => FOOD_NAMES.includes(i.name));
         if (foodItem) {
             try {
@@ -1425,8 +1426,8 @@ function createBot() {
         }, 500);
 
         // F1-1 & F1-2: Track HP recovery and hunger
-        let lastReportedHp = bot.health || 20;
-        let lastReportedFood = bot.food || 20;
+        let lastReportedHp = (typeof bot.health === 'number') ? bot.health : 20;
+        let lastReportedFood = (typeof bot.food === 'number') ? bot.food : 20;
         bot.on('health', () => {
             try {
                 const currentHp = bot.health;
@@ -2764,7 +2765,9 @@ async function farmCrops(bot, actionType = 'auto') {
                     await bot.activateBlock(b);
                     await new Promise(r => setTimeout(r, 200));
                     boneMealItem = bot.inventory.items().find(i => i.name === 'bone_meal');
-                } catch (_) {}
+                } catch (err) {
+                    console.warn(`[Farm] Error accelerating crop with bone meal: ${err.message}`);
+                }
             }
         }
     }
@@ -2802,10 +2805,14 @@ async function farmCrops(bot, actionType = 'auto') {
                         const seedItem = bot.inventory.items().find(i => i.name === seedName);
                         if (seedItem) {
                             await bot.equip(seedItem, 'hand');
-                            await bot.placeBlock(belowBlock, new Vec3(0, 1, 0)).catch(() => {});
+                            await bot.placeBlock(belowBlock, new Vec3(0, 1, 0)).catch(err => {
+                                console.warn(`[Farm] Error placing seed: ${err.message}`);
+                            });
                         }
                     }
-                } catch (_) {}
+                } catch (err) {
+                    console.warn(`[Farm] Error harvesting/replanting crop: ${err.message}`);
+                }
             }
         }
 
@@ -2849,9 +2856,13 @@ async function farmCrops(bot, actionType = 'auto') {
                         if (currentSeed) {
                             await bot.equip(currentSeed, 'hand');
                             const farmland = bot.blockAt(pos);
-                            await bot.placeBlock(farmland, new Vec3(0, 1, 0)).catch(() => {});
+                            await bot.placeBlock(farmland, new Vec3(0, 1, 0)).catch(err => {
+                                console.warn(`[Farm] Error planting seed: ${err.message}`);
+                            });
                         }
-                    } catch (_) {}
+                    } catch (err) {
+                        console.warn(`[Farm] Error tilling/planting crop: ${err.message}`);
+                    }
                     if (tilledCount >= 4) break;
                 }
             }
@@ -5167,5 +5178,8 @@ module.exports = {
     verifyAndRepairBunker,
     getDefenseRetreatState: () => ({ lastDefenseRetreatTime, lastRetreatThreatKey, lastRetreatCannotEscape }),
     resetDefenseRetreatState: () => { lastDefenseRetreatTime = 0; lastRetreatThreatKey = null; lastRetreatCannotEscape = false; },
-    formatDisconnectReason
+    formatDisconnectReason,
+    farmCrops,
+    autoEatCheck,
+    getBotState
 };

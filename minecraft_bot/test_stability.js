@@ -18,7 +18,10 @@ const {
     resetConsecutiveProcessErrors,
     verifyAndRepairBunker,
     getDefenseRetreatState,
-    resetDefenseRetreatState
+    resetDefenseRetreatState,
+    farmCrops,
+    autoEatCheck,
+    getBotState
 } = botModule;
 
 let passedTests = 0;
@@ -586,12 +589,88 @@ asyncio.run(check())
         }
     });
 
+    // ------------------------------------------------------------------
+    // TEST SUITE 10: F1-R9 Precision Fixes (farmCrops empty area, 0 food/health, autoEatCheck 18 threshold)
+    // ------------------------------------------------------------------
+    console.log("\n[Suite 10] F1-R9 Precision Fixes (farmCrops empty, 0 food/health, autoEatCheck 18 threshold):");
+
+    await runTest("farmCrops: returns false when no harvestable crops or tilling spots found", async () => {
+        const mockBot = {
+            findBlocks: () => [],
+            inventory: { items: () => [] },
+            chat: () => {}
+        };
+        const res = await farmCrops(mockBot);
+        assert.strictEqual(res, false, "farmCrops must return false in empty area");
+    });
+
+    await runTest("getBotState: preserves health=0 and food=0 exactly without defaulting to 20", () => {
+        const mockBot = {
+            health: 0,
+            food: 0,
+            entity: {
+                position: { x: 10, y: 64, z: 20 },
+                yaw: 0, pitch: 0,
+                velocity: { x: 0, y: 0, z: 0 }
+            },
+            inventory: { items: () => [], slots: {} },
+            entities: {},
+            players: {},
+            blockAt: () => null,
+            time: { timeOfDay: 6000, isDay: true },
+            heldItem: null,
+            game: { dimension: 'overworld' }
+        };
+        setBotInstance(mockBot);
+        const state = getBotState();
+        assert.strictEqual(state.health, 0, "health=0 must be preserved");
+        assert.strictEqual(state.food, 0, "food=0 must be preserved");
+    });
+
+    await runTest("autoEatCheck: does not consume food when hunger is 18 or 19", async () => {
+        let consumeCallCount = 0;
+        const mockBot = {
+            health: 15,
+            food: 18,
+            entity: { position: { x: 0, y: 64, z: 0 } },
+            inventory: {
+                items: () => [{ name: 'bread', count: 5 }]
+            },
+            consume: async () => { consumeCallCount++; },
+            equip: async () => {},
+            chat: () => {}
+        };
+        setBotInstance(mockBot);
+
+        // Test at hunger 18 (should NOT eat)
+        await autoEatCheck();
+        assert.strictEqual(consumeCallCount, 0, "autoEatCheck should NOT consume food when hunger is 18");
+
+        // Test at hunger 19 (should NOT eat)
+        mockBot.food = 19;
+        await autoEatCheck();
+        assert.strictEqual(consumeCallCount, 0, "autoEatCheck should NOT consume food when hunger is 19");
+
+        // Test at hunger 17 with health 15 (SHOULD eat for healing)
+        mockBot.food = 17;
+        await autoEatCheck();
+        assert.strictEqual(consumeCallCount, 1, "autoEatCheck SHOULD consume food when health < 20 and hunger < 18");
+
+        // Test at hunger 13 with full health 20 (SHOULD eat for starvation prevention)
+        mockBot.health = 20;
+        mockBot.food = 13;
+        await autoEatCheck();
+        assert.strictEqual(consumeCallCount, 2, "autoEatCheck SHOULD consume food when hunger < 14 regardless of health");
+    });
+
     console.log("\n=================================================");
     console.log(`🎉 All ${passedTests}/${totalTests} unit stability tests PASSED!`);
     console.log("=================================================\n");
 }
 
-runAllTests().catch((err) => {
+runAllTests().then(() => {
+    process.exit(0);
+}).catch((err) => {
     console.error("Test execution terminated with error:", err);
     process.exit(1);
 });
