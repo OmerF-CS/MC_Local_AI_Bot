@@ -10,8 +10,11 @@ import sys
 import time
 import unittest
 
+import shutil
+
 from core.bridge import MinecraftBridge
 from utils.logger import get_logger
+from utils.run_context import get_current_run_id, get_run_directory
 
 logger = get_logger("LiveServerIntegrationTest")
 
@@ -41,7 +44,8 @@ class TestLiveMinecraft1204Integration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.java_exe = get_java_executable()
-        cls.server_dir = os.path.abspath("test_server")
+        server_dir_env = os.getenv("MC_SERVER_DIR", "test_server")
+        cls.server_dir = os.path.abspath(server_dir_env)
         cls.jar_path = os.path.join(cls.server_dir, "server.jar")
 
         if not os.path.exists(cls.jar_path):
@@ -94,6 +98,7 @@ class TestLiveMinecraft1204Integration(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        # 1. Stop Minecraft Dedicated Server
         if hasattr(cls, "server_proc") and cls.server_proc:
             logger.info("🛑 Stopping Minecraft test server...")
             try:
@@ -103,6 +108,23 @@ class TestLiveMinecraft1204Integration(unittest.TestCase):
             except Exception:
                 cls.server_proc.kill()
             logger.info("✅ Minecraft test server stopped.")
+
+        # 2. Capture server latest.log and bot log into run directory
+        try:
+            active_run_id = os.getenv("MC_RUN_ID") or get_current_run_id()
+            run_dir = get_run_directory(active_run_id)
+            server_log = os.path.join(cls.server_dir, "logs", "latest.log")
+            if os.path.isfile(server_log):
+                target_server_log = os.path.join(run_dir, "server_latest.log")
+                shutil.copy2(server_log, target_server_log)
+                logger.info(f"📋 Captured live server log into: {target_server_log}")
+
+            shared_bot_log = os.path.abspath(os.path.join("logs", "minecraft_bot.log"))
+            run_bot_log = os.path.join(run_dir, "bot.log")
+            if os.path.isfile(shared_bot_log) and not os.path.isfile(run_bot_log):
+                shutil.copy2(shared_bot_log, run_bot_log)
+        except Exception as e:
+            logger.debug(f"Failed to copy server logs to runs directory: {e}")
 
     def test_live_bot_connection_and_interaction(self):
         """Runs live Mineflayer bot connection, spawn verification, and chat roundtrip."""

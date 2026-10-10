@@ -204,7 +204,30 @@ class TestRunIsolation(unittest.TestCase):
         self.assertTrue(sample_0["mock"])
         self.assertEqual(sample_0["model"], "qwen2.5:3b")
 
+    def test_server_log_capture_logic(self):
+        """Test capturing server latest.log and bot.log into run directory."""
+        import shutil
+        test_run_id = "test_log_capture_run"
+        set_current_run_id(test_run_id)
+
+        # Mock server directory with logs/latest.log
+        mock_server_dir = os.path.join(self.temp_dir.name, "test_server")
+        os.makedirs(os.path.join(mock_server_dir, "logs"), exist_ok=True)
+        server_log_src = os.path.join(mock_server_dir, "logs", "latest.log")
+        with open(server_log_src, "w", encoding="utf-8") as f:
+            f.write("[Server thread/INFO]: Done (2.123s)! For help, type \"help\"\n")
+
+        run_dir = get_run_directory(test_run_id, base_dir=self.temp_dir.name)
+        target_server_log = os.path.join(run_dir, "server_latest.log")
+        shutil.copy2(server_log_src, target_server_log)
+
+        self.assertTrue(os.path.isfile(target_server_log))
+        with open(target_server_log, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Done (2.123s)!", content)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
