@@ -6,6 +6,8 @@ const assert = require('assert');
 const { spawnSync } = require('child_process');
 const path = require('path');
 const { Vec3 } = require('vec3');
+const mcData = require('minecraft-data')('1.20.4');
+const suiteFilter = process.env.SUITE || (process.argv.find(a => a.startsWith('--suite=')) ? process.argv.find(a => a.startsWith('--suite=')).split('=')[1] : null);
 
 const botModule = require('./bot');
 const {
@@ -55,9 +57,10 @@ async function runAllTests() {
     console.log("=================================================");
 
     // ------------------------------------------------------------------
-    // TEST SUITE 1: autoSelfDefenseCheck Null Safety Guards (F0-2 / F0-R1)
+    // TEST SUITES 1-8 (F0 and F1 Foundations)
     // ------------------------------------------------------------------
-    console.log("\n[Suite 1] autoSelfDefenseCheck Null Guards (F0-2 / F0-R1):");
+    if (!suiteFilter || suiteFilter !== '10') {
+        console.log("\n[Suite 1] autoSelfDefenseCheck Null Guards (F0-2 / F0-R1):");
 
     await runTest("autoSelfDefenseCheck: bot is null -> does not throw", async () => {
         setBotInstance(null);
@@ -482,230 +485,271 @@ asyncio.run(check())
         assert.strictEqual(out, 'multiplayer.disconnect.kicked');
         assert.ok(!out.includes('[object Object]'));
     });
+    }
 
     // ------------------------------------------------------------------
     // TEST SUITE 9: Honest Action Outcomes (F1 Close Fixes)
     // ------------------------------------------------------------------
-    console.log("\n[Suite 9] Honest Action Outcomes (farm_crops & go_to_coordinates):");
+    if (!suiteFilter || suiteFilter === '9') {
+        console.log("\n[Suite 9] Honest Action Outcomes (farm_crops & go_to_coordinates):");
 
-    await runTest("farm_crops: returns success=false and reason=no_crop_found when no crops available", async () => {
-        let chatMessage = '';
-        const mockBot = {
-            entity: { position: { x: 0, y: 64, z: 0 } },
-            version: '1.20.4',
-            inventory: { items: () => [] },
-            findBlocks: () => [],
-            blockAt: () => null,
-            chat: (msg) => { chatMessage = msg; },
-            pathfinder: { stop: () => {} }
-        };
-        setBotInstance(mockBot);
+        await runTest("farm_crops: returns success=false and reason=no_crop_found when no crops available", async () => {
+            let chatMessage = '';
+            const mockBot = {
+                entity: { position: { x: 0, y: 64, z: 0 } },
+                version: '1.20.4',
+                registry: mcData,
+                inventory: { items: () => [] },
+                findBlocks: () => [],
+                blockAt: () => null,
+                chat: (msg) => { chatMessage = msg; },
+                pathfinder: { stop: () => {}, setMovements: () => {} }
+            };
+            setBotInstance(mockBot);
 
-        let sentResult = null;
-        setSendToPythonOverride((payload) => {
-            if (payload.type === 'action_completed') sentResult = payload;
-        });
-
-        try {
-            await handleAction({ command: 'farm_crops', args: {}, action_id: 'test_farm_honest_1' });
-            assert.ok(sentResult !== null, "Expected action_completed payload");
-            assert.strictEqual(sentResult.success, false, "Expected success=false when no crops found");
-            assert.strictEqual(sentResult.reason, "no_crop_found", "Expected reason=no_crop_found");
-            assert.strictEqual(sentResult.error, "no_crop_found", "Expected error=no_crop_found");
-            assert.ok(chatMessage.includes("No harvestable crops"), "Expected line 2876 chat message executed");
-        } finally {
-            setSendToPythonOverride(null);
-        }
-    });
-
-    await runTest("go_to_coordinates: returns success=false when bot did not arrive within range", async () => {
-        const mockBot = {
-            entity: {
-                position: {
-                    x: 0, y: 64, z: 0,
-                    distanceTo: (target) => Math.sqrt((target.x - 0)**2 + (target.y - 64)**2 + (target.z - 0)**2)
-                }
-            },
-            version: '1.20.4',
-            pathfinder: {
-                goto: async () => {}, // Mock pathfinder resolves but bot position stayed at (0, 64, 0)
-                stop: () => {}
-            },
-            chat: () => {}
-        };
-        setBotInstance(mockBot);
-
-        let sentResult = null;
-        setSendToPythonOverride((payload) => {
-            if (payload.type === 'action_completed') sentResult = payload;
-        });
-
-        try {
-            // Target is at (50, 64, 50) with range 2m. Distance is ~70.7m > 2m threshold
-            await handleAction({
-                command: 'go_to_coordinates',
-                args: { x: 50, y: 64, z: 50, range: 2 },
-                action_id: 'test_goto_fail_1'
+            let sentResult = null;
+            setSendToPythonOverride((payload) => {
+                if (payload.type === 'action_completed') sentResult = payload;
             });
-            assert.ok(sentResult !== null, "Expected action_completed payload");
-            assert.strictEqual(sentResult.success, false, "Must return success=false when distance > range");
-            assert.ok(sentResult.error && sentResult.error.includes("did_not_reach_destination"), "Expected did_not_reach_destination error");
-        } finally {
-            setSendToPythonOverride(null);
-        }
-    });
 
-    await runTest("go_to_coordinates: returns success=true and reason=arrived when destination reached", async () => {
-        const mockBot = {
-            entity: {
-                position: {
-                    x: 50.5, y: 64, z: 50.5,
-                    distanceTo: (target) => Math.sqrt((target.x - 50.5)**2 + (target.y - 64)**2 + (target.z - 50.5)**2)
-                }
-            },
-            version: '1.20.4',
-            pathfinder: {
-                goto: async () => {},
-                stop: () => {}
-            },
-            chat: () => {}
-        };
-        setBotInstance(mockBot);
-
-        let sentResult = null;
-        setSendToPythonOverride((payload) => {
-            if (payload.type === 'action_completed') sentResult = payload;
+            try {
+                await handleAction({ command: 'farm_crops', args: {}, action_id: 'test_farm_honest_1' });
+                assert.ok(sentResult !== null, "Expected action_completed payload");
+                assert.strictEqual(sentResult.success, false, "Expected success=false when no crops found");
+                assert.strictEqual(sentResult.reason, "no_crop_found", "Expected reason=no_crop_found");
+                assert.strictEqual(sentResult.error, "no_crop_found", "Expected error=no_crop_found");
+                assert.ok(chatMessage.includes("No harvestable crops"), "Expected line 2876 chat message executed");
+            } finally {
+                setSendToPythonOverride(null);
+            }
         });
 
-        try {
-            // Target is at (50, 64, 50) with range 2m. Distance is ~0.7m <= 2m threshold
-            await handleAction({
-                command: 'go_to_coordinates',
-                args: { x: 50, y: 64, z: 50, range: 2 },
-                action_id: 'test_goto_success_1'
+        await runTest("go_to_coordinates: returns success=false when bot did not arrive within range", async () => {
+            const mockBot = {
+                entity: {
+                    position: {
+                        x: 0, y: 64, z: 0,
+                        distanceTo: (target) => Math.sqrt((target.x - 0)**2 + (target.y - 64)**2 + (target.z - 0)**2)
+                    }
+                },
+                version: '1.20.4',
+                registry: mcData,
+                pathfinder: {
+                    goto: async () => {}, // Mock pathfinder resolves but bot position stayed at (0, 64, 0)
+                    stop: () => {},
+                    setMovements: () => {}
+                },
+                chat: () => {}
+            };
+            setBotInstance(mockBot);
+
+            let sentResult = null;
+            setSendToPythonOverride((payload) => {
+                if (payload.type === 'action_completed') sentResult = payload;
             });
-            assert.ok(sentResult !== null, "Expected action_completed payload");
-            assert.strictEqual(sentResult.success, true, "Must return success=true when distance <= range");
-            assert.strictEqual(sentResult.reason, "arrived", "Expected reason=arrived");
-        } finally {
-            setSendToPythonOverride(null);
-        }
-    });
 
-    await runTest("go_to_coordinates: returns success=false and reason=position_unknown when currentPos is missing", async () => {
-        let callCount = 0;
-        const mockBot = {
-            get entity() {
-                callCount++;
-                if (callCount <= 2) return { position: { x: 0, y: 64, z: 0, distanceTo: () => 10 } };
-                return null;
-            },
-            version: '1.20.4',
-            pathfinder: {
-                goto: async () => {},
-                stop: () => {}
-            },
-            chat: () => {}
-        };
-        setBotInstance(mockBot);
-
-        let sentResult = null;
-        setSendToPythonOverride((payload) => {
-            if (payload.type === 'action_completed') sentResult = payload;
+            try {
+                // Target is at (50, 64, 50) with range 2m. Distance is ~70.7m > 2m threshold
+                await handleAction({
+                    command: 'go_to_coordinates',
+                    args: { x: 50, y: 64, z: 50, range: 2 },
+                    action_id: 'test_goto_fail_1'
+                });
+                assert.ok(sentResult !== null, "Expected action_completed payload");
+                assert.strictEqual(sentResult.success, false, "Must return success=false when distance > range");
+                assert.ok(sentResult.error && sentResult.error.includes("did_not_reach_destination"), "Expected did_not_reach_destination error");
+            } finally {
+                setSendToPythonOverride(null);
+            }
         });
 
-        try {
-            await handleAction({
-                command: 'go_to_coordinates',
-                args: { x: 50, y: 64, z: 50, range: 2 },
-                action_id: 'test_goto_no_pos'
+        await runTest("go_to_coordinates: returns success=true and reason=arrived when destination reached", async () => {
+            const mockBot = {
+                entity: {
+                    position: {
+                        x: 50.5, y: 64, z: 50.5,
+                        distanceTo: (target) => Math.sqrt((target.x - 50.5)**2 + (target.y - 64)**2 + (target.z - 50.5)**2)
+                    }
+                },
+                version: '1.20.4',
+                registry: mcData,
+                pathfinder: {
+                    goto: async () => {},
+                    stop: () => {},
+                    setMovements: () => {}
+                },
+                chat: () => {}
+            };
+            setBotInstance(mockBot);
+
+            let sentResult = null;
+            setSendToPythonOverride((payload) => {
+                if (payload.type === 'action_completed') sentResult = payload;
             });
-            assert.ok(sentResult !== null, "Expected action_completed payload");
-            assert.strictEqual(sentResult.success, false, "Must return success=false when currentPos missing");
-            assert.strictEqual(sentResult.error, "position_unknown", "Expected position_unknown error");
-        } finally {
-            setSendToPythonOverride(null);
-        }
-    });
+
+            try {
+                // Target is at (50, 64, 50) with range 2m. Distance is ~0.7m <= 2m threshold
+                await handleAction({
+                    command: 'go_to_coordinates',
+                    args: { x: 50, y: 64, z: 50, range: 2 },
+                    action_id: 'test_goto_success_1'
+                });
+                assert.ok(sentResult !== null, "Expected action_completed payload");
+                assert.strictEqual(sentResult.success, true, "Must return success=true when distance <= range");
+                assert.strictEqual(sentResult.reason, "arrived", "Expected reason=arrived");
+            } finally {
+                setSendToPythonOverride(null);
+            }
+        });
+
+        await runTest("go_to_coordinates: returns success=false and reason=position_unknown when currentPos is missing", async () => {
+            let callCount = 0;
+            const mockBot = {
+                get entity() {
+                    callCount++;
+                    if (callCount <= 2) return { position: { x: 0, y: 64, z: 0, distanceTo: () => 10 } };
+                    return null;
+                },
+                version: '1.20.4',
+                registry: mcData,
+                pathfinder: {
+                    goto: async () => {},
+                    stop: () => {},
+                    setMovements: () => {}
+                },
+                chat: () => {}
+            };
+            setBotInstance(mockBot);
+
+            let sentResult = null;
+            setSendToPythonOverride((payload) => {
+                if (payload.type === 'action_completed') sentResult = payload;
+            });
+
+            try {
+                await handleAction({
+                    command: 'go_to_coordinates',
+                    args: { x: 50, y: 64, z: 50, range: 2 },
+                    action_id: 'test_goto_no_pos'
+                });
+                assert.ok(sentResult !== null, "Expected action_completed payload");
+                assert.strictEqual(sentResult.success, false, "Must return success=false when currentPos missing");
+                assert.strictEqual(sentResult.error, "position_unknown", "Expected position_unknown error");
+            } finally {
+                setSendToPythonOverride(null);
+            }
+        });
+    }
 
     // ------------------------------------------------------------------
     // TEST SUITE 10: F1-R9 Precision Fixes (farmCrops empty area, 0 food/health, autoEatCheck 18 threshold)
     // ------------------------------------------------------------------
-    console.log("\n[Suite 10] F1-R9 Precision Fixes (farmCrops empty, 0 food/health, autoEatCheck 18 threshold):");
+    if (!suiteFilter || suiteFilter === '10') {
+        console.log("\n[Suite 10] F1-R9 Precision Fixes (farmCrops empty, 0 food/health, autoEatCheck 18 threshold):");
 
-    await runTest("farmCrops: returns false when no harvestable crops or tilling spots found", async () => {
-        let chatMessage = '';
-        const mockBot = {
-            version: '1.20.4',
-            entity: { position: { x: 0, y: 64, z: 0 } },
-            findBlocks: () => [],
-            inventory: { items: () => [] },
-            blockAt: () => null,
-            chat: (msg) => { chatMessage = msg; }
-        };
-        const res = await farmCrops(mockBot);
-        assert.strictEqual(res, false, "farmCrops must return false in empty area");
-        assert.ok(chatMessage.includes("No harvestable crops"), "Expected line 2876 chat message executed");
-    });
+        await runTest("farmCrops: returns false when no harvestable crops or tilling spots found", async () => {
+            let chatMessage = '';
+            const mockBot = {
+                version: '1.20.4',
+                registry: mcData,
+                entity: { position: { x: 0, y: 64, z: 0 } },
+                findBlocks: () => [],
+                inventory: { items: () => [] },
+                blockAt: () => null,
+                chat: (msg) => { chatMessage = msg; }
+            };
+            const res = await farmCrops(mockBot);
+            assert.strictEqual(res, false, "farmCrops must return false in empty area");
+            assert.ok(chatMessage.includes("No harvestable crops"), "Expected line 2876 chat message executed");
+        });
 
-    await runTest("getBotState: preserves health=0 and food=0 exactly without defaulting to 20", () => {
-        const mockBot = {
-            health: 0,
-            food: 0,
-            entity: {
-                position: { x: 10, y: 64, z: 20 },
-                yaw: 0, pitch: 0,
-                velocity: { x: 0, y: 0, z: 0 }
-            },
-            inventory: { items: () => [], slots: {} },
-            entities: {},
-            players: {},
-            blockAt: () => null,
-            time: { timeOfDay: 6000, isDay: true },
-            heldItem: null,
-            game: { dimension: 'overworld' }
-        };
-        setBotInstance(mockBot);
-        const state = getBotState();
-        assert.strictEqual(state.health, 0, "health=0 must be preserved");
-        assert.strictEqual(state.food, 0, "food=0 must be preserved");
-    });
+        await runTest("farmCrops: when hay blocks found but dig fails for all, falls through and returns false", async () => {
+            let chatLogs = [];
+            const hayBlockId = mcData.blocksByName['hay_block']?.id;
+            const mockBot = {
+                version: '1.20.4',
+                registry: mcData,
+                entity: { position: { x: 0, y: 64, z: 0 } },
+                entities: {},
+                findBlocks: ({ matching }) => {
+                    if (matching === hayBlockId) return [{ x: 5, y: 64, z: 5 }];
+                    return [];
+                },
+                inventory: { items: () => [] },
+                blockAt: (pos) => ({ name: 'hay_block', position: pos }),
+                dig: async () => { throw new Error("simulated_dig_failure"); },
+                pathfinder: {
+                    goto: async () => {},
+                    stop: () => {},
+                    setMovements: () => {}
+                },
+                chat: (msg) => { chatLogs.push(msg); }
+            };
+            const res = await farmCrops(mockBot);
+            assert.strictEqual(res, false, "farmCrops must return false when harvestedHay is 0");
+            assert.ok(chatLogs.some(m => m.includes("Located 1 Hay Bale")), "Should log located hay bales");
+            assert.ok(chatLogs.some(m => m.includes("No harvestable crops")), "Should fall through to no harvestable crops");
+        });
 
-    await runTest("autoEatCheck: does not consume food when hunger is 18 or 19", async () => {
-        let consumeCallCount = 0;
-        const mockBot = {
-            health: 15,
-            food: 18,
-            entity: { position: { x: 0, y: 64, z: 0 } },
-            inventory: {
-                items: () => [{ name: 'bread', count: 5 }]
-            },
-            consume: async () => { consumeCallCount++; },
-            equip: async () => {},
-            chat: () => {}
-        };
-        setBotInstance(mockBot);
+        await runTest("getBotState: preserves health=0 and food=0 exactly without defaulting to 20", () => {
+            const mockBot = {
+                health: 0,
+                food: 0,
+                entity: {
+                    position: { x: 10, y: 64, z: 20 },
+                    yaw: 0, pitch: 0,
+                    velocity: { x: 0, y: 0, z: 0 }
+                },
+                inventory: { items: () => [], slots: {} },
+                entities: {},
+                players: {},
+                blockAt: () => null,
+                time: { timeOfDay: 6000, isDay: true },
+                heldItem: null,
+                game: { dimension: 'overworld' }
+            };
+            setBotInstance(mockBot);
+            const state = getBotState();
+            assert.strictEqual(state.health, 0, "health=0 must be preserved");
+            assert.strictEqual(state.food, 0, "food=0 must be preserved");
+        });
 
-        // Test at hunger 18 (should NOT eat)
-        await autoEatCheck();
-        assert.strictEqual(consumeCallCount, 0, "autoEatCheck should NOT consume food when hunger is 18");
+        await runTest("autoEatCheck: does not consume food when hunger is 18 or 19", async () => {
+            let consumeCallCount = 0;
+            const mockBot = {
+                health: 15,
+                food: 18,
+                entity: { position: { x: 0, y: 64, z: 0 } },
+                inventory: {
+                    items: () => [{ name: 'bread', count: 5 }]
+                },
+                consume: async () => { consumeCallCount++; },
+                equip: async () => {},
+                chat: () => {}
+            };
+            setBotInstance(mockBot);
 
-        // Test at hunger 19 (should NOT eat)
-        mockBot.food = 19;
-        await autoEatCheck();
-        assert.strictEqual(consumeCallCount, 0, "autoEatCheck should NOT consume food when hunger is 19");
+            // Test at hunger 18 (should NOT eat)
+            await autoEatCheck();
+            assert.strictEqual(consumeCallCount, 0, "autoEatCheck should NOT consume food when hunger is 18");
 
-        // Test at hunger 17 with health 15 (SHOULD eat for healing)
-        mockBot.food = 17;
-        await autoEatCheck();
-        assert.strictEqual(consumeCallCount, 1, "autoEatCheck SHOULD consume food when health < 20 and hunger < 18");
+            // Test at hunger 19 (should NOT eat)
+            mockBot.food = 19;
+            await autoEatCheck();
+            assert.strictEqual(consumeCallCount, 0, "autoEatCheck should NOT consume food when hunger is 19");
 
-        // Test at hunger 13 with full health 20 (SHOULD eat for starvation prevention)
-        mockBot.health = 20;
-        mockBot.food = 13;
-        await autoEatCheck();
-        assert.strictEqual(consumeCallCount, 2, "autoEatCheck SHOULD consume food when hunger < 14 regardless of health");
-    });
+            // Test at hunger 17 with health 15 (SHOULD eat for healing)
+            mockBot.food = 17;
+            await autoEatCheck();
+            assert.strictEqual(consumeCallCount, 1, "autoEatCheck SHOULD consume food when health < 20 and hunger < 18");
+
+            // Test at hunger 13 with full health 20 (SHOULD eat for starvation prevention)
+            mockBot.health = 20;
+            mockBot.food = 13;
+            await autoEatCheck();
+            assert.strictEqual(consumeCallCount, 2, "autoEatCheck SHOULD consume food when hunger < 14 regardless of health");
+        });
+    }
 
     console.log("\n=================================================");
     console.log(`🎉 All ${passedTests}/${totalTests} unit stability tests PASSED!`);
