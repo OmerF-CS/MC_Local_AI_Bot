@@ -82,7 +82,13 @@ class TestLiveMinecraft1204Integration(unittest.TestCase):
 
         # Write test_port to server.properties
         props_path = os.path.join(cls.server_dir, "server.properties")
+        cls._props_path = props_path
+        cls._props_original = None
         if os.path.isfile(props_path):
+            # Snapshot original bytes: the test (port) and the server itself (timestamp header)
+            # rewrite this tracked file; it is restored in tearDownClass / skip path.
+            with open(props_path, "rb") as f:
+                cls._props_original = f.read()
             with open(props_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
             new_lines = []
@@ -139,13 +145,28 @@ class TestLiveMinecraft1204Integration(unittest.TestCase):
         if not server_ready:
             try:
                 cls.server_proc.kill()
+                cls.server_proc.wait(timeout=10)
             except Exception:
                 pass
+            cls._restore_server_properties()
             raise unittest.SkipTest(
                 f"Minecraft 1.20.4 canlı test sunucusu başlatılamadı: Port {cls.test_port} meşgul veya sunucu süreci beklenmedik şekilde kapandı. "
                 f"Test için farklı bir port belirlemek üzere MC_TEST_PORT ortam değişkenini ayarlayabilirsiniz (Örn: MC_TEST_PORT=31314). "
                 f"Canlı entegrasyon testi atlandı."
             )
+
+    @classmethod
+    def _restore_server_properties(cls):
+        """Write back the original server.properties bytes (tracked file must stay unchanged)."""
+        original = getattr(cls, "_props_original", None)
+        props_path = getattr(cls, "_props_path", None)
+        if original is None or not props_path:
+            return
+        try:
+            with open(props_path, "wb") as f:
+                f.write(original)
+        except Exception as e:
+            logger.warning(f"⚠️ server.properties geri yüklenemedi: {e}")
 
     @classmethod
     def tearDownClass(cls):
@@ -159,6 +180,9 @@ class TestLiveMinecraft1204Integration(unittest.TestCase):
             except Exception:
                 cls.server_proc.kill()
             logger.info("✅ Minecraft test server stopped.")
+
+        # 1b. Restore tracked server.properties after the server has released it
+        cls._restore_server_properties()
 
         # 2. Capture server latest.log and bot log into run directory
         try:

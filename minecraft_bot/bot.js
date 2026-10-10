@@ -1561,8 +1561,14 @@ function createBot() {
     });
 
     bot.on('kicked', (reason) => {
-        const reasonStr = typeof reason === 'object' ? (reason.value || reason.text || JSON.stringify(reason)) : String(reason || 'kicked');
-        console.log('[Minecraft] 🚫 Kicked from server:', reasonStr);
+        let reasonStr = 'unknown';
+        try {
+            reasonStr = formatDisconnectReason(reason);
+            // F1-7: single-line kick reason log
+            console.log(`[Minecraft] Kicked: ${reasonStr}`);
+        } catch (e) {
+            console.log(`[Minecraft] Kicked: unknown (reason parse error: ${e && e.message})`);
+        }
         clearAllIntervals();
         sendToPython({
             type: 'bot_disconnected',
@@ -1582,8 +1588,14 @@ function createBot() {
     });
 
     bot.on('end', (reason) => {
-        const reasonStr = reason ? (typeof reason === 'object' ? JSON.stringify(reason) : String(reason)) : 'connection_closed';
-        console.log(`[Minecraft] 🔄 Connection ended (${reasonStr}). Reconnecting in 5 seconds...`);
+        let reasonStr = 'unknown';
+        try {
+            reasonStr = formatDisconnectReason(reason);
+            // F1-7: single-line connection end reason log
+            console.log(`[Minecraft] Connection ended: ${reasonStr}`);
+        } catch (e) {
+            console.log(`[Minecraft] Connection ended: unknown (reason parse error: ${e && e.message})`);
+        }
         clearAllIntervals();
         sendToPython({
             type: 'bot_disconnected',
@@ -1591,6 +1603,40 @@ function createBot() {
         });
         scheduleReconnect();
     });
+}
+
+/**
+ * F1-7: Flattens a kick/end reason (string, JSON string, chat component or NBT-like
+ * object as sent by 1.20.4) into a single plain-text line. Returns 'unknown' if empty.
+ */
+function formatDisconnectReason(reason) {
+    const flatten = (node, depth) => {
+        if (node === null || node === undefined || depth > 8) return '';
+        if (typeof node === 'string') {
+            const trimmed = node.trim();
+            if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+                try { return flatten(JSON.parse(trimmed), depth + 1); } catch (_) { /* plain string */ }
+            }
+            return node;
+        }
+        if (typeof node === 'number' || typeof node === 'boolean') return String(node);
+        if (Array.isArray(node)) return node.map(n => flatten(n, depth + 1)).join('');
+        if (typeof node === 'object') {
+            // NBT wrapper: { type, value }
+            if ('value' in node && Object.keys(node).every(k => k === 'type' || k === 'value')) {
+                return flatten(node.value, depth + 1);
+            }
+            let out = '';
+            if ('text' in node) out += flatten(node.text, depth + 1);
+            if ('translate' in node) out += flatten(node.translate, depth + 1);
+            if ('extra' in node) out += flatten(node.extra, depth + 1);
+            if ('value' in node && !out) out += flatten(node.value, depth + 1);
+            return out;
+        }
+        return String(node);
+    };
+    const text = flatten(reason, 0).replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    return text || 'unknown';
 }
 
 // --- SMART RECURSIVE CRAFTING & SMELTING SYSTEM ---
@@ -5077,5 +5123,6 @@ module.exports = {
     resetConsecutiveProcessErrors: () => { consecutiveProcessErrors = 0; },
     verifyAndRepairBunker,
     getDefenseRetreatState: () => ({ lastDefenseRetreatTime, lastRetreatThreatKey, lastRetreatCannotEscape }),
-    resetDefenseRetreatState: () => { lastDefenseRetreatTime = 0; lastRetreatThreatKey = null; lastRetreatCannotEscape = false; }
+    resetDefenseRetreatState: () => { lastDefenseRetreatTime = 0; lastRetreatThreatKey = null; lastRetreatCannotEscape = false; },
+    formatDisconnectReason
 };

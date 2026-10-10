@@ -420,6 +420,35 @@ asyncio.run(check())
         }
     });
 
+    console.log("\n[Suite 8] Kick/End Reason Logging (F1-7):");
+    const { formatDisconnectReason } = botModule;
+
+    await runTest("formatDisconnectReason: empty/undefined/null reason -> 'unknown'", () => {
+        assert.strictEqual(formatDisconnectReason(undefined), 'unknown');
+        assert.strictEqual(formatDisconnectReason(null), 'unknown');
+        assert.strictEqual(formatDisconnectReason(''), 'unknown');
+        assert.strictEqual(formatDisconnectReason({}), 'unknown');
+    });
+
+    await runTest("formatDisconnectReason: plain string, JSON chat string and chat component -> single-line text", () => {
+        assert.strictEqual(formatDisconnectReason('socketClosed'), 'socketClosed');
+        assert.strictEqual(formatDisconnectReason('{"text":"Server closed"}'), 'Server closed');
+        assert.strictEqual(
+            formatDisconnectReason({ text: 'You have been ', extra: [{ text: 'idle' }, { text: '\n too long' }] }),
+            'You have been idle too long'
+        );
+    });
+
+    await runTest("formatDisconnectReason: 1.20.4 NBT-style kick reason -> plain text (no [object Object])", () => {
+        const nbtReason = {
+            type: 'compound',
+            value: { translate: { type: 'string', value: 'multiplayer.disconnect.kicked' } }
+        };
+        const out = formatDisconnectReason(nbtReason);
+        assert.strictEqual(out, 'multiplayer.disconnect.kicked');
+        assert.ok(!out.includes('[object Object]'));
+    });
+
     console.log("\n=================================================");
     console.log(`🎉 All ${passedTests}/${totalTests} unit stability tests PASSED!`);
     console.log("=================================================\n");
