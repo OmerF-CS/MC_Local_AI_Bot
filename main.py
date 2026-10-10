@@ -474,6 +474,20 @@ class MinecraftAIBot:
 
                 loop_failures = 0
 
+                # Requirement 2: Log real getBotState values once per minute
+                now_state_t = time.time()
+                if now_state_t - getattr(self, "_last_minute_state_log_time", 0.0) >= 60.0:
+                    self._last_minute_state_log_time = now_state_t
+                    cur_hp = state.get("health", 0.0)
+                    cur_food = state.get("food", 0.0)
+                    pos = state.get("position", {})
+                    logger.info(
+                        f"📊 [getBotState Minute Monitor] timestamp={now_state_t:.0f} | "
+                        f"hp={cur_hp:.2f} | food={cur_food:.1f} | "
+                        f"pos=({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f}) | "
+                        f"is_sheltered={state.get('is_sheltered', False)}"
+                    )
+
                 if state.get("is_busy", False):
                     continue
 
@@ -721,7 +735,8 @@ class MinecraftAIBot:
                         asyncio.to_thread(self.node_process.wait),
                         timeout=5
                     )
-                    logger.info("✅ Node.js process terminated cleanly.")
+                    exit_code = self.node_process.poll()
+                    logger.info(f"✅ Node.js process terminated cleanly (exit_code={exit_code}).")
                 except asyncio.TimeoutError:
                     logger.warning("⏳ Process terminate timeout; sending SIGKILL...")
                     self.node_process.kill()
