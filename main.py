@@ -64,9 +64,18 @@ class MinecraftAIBot:
         self._shutdown_event = asyncio.Event()
         self._loop_wakeup = asyncio.Event()
 
+        # State tracking and corpse recovery guards
+        self.last_known_inventory = []
+        self.last_known_position = None
+        self.last_known_dimension = "overworld"
+        self.active_recovery_task_id = None
+        self.active_recovery_death_id = None
+        self.active_recovery_start_time = 0.0
+
         # Wire up bridge callbacks
         self.bridge.on_chat_callback = self.chat_handler.handle_chat
         self.bridge.on_spawn_callback = self.on_bot_spawn
+        self.bridge.on_respawn_callback = self.on_bot_respawn
         self.bridge.on_death_callback = self.on_bot_death
         self.bridge.on_game_won_callback = self.on_game_won
         self.bridge.on_action_completed_callback = self.on_action_completed
@@ -74,6 +83,7 @@ class MinecraftAIBot:
         self.bridge.on_chest_used_callback = self.on_chest_used
         self.bridge.on_ore_discovered_callback = self.on_ore_discovered
         self.bridge.on_ore_mined_callback = self.on_ore_mined
+        self.bridge.on_bot_disconnected_callback = self.on_bot_disconnected
         
         # Signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -84,47 +94,170 @@ class MinecraftAIBot:
         logger.warning(f"⚠️ Received signal {sig}. Initiating graceful shutdown...")
         self._shutdown_event.set()
 
+    def _update_last_known_state(self, state: Dict[str, Any]):
+        """Caches last known non-empty inventory, coordinates and dimension."""
+        if not state or not isinstance(state, dict):
+            return
+        inv = state.get("inventory")
+        if inv and len(inv) > 0:
+            self.last_known_inventory = list(inv)
+        pos = state.get("position")
+        if pos:
+            self.last_known_position = dict(pos)
+        dim = state.get("dimension")
+        if dim:
+            self.last_known_dimension = str(dim)
+
+    async def check_and_trigger_corpse_recovery(self, state: Dict[str, Any]):
+        """Checks for unrecovered death point with dropped inventory and queues recovery task."""
+        if not hasattr(self, "db") or not self.db:
+            return
+
+        unrecovered = self.db.get_unrecovered_death_point()
+        if not unrecovered:
+            return
+
+        death_id = unrecovered.get("id")
+        inv = unrecovered.get("inventory", [])
+        if not inv or len(inv) == 0:
+            # H4: No items to recover, mark recovered so we don't check again
+            self.db.mark_death_point_recovered(death_id)
+            logger.info(f"🎒 Death point #{death_id} has empty inventory. No corpse recovery needed.")
+            return
+
+        cur_dim = state.get("dimension", "overworld") if isinstance(state, dict) else "overworld"
+        death_dim = unrecovered.get("dim", "overworld")
+        if death_dim != cur_dim:
+            logger.info(f"🎒 Death point #{death_id} is in dimension '{death_dim}' (bot is in '{cur_dim}'). Skipping until dimension reached.")
+            return
+
+        # Deduplication check: do we already have an active or pending recovery task for this death_id?
+        if getattr(self, "active_recovery_death_id", None) == death_id:
+            logger.debug(f"🎒 Corpse recovery task already active for death point #{death_id}.")
+            return
+
+        # Check existing pending tasks in DB to prevent duplicate task queueing
+        pending_tasks = self.db.get_pending_tasks()
+        for t in pending_tasks:
+            t_args = t.get("args") or {}
+            if t.get("primary_action") == "go_to_coordinates" and t_args.get("death_id") == death_id:
+                logger.debug(f"🎒 Corpse recovery task already queued for death point #{death_id}.")
+                return
+
+        x, y, z = unrecovered["x"], unrecovered["y"], unrecovered["z"]
+        logger.warning(
+            f"🏃 [Corpse Recovery] Unrecovered death point #{death_id} found at ({x}, {y}, {z}) in {death_dim}! "
+            f"Queueing emergency recovery expedition ({len(inv)} item stacks)."
+        )
+        task_id = self.db.add_task(
+            instruction=f"Recover items from death site at ({x}, {y}, {z})",
+            primary_action="go_to_coordinates",
+            args={"x": x, "y": y, "z": z, "death_id": death_id, "range": 2},
+            assigned_by="system",
+            priority=10
+        )
+        self.active_recovery_death_id = death_id
+        self.active_recovery_task_id = task_id
+        self.active_recovery_start_time = time.time()
+
     async def on_action_completed(self, cmd: str, success: bool, error: Optional[str], state: Dict[str, Any]):
         """Called when an action finishes execution on Mineflayer."""
         logger.info(f"🏁 Action finished: {cmd} (success={success}, error={error})")
+        self._update_last_known_state(state)
+
+        # Check task completion with STRICT correlation
         if self.active_player_task:
             task = self.active_player_task
             task_id = task.get("id")
+            primary_action = task.get("primary_action")
             instruction = task.get("instruction", cmd)
-            if success:
-                logger.info(f"✅ Player task completed successfully: '{instruction}'")
-                if self.db and task_id:
-                    self.db.complete_task(task_id)
-                await self.bridge.send_action("say_chat", {
-                    "message": f"✅ Completed task: '{instruction}'! Ready for next task."
-                })
-            else:
-                logger.warning(f"⚠️ Player task failed or interrupted: '{instruction}' (Error: {error})")
-                if self.db and task_id:
-                    self.db.update_task_status(task_id, "failed")
-                await self.bridge.send_action("say_chat", {
-                    "message": f"⚠️ Task '{instruction}' had an issue: {error or 'interrupted'}"
-                })
-            self.active_player_task = None
 
-        # F0.3: Check if this movement action brought bot close to unrecovered corpse
+            # Strict correlation: only complete active_player_task if cmd matches primary_action!
+            if primary_action and cmd != primary_action:
+                logger.debug(f"Ignoring action {cmd} for active task #{task_id} expecting {primary_action}")
+            else:
+                is_recovery_task = (task_id == getattr(self, "active_recovery_task_id", None)) or (
+                    task.get("args") and "death_id" in task.get("args")
+                )
+                if is_recovery_task:
+                    # H5: For corpse recovery task, enforce physical proximity (<= 5m), dimension match, and 120s timeout
+                    death_id = task.get("args", {}).get("death_id") or getattr(self, "active_recovery_death_id", None)
+                    unrecovered = self.db.get_unrecovered_death_point() if self.db else None
+                    elapsed = time.time() - getattr(self, "active_recovery_start_time", time.time())
+                    
+                    cur_pos = state.get("position") if isinstance(state, dict) else None
+                    cur_dim = state.get("dimension", "overworld") if isinstance(state, dict) else "overworld"
+                    
+                    in_range = False
+                    if unrecovered and cur_pos:
+                        dx = cur_pos.get("x", 0.0) - unrecovered["x"]
+                        dz = cur_pos.get("z", 0.0) - unrecovered["z"]
+                        dist = (dx * dx + dz * dz) ** 0.5
+                        same_dim = (unrecovered.get("dim", "overworld") == cur_dim)
+                        in_range = (dist <= 5.0 and same_dim)
+
+                    if in_range:
+                        logger.info(f"🎒 Reached death point #{death_id}! Collecting dropped inventory...")
+                        await self.bridge.send_action("collect_nearby_drops", {"radius": 32})
+                        if self.db and death_id:
+                            self.db.mark_death_point_recovered(death_id)
+                            self.db.complete_task(task_id)
+                        await self.bridge.send_action("say_chat", {
+                            "message": "🎒 Arrived at previous death site and recovered dropped items!"
+                        })
+                        self.active_player_task = None
+                        self.active_recovery_task_id = None
+                        self.active_recovery_death_id = None
+                    elif elapsed > 120.0 or not success:
+                        # Timed out (120s) or pathfinding failed
+                        logger.warning(f"⚠️ Corpse recovery #{death_id} timed out or failed (elapsed={elapsed:.1f}s, success={success}, error={error})")
+                        if self.db and task_id:
+                            self.db.update_task_status(task_id, "failed")
+                            if death_id:
+                                self.db.mark_death_point_recovered(death_id)
+                        self.active_player_task = None
+                        self.active_recovery_task_id = None
+                        self.active_recovery_death_id = None
+                    else:
+                        logger.warning(f"⚠️ Bot did not reach death point #{death_id} (not within 5m). Leaving task active.")
+                else:
+                    # Regular player task
+                    if success:
+                        logger.info(f"✅ Player task completed successfully: '{instruction}'")
+                        if self.db and task_id:
+                            self.db.complete_task(task_id)
+                        await self.bridge.send_action("say_chat", {
+                            "message": f"✅ Completed task: '{instruction}'! Ready for next task."
+                        })
+                    else:
+                        logger.warning(f"⚠️ Player task failed or interrupted: '{instruction}' (Error: {error})")
+                        if self.db and task_id:
+                            self.db.update_task_status(task_id, "failed")
+                        await self.bridge.send_action("say_chat", {
+                            "message": f"⚠️ Task '{instruction}' had an issue: {error or 'interrupted'}"
+                        })
+                    self.active_player_task = None
+
+        # Check if bot naturally arrived close to unrecovered corpse during any movement
         if self.db and cmd in ("go_to_coordinates", "walking"):
             unrecovered = self.db.get_unrecovered_death_point()
             if unrecovered and state.get("position"):
                 cur_pos = state["position"]
-                dx = cur_pos.get("x", 0.0) - unrecovered["x"]
-                dz = cur_pos.get("z", 0.0) - unrecovered["z"]
-                dist = (dx * dx + dz * dz) ** 0.5
-                if dist <= 5.0:
-                    logger.info(f"🎒 Reached death point #{unrecovered['id']}! Collecting dropped inventory...")
-                    await self.bridge.send_action("collect_nearby_drops", {"radius": 32})
-                    self.db.mark_death_point_recovered(unrecovered["id"])
-                    await self.bridge.send_action("say_chat", {
-                        "message": "🎒 Arrived at previous death site and recovered dropped items!"
-                    })
+                cur_dim = state.get("dimension", "overworld") if isinstance(state, dict) else "overworld"
+                if unrecovered.get("dim", "overworld") == cur_dim:
+                    dx = cur_pos.get("x", 0.0) - unrecovered["x"]
+                    dz = cur_pos.get("z", 0.0) - unrecovered["z"]
+                    dist = (dx * dx + dz * dz) ** 0.5
+                    if dist <= 5.0:
+                        logger.info(f"🎒 Reached death point #{unrecovered['id']}! Collecting dropped inventory...")
+                        await self.bridge.send_action("collect_nearby_drops", {"radius": 32})
+                        self.db.mark_death_point_recovered(unrecovered["id"])
+                        await self.bridge.send_action("say_chat", {
+                            "message": "🎒 Arrived at previous death site and recovered dropped items!"
+                        })
 
-        # Check if there are queued pending tasks in SQLite
-        if self.db:
+        # Check if there are queued pending tasks in SQLite (only if no active task is running)
+        if self.db and not self.active_player_task:
             pending = self.db.get_pending_tasks()
             if pending:
                 next_task = pending[0]
@@ -148,32 +281,22 @@ class MinecraftAIBot:
         # Trigger immediate next decision cycle in autonomous loop
         self._loop_wakeup.set()
 
-    async def on_bot_spawn(self, state):
+    async def on_bot_spawn(self, state: Dict[str, Any]):
         """Called when the bot successfully spawns into the world."""
         logger.info(f"✨ {self.config.BOT_NAME} spawned into the world! Health: {state.get('health')}")
         self._bot_ready.set()
+        self._update_last_known_state(state)
         await self.bridge.send_action("say_chat", {
             "message": f"Hello {self.config.BOT_OWNER}! I am {self.config.BOT_NAME}, ready to explore and beat the game."
         })
+        await self.check_and_trigger_corpse_recovery(state)
 
-        # F0.3: Check for unrecovered corpse in current dimension
-        if hasattr(self, "db") and self.db:
-            unrecovered = self.db.get_unrecovered_death_point()
-            if unrecovered:
-                cur_dim = state.get("dimension", "overworld")
-                if unrecovered.get("dim", "overworld") == cur_dim:
-                    x, y, z = unrecovered["x"], unrecovered["y"], unrecovered["z"]
-                    logger.warning(
-                        f"🏃 [Corpse Recovery] Unrecovered death point #{unrecovered['id']} found at ({x}, {y}, {z})! "
-                        f"Prioritizing emergency recovery expedition before drops despawn!"
-                    )
-                    self.db.add_task(
-                        instruction=f"Recover items from death site at ({x}, {y}, {z})",
-                        primary_action="go_to_coordinates",
-                        args={"x": x, "y": y, "z": z},
-                        assigned_by="system",
-                        priority=10
-                    )
+    async def on_bot_respawn(self, state: Dict[str, Any]):
+        """Called when the bot respawns after death."""
+        logger.info(f"🔄 {self.config.BOT_NAME} respawned into the world! Health: {state.get('health')}")
+        self._bot_ready.set()
+        self._update_last_known_state(state)
+        await self.check_and_trigger_corpse_recovery(state)
 
     async def on_bot_death(self, data):
         """Called when the bot dies in-game."""
@@ -185,6 +308,22 @@ class MinecraftAIBot:
         dim = data.get("dimension", "overworld") if isinstance(data, dict) else "overworld"
         inv_snapshot = data.get("inventory_snapshot", []) if isinstance(data, dict) else []
 
+        # Fallback to cached last known state if empty (H2)
+        if not death_pos:
+            cached_pos = self.last_known_position or getattr(self.bridge, "last_known_position", None)
+            if isinstance(cached_pos, dict):
+                death_pos = cached_pos
+        if not dim or dim == "overworld":
+            cached_dim = self.last_known_dimension or getattr(self.bridge, "last_known_dimension", None)
+            if isinstance(cached_dim, str) and cached_dim:
+                dim = cached_dim
+        if not inv_snapshot:
+            cached_inv = self.last_known_inventory or getattr(self.bridge, "last_known_inventory", None)
+            if isinstance(cached_inv, list):
+                inv_snapshot = cached_inv
+            else:
+                inv_snapshot = []
+
         if death_pos and hasattr(self, "db") and self.db:
             death_id = self.db.save_death_point(
                 dim=dim,
@@ -193,10 +332,27 @@ class MinecraftAIBot:
                 z=death_pos.get("z", 0.0),
                 inventory=inv_snapshot
             )
-            logger.warning(
-                f"📍 [Death Recovery] Death point #{death_id} recorded at "
-                f"({death_pos.get('x')}, {death_pos.get('y')}, {death_pos.get('z')}) in {dim} with {len(inv_snapshot)} item stacks!"
-            )
+            if not inv_snapshot or len(inv_snapshot) == 0:
+                # H4: Mark as recovered immediately so no recovery task is ever opened
+                self.db.mark_death_point_recovered(death_id)
+                logger.info(
+                    f"📍 [Death Recovery] Death point #{death_id} recorded with empty inventory. "
+                    "Skipping corpse recovery task."
+                )
+            else:
+                logger.warning(
+                    f"📍 [Death Recovery] Death point #{death_id} recorded at "
+                    f"({death_pos.get('x')}, {death_pos.get('y')}, {death_pos.get('z')}) in {dim} with {len(inv_snapshot)} item stacks!"
+                )
+
+    async def on_bot_disconnected(self, reason: str):
+        """Called when Mineflayer bot disconnects or is kicked from Minecraft server."""
+        logger.warning(
+            f"🔌 [Bot Disconnected] Connection lost (reason: {reason}). "
+            "Pausing autonomous progression until reconnect..."
+        )
+        self._bot_ready.clear()
+        self.bridge.latest_state = {}
 
     async def on_bed_used(self, data: Dict[str, Any]):
         """Called when the bot interacts with a bed to sleep or set spawn."""
@@ -259,17 +415,16 @@ class MinecraftAIBot:
 
     async def wait_for_bot_ready(self, timeout: float = 30.0) -> bool:
         """Wait for the Mineflayer bot to become online and receive its initial state snapshot."""
-        if self.bridge.latest_state and self.bridge.latest_state.get("health"):
-            logger.info("✅ Bot state already available, startup complete.")
-            self._bot_ready.set()
+        # Only accept existing state if worker client is actively connected AND bot_ready is set
+        if bool(self.bridge.clients) and self._bot_ready.is_set() and self.bridge.latest_state and self.bridge.latest_state.get("health"):
+            logger.info("✅ Bot state already available from active connection, startup complete.")
             return True
 
         logger.info(f"⏳ Waiting for bot startup ({timeout}s timeout)...")
         start_t = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start_t < timeout:
-            if self._bot_ready.is_set() or (self.bridge.latest_state and self.bridge.latest_state.get("health")):
+            if bool(self.bridge.clients) and self._bot_ready.is_set() and self.bridge.latest_state and self.bridge.latest_state.get("health"):
                 logger.info("✅ Bot spawned and state available, startup complete.")
-                self._bot_ready.set()
                 return True
             await asyncio.sleep(0.5)
 
@@ -287,6 +442,11 @@ class MinecraftAIBot:
 
         while not self._shutdown_event.is_set():
             try:
+                # Do not progress if bot is disconnected or not yet spawned in world
+                if not self._bot_ready.is_set():
+                    await asyncio.sleep(0.5)
+                    continue
+
                 # Fast event-driven wakeup upon action completion, or periodic 0.5s check
                 try:
                     await asyncio.wait_for(self._loop_wakeup.wait(), timeout=0.5)
@@ -298,12 +458,12 @@ class MinecraftAIBot:
                     continue
 
                 state = self.bridge.latest_state
-                if not state:
+                if not state or not state.get("health"):
                     loop_failures += 1
                     if loop_failures >= max_consecutive_failures:
-                        logger.error(
-                            f"❌ Did not receive state {max_consecutive_failures} times consecutively. "
-                            "Bot connection might be interrupted."
+                        logger.debug(
+                            f"Did not receive valid state snapshot {max_consecutive_failures} times. "
+                            "Waiting for bot state sync..."
                         )
                         loop_failures = 0
                     continue
@@ -321,6 +481,11 @@ class MinecraftAIBot:
 
                 response_text = ai_decision.get("text", "")
                 tool_calls = ai_decision.get("tool_calls", [])
+
+                if not tool_calls:
+                    # No active action to execute (e.g. resting in bunker or waiting)
+                    await asyncio.sleep(2.0)
+                    continue
 
                 for tc in tool_calls:
                     if self._shutdown_event.is_set():
@@ -343,7 +508,16 @@ class MinecraftAIBot:
                     await asyncio.sleep(0.1)
 
                 has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
-                if response_text and not has_say_chat:
+                now = time.time()
+                # Rate limit proactive chat so autonomous thoughts don't flood Minecraft chat
+                if (
+                    response_text
+                    and not has_say_chat
+                    and response_text != getattr(self, "_last_autonomous_chat_msg", "")
+                    and (now - getattr(self, "_last_autonomous_chat_time", 0.0)) >= 15.0
+                ):
+                    self._last_autonomous_chat_time = now
+                    self._last_autonomous_chat_msg = response_text
                     await self.bridge.send_action("say_chat", {"message": response_text})
 
                 await asyncio.sleep(0.3)
@@ -358,6 +532,10 @@ class MinecraftAIBot:
 
     def start_mineflayer_worker(self):
         """Spawns Mineflayer Node.js bot process as a managed subprocess."""
+        self._bot_ready.clear()
+        if hasattr(self, "bridge") and self.bridge:
+            self.bridge.latest_state = {}
+
         bot_dir = os.path.join(os.path.dirname(__file__), "minecraft_bot")
         node_modules = os.path.join(bot_dir, "node_modules")
 
@@ -375,6 +553,7 @@ class MinecraftAIBot:
         if self.config.MINECRAFT_VERSION:
             env["MINECRAFT_VERSION"] = self.config.MINECRAFT_VERSION
         env["BRIDGE_URL"] = f"ws://{self.config.BRIDGE_HOST}:{self.config.BRIDGE_PORT}"
+        env["PYTHONIOENCODING"] = "utf-8"
 
         try:
             logger.info("🚀 Launching Mineflayer Node.js process...")
@@ -385,6 +564,8 @@ class MinecraftAIBot:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
             )
             logger.info(f"✅ Mineflayer process spawned with PID: {self.node_process.pid}.")
@@ -447,6 +628,7 @@ class MinecraftAIBot:
 
         # Main supervisor watchdog loop - monitors health and auto-recovers crashes
         consecutive_worker_crashes = 0
+        stable_since: Optional[float] = None
         try:
             while not self._shutdown_event.is_set():
                 # Check if Mineflayer worker subprocess died unexpectedly
@@ -454,9 +636,14 @@ class MinecraftAIBot:
                     exit_code = self.node_process.poll()
                     consecutive_worker_crashes += 1
                     self._bot_ready.clear()
+                    self.bridge.latest_state = {}
+                    stable_since = None
 
-                    if consecutive_worker_crashes > 5:
-                        logger.error("🚨 [Watchdog] Mineflayer worker crashed 5 consecutive times. Terminating.")
+                    if consecutive_worker_crashes >= 5:
+                        logger.error(
+                            f"🚨 [Watchdog] Mineflayer worker crashed {consecutive_worker_crashes} consecutive times. "
+                            "Maximum restart attempts (5) reached. Terminating supervisor to prevent infinite restart loop."
+                        )
                         self._shutdown_event.set()
                         break
 
@@ -471,8 +658,15 @@ class MinecraftAIBot:
                             logger.info("🔄 [Worker Watchdog] Mineflayer worker restarted. Waiting for bot to spawn...")
                             await self.wait_for_bot_ready(timeout=25)
                 else:
-                    if self._bot_ready.is_set():
-                        consecutive_worker_crashes = 0
+                    if self._bot_ready.is_set() and bool(self.bridge.clients):
+                        if stable_since is None:
+                            stable_since = time.time()
+                        elif time.time() - stable_since >= 60.0:
+                            if consecutive_worker_crashes > 0:
+                                logger.info("✅ [Watchdog] Worker connection has been stable for 60s. Resetting crash counter to 0.")
+                                consecutive_worker_crashes = 0
+                    else:
+                        stable_since = None
 
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
