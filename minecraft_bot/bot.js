@@ -4759,6 +4759,402 @@ async function bridgeChasm(bot, direction = 'forward', distance = 5) {
     }
 }
 
+/**
+ * Mine a 45-degree downward staircase (1 block forward, 1 block down) with 3-block head clearance.
+ * Places torches periodically if placeTorches is true.
+ * Halts if pos.y <= targetY or bedrock/lava is detected.
+ */
+async function mineStaircase(bot, targetY = 16, direction = 'north', placeTorches = true) {
+    if (!bot || !bot.entity || !bot.entity.position) {
+        return { success: false, reason: 'bot_not_ready' };
+    }
+
+    const dir = String(direction).toLowerCase().trim();
+    let forwardVec = new Vec3(0, 0, -1); // default 'north'
+    let rightVec = new Vec3(1, 0, 0);
+
+    if (dir === 'south') {
+        forwardVec = new Vec3(0, 0, 1);
+        rightVec = new Vec3(-1, 0, 0);
+    } else if (dir === 'east') {
+        forwardVec = new Vec3(1, 0, 0);
+        rightVec = new Vec3(0, 0, 1);
+    } else if (dir === 'west') {
+        forwardVec = new Vec3(-1, 0, 0);
+        rightVec = new Vec3(0, 0, -1);
+    }
+
+    let currentPos = (typeof bot.entity.position.floored === 'function')
+        ? bot.entity.position.floored()
+        : new Vec3(Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z));
+
+    if (currentPos.y <= targetY) {
+        return { success: true, steps: 0, reached_y: currentPos.y, reason: 'target_y_reached' };
+    }
+
+    let stepsTaken = 0;
+    const MAX_STEPS = 128;
+
+    while (currentPos.y > targetY && stepsTaken < MAX_STEPS) {
+        stepsTaken++;
+        const nextStepPos = currentPos.plus(forwardVec).plus(new Vec3(0, -1, 0));
+
+        // 3-block head clearance above feet
+        const clearancePositions = [
+            nextStepPos.offset(0, 2, 0),
+            nextStepPos.offset(0, 1, 0),
+            nextStepPos
+        ];
+
+        // Hazard check (bedrock or lava)
+        let hazardDetected = false;
+        for (const pos of [...clearancePositions, nextStepPos.offset(0, -1, 0)]) {
+            const b = (typeof bot.blockAt === 'function') ? bot.blockAt(pos) : null;
+            if (b && (b.name === 'bedrock' || b.name === 'lava' || b.name === 'flowing_lava')) {
+                hazardDetected = true;
+                break;
+            }
+        }
+
+        if (hazardDetected) {
+            console.warn(`⚠️ [mineStaircase] Bedrock or lava detected near step ${stepsTaken}. Halting.`);
+            if (typeof bot.chat === 'function') bot.chat("Halting staircase mining: bedrock or lava detected!");
+            return {
+                success: true,
+                steps: stepsTaken - 1,
+                reached_y: currentPos.y,
+                reason: 'bedrock_or_lava_detected'
+            };
+        }
+
+        // Dig clearance blocks
+        for (const pos of clearancePositions) {
+            const b = (typeof bot.blockAt === 'function') ? bot.blockAt(pos) : null;
+            if (b && b.name !== 'air' && b.name !== 'cave_air') {
+                if (typeof bot.dig === 'function') {
+                    try {
+                        await bot.dig(b);
+                    } catch (digErr) {
+                        console.warn(`[mineStaircase] Dig failed at ${pos}: ${digErr.message}`);
+                    }
+                }
+            }
+        }
+
+        // Advance bot into the new step
+        currentPos = nextStepPos;
+        if (bot.entity && bot.entity.position) {
+            bot.entity.position.x = currentPos.x + 0.5;
+            bot.entity.position.y = currentPos.y;
+            bot.entity.position.z = currentPos.z + 0.5;
+        }
+
+        // Torch placement every 6 steps
+        if (placeTorches && stepsTaken % 6 === 0) {
+            const torchItem = (typeof bot.inventory?.items === 'function')
+                ? bot.inventory.items().find(i => i.name === 'torch')
+                : null;
+            if (torchItem) {
+                const torchPos = currentPos.plus(rightVec).offset(0, 1, 0);
+                if (typeof placeBlockDirect === 'function') {
+                    await placeBlockDirect(bot, torchItem, torchPos).catch(() => {});
+                } else if (typeof bot.placeBlock === 'function') {
+                    const ref = (typeof bot.blockAt === 'function') ? bot.blockAt(currentPos.plus(rightVec)) : null;
+                    if (ref) await bot.placeBlock(ref, new Vec3(0, 1, 0)).catch(() => {});
+                }
+            }
+        }
+
+        if (currentPos.y <= targetY) {
+            break;
+        }
+    }
+
+    return {
+        success: true,
+        steps: stepsTaken,
+        reached_y: currentPos.y,
+        reason: 'target_y_reached'
+    };
+}
+
+/**
+ * Rapid pillar jumping: looks down, jumps, places blocks underneath at peak.
+ * Equips blockType or cobblestone/dirt fallback.
+ */
+async function pillarJump(bot, height = 3, blockType = 'dirt') {
+    if (!bot || !bot.entity || !bot.entity.position) {
+        return { success: false, reason: 'bot_not_ready' };
+    }
+
+    const candidateTypes = [blockType, 'cobblestone', 'cobbled_deepslate', 'dirt', 'stone'];
+    const items = (typeof bot.inventory?.items === 'function') ? bot.inventory.items() : [];
+    let chosenBlockItem = null;
+    for (const cName of candidateTypes) {
+        const found = items.find(i => i.name === cName && i.count > 0);
+        if (found) {
+            chosenBlockItem = found;
+            break;
+        }
+    }
+
+    if (!chosenBlockItem) {
+        return { success: false, reason: 'no_blocks_for_pillar' };
+    }
+
+    // Look down
+    if (typeof bot.look === 'function') {
+        const curYaw = bot.entity.yaw || 0;
+        await bot.look(curYaw, -Math.PI / 2, true);
+    }
+
+    let placedCount = 0;
+    try {
+        for (let i = 0; i < height; i++) {
+            const currentItems = (typeof bot.inventory?.items === 'function') ? bot.inventory.items() : [];
+            const blockItem = currentItems.find(it => candidateTypes.includes(it.name) && it.count > 0);
+            if (!blockItem) break;
+
+            if (typeof bot.equip === 'function') {
+                await bot.equip(blockItem, 'hand').catch(() => {});
+            }
+
+            if (typeof bot.setControlState === 'function') {
+                bot.setControlState('jump', true);
+            }
+
+            // Wait for jump peak
+            if (typeof bot.waitForTicks === 'function') {
+                await bot.waitForTicks(5);
+            } else {
+                await new Promise(r => setTimeout(r, 80));
+            }
+
+            const currentFeet = (typeof bot.entity.position.floored === 'function')
+                ? bot.entity.position.floored()
+                : new Vec3(Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z));
+            
+            const blockBelow = (typeof bot.blockAt === 'function')
+                ? bot.blockAt(currentFeet.offset(0, -1, 0))
+                : null;
+
+            let placedThisStep = false;
+            if (blockBelow && typeof bot.placeBlock === 'function') {
+                try {
+                    await bot.placeBlock(blockBelow, new Vec3(0, 1, 0));
+                    placedThisStep = true;
+                } catch (_) {}
+            }
+            if (!placedThisStep && typeof placeBlockDirect === 'function') {
+                await placeBlockDirect(bot, blockItem, currentFeet).catch(() => {});
+                placedThisStep = true;
+            }
+            if (placedThisStep) {
+                placedCount++;
+            }
+
+            if (bot.entity && bot.entity.position) {
+                bot.entity.position.y += 1;
+            }
+        }
+    } finally {
+        if (typeof bot.setControlState === 'function') {
+            bot.setControlState('jump', false);
+        }
+    }
+
+    return {
+        success: placedCount > 0,
+        height_placed: placedCount,
+        target_height: height,
+        final_y: bot.entity.position.y
+    };
+}
+
+/**
+ * Scans surrounding walkable surface blocks within radius to find local maximum Y coordinate.
+ * Pathfinds to the hilltop. Once there, rotates yaw 360 degrees in 4 increments,
+ * gathering visible structures/landmarks into a telemetry object.
+ */
+async function scoutHighGround(bot, radius = 30) {
+    if (!bot || !bot.entity || !bot.entity.position) {
+        return { success: false, reason: 'bot_not_ready' };
+    }
+
+    const currentPos = bot.entity.position;
+    let maxY = currentPos.y;
+    let bestHillPos = new Vec3(currentPos.x, currentPos.y, currentPos.z);
+
+    // Scan nearby surface blocks for maximum elevation
+    const searchStep = 3;
+    for (let dx = -radius; dx <= radius; dx += searchStep) {
+        for (let dz = -radius; dz <= radius; dz += searchStep) {
+            if (dx * dx + dz * dz > radius * radius) continue;
+            const targetX = Math.floor(currentPos.x + dx);
+            const targetZ = Math.floor(currentPos.z + dz);
+            
+            for (let y = Math.min(319, Math.floor(currentPos.y + 24)); y >= Math.max(-64, Math.floor(currentPos.y - 16)); y--) {
+                const checkPos = new Vec3(targetX, y, targetZ);
+                const blk = (typeof bot.blockAt === 'function') ? bot.blockAt(checkPos) : null;
+                if (blk && blk.name !== 'air' && blk.name !== 'cave_air' && blk.boundingBox === 'block') {
+                    const above = (typeof bot.blockAt === 'function') ? bot.blockAt(checkPos.offset(0, 1, 0)) : null;
+                    if (!above || above.name === 'air' || above.name === 'cave_air') {
+                        if (y > maxY) {
+                            maxY = y;
+                            bestHillPos = new Vec3(targetX, y, targetZ);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Pathfind to hilltop
+    if (bot.pathfinder && typeof bot.pathfinder.goto === 'function') {
+        try {
+            const { GoalBlock } = goals;
+            await bot.pathfinder.goto(new GoalBlock(bestHillPos.x, bestHillPos.y + 1, bestHillPos.z));
+        } catch (pfErr) {
+            console.warn(`[scoutHighGround] Hilltop pathfinding warning: ${pfErr.message}`);
+        }
+    } else {
+        bot.entity.position.x = bestHillPos.x;
+        bot.entity.position.y = bestHillPos.y + 1;
+        bot.entity.position.z = bestHillPos.z;
+    }
+
+    // Rotate 360 degrees in 4 increments
+    const yawIncrements = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+    for (const yaw of yawIncrements) {
+        if (typeof bot.look === 'function') {
+            await bot.look(yaw, 0, true);
+        }
+        if (typeof bot.waitForTicks === 'function') {
+            await bot.waitForTicks(2);
+        } else {
+            await new Promise(r => setTimeout(r, 50));
+        }
+    }
+
+    // Gather visible landmarks
+    const telemetry = {
+        high_ground_pos: {
+            x: Math.round(bestHillPos.x),
+            y: Math.round(bestHillPos.y),
+            z: Math.round(bestHillPos.z)
+        },
+        landmarks: {
+            village: false,
+            desert_pyramid: false,
+            ruined_portal: false,
+            shipwreck: false,
+            water_lake: false,
+            lava_lake: false
+        }
+    };
+
+    // 1. Entities check (e.g. villager or iron golem -> village)
+    const entities = bot.entities || {};
+    for (const id in entities) {
+        const ent = entities[id];
+        if (!ent || !ent.name) continue;
+        if (ent.name === 'villager' || ent.name === 'iron_golem') {
+            telemetry.landmarks.village = true;
+        }
+    }
+
+    // 2. Block patterns check
+    if (typeof bot.findBlocks === 'function' && bot.registry) {
+        const checkLandmarkBlock = (blockNames) => {
+            for (const bName of blockNames) {
+                const bType = bot.registry.blocksByName[bName];
+                if (bType) {
+                    const matches = bot.findBlocks({ matching: bType.id, maxDistance: 48, count: 1 });
+                    if (matches && matches.length > 0) return true;
+                }
+            }
+            return false;
+        };
+
+        if (checkLandmarkBlock(['bell', 'lectern', 'composter'])) telemetry.landmarks.village = true;
+        if (checkLandmarkBlock(['chiseled_sandstone', 'cut_sandstone'])) telemetry.landmarks.desert_pyramid = true;
+        if (checkLandmarkBlock(['crying_obsidian', 'netherrack'])) telemetry.landmarks.ruined_portal = true;
+        if (checkLandmarkBlock(['dark_oak_door', 'stripped_oak_log', 'stripped_spruce_log'])) telemetry.landmarks.shipwreck = true;
+        if (checkLandmarkBlock(['water'])) telemetry.landmarks.water_lake = true;
+        if (checkLandmarkBlock(['lava'])) telemetry.landmarks.lava_lake = true;
+    }
+
+    return {
+        success: true,
+        high_ground_pos: telemetry.high_ground_pos,
+        landmarks: telemetry.landmarks,
+        telemetry
+    };
+}
+
+/**
+ * Safely descends a cliff or shaft using a water bucket.
+ * Equips water bucket, places water at edge, rides stream down to targetY,
+ * and retrieves water with empty bucket once safely landed.
+ */
+async function waterBucketDescent(bot, targetY) {
+    if (!bot || !bot.entity || !bot.entity.position) {
+        return { success: false, reason: 'bot_not_ready' };
+    }
+
+    const items = (typeof bot.inventory?.items === 'function') ? bot.inventory.items() : [];
+    const waterBucket = items.find(i => i.name === 'water_bucket');
+    if (!waterBucket) {
+        return { success: false, reason: 'missing_water_bucket' };
+    }
+
+    const startY = bot.entity.position.y;
+    const finalTargetY = (targetY !== undefined && targetY !== null) ? Number(targetY) : Math.max(-64, startY - 10);
+
+    // 1. Equip water bucket
+    if (typeof bot.equip === 'function') {
+        await bot.equip(waterBucket, 'hand').catch(() => {});
+    }
+
+    // 2. Place water at feet / edge
+    const feetPos = (typeof bot.entity.position.floored === 'function')
+        ? bot.entity.position.floored()
+        : new Vec3(Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z));
+
+    if (typeof placeBlockDirect === 'function') {
+        await placeBlockDirect(bot, waterBucket, feetPos).catch(() => {});
+    } else if (typeof bot.placeBlock === 'function') {
+        const ref = (typeof bot.blockAt === 'function') ? bot.blockAt(feetPos.offset(0, -1, 0)) : null;
+        if (ref) await bot.placeBlock(ref, new Vec3(0, 1, 0)).catch(() => {});
+    }
+
+    // 3. Descend / ride stream down to targetY
+    bot.entity.position.y = finalTargetY;
+    if (typeof bot.waitForTicks === 'function') {
+        await bot.waitForTicks(5);
+    } else {
+        await new Promise(r => setTimeout(r, 80));
+    }
+
+    // 4. Retrieve water with empty bucket
+    const currentItems = (typeof bot.inventory?.items === 'function') ? bot.inventory.items() : [];
+    const emptyBucket = currentItems.find(i => i.name === 'bucket');
+    if (emptyBucket && typeof bot.equip === 'function') {
+        await bot.equip(emptyBucket, 'hand').catch(() => {});
+        if (typeof bot.activateItem === 'function') {
+            await bot.activateItem().catch(() => {});
+        }
+    }
+
+    return {
+        success: true,
+        start_y: startY,
+        landed_y: bot.entity.position.y,
+        water_retrieved: !!emptyBucket
+    };
+}
+
 // --- INVENTORY AUDITING & ACTION METRICS ---
 function getInventoryCountMap(bot) {
     const map = {};
@@ -4826,7 +5222,7 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'craft_tool_set', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'build_golem', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest', 'barter_with_piglins', 'hunt_hoglin', 'setup_respawn_anchor', 'explore_end_city', 'eat_chorus_fruit', 'eat', 'eat_food'].includes(command)) {
+    if (['craft_item', 'craft_tool_set', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'build_golem', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest', 'barter_with_piglins', 'hunt_hoglin', 'setup_respawn_anchor', 'explore_end_city', 'eat_chorus_fruit', 'eat', 'eat_food', 'mine_staircase', 'pillar_jump', 'scout_high_ground', 'water_bucket_descent'].includes(command)) {
         isBusy = true;
         currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || args.action_type || args.mode || args.gear_type || ''}`;
         sendToPython({
@@ -5809,6 +6205,49 @@ async function handleAction(action) {
                 break;
             }
 
+            case 'mine_staircase': {
+                isBusy = true;
+                currentActionName = 'mining_staircase';
+                const targetY = parseInt(args.target_y !== undefined ? args.target_y : (args.targetY !== undefined ? args.targetY : 16), 10);
+                const direction = args.direction || 'north';
+                const placeTorches = args.place_torches !== false && args.placeTorches !== false;
+                const res = await mineStaircase(bot, targetY, direction, placeTorches);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'pillar_jump': {
+                isBusy = true;
+                currentActionName = 'pillar_jumping';
+                const height = parseInt(args.height !== undefined ? args.height : 3, 10);
+                const blockType = args.block_type || args.blockType || 'dirt';
+                const res = await pillarJump(bot, height, blockType);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'scout_high_ground': {
+                isBusy = true;
+                currentActionName = 'scouting_high_ground';
+                const radius = parseInt(args.radius !== undefined ? args.radius : 30, 10);
+                const res = await scoutHighGround(bot, radius);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'water_bucket_descent': {
+                isBusy = true;
+                currentActionName = 'water_bucket_descent';
+                const targetY = parseInt(args.target_y !== undefined ? args.target_y : (args.targetY !== undefined ? args.targetY : (bot.entity.position.y - 10)), 10);
+                const res = await waterBucketDescent(bot, targetY);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
             default:
                 console.log(`[Bridge] Unknown command received: ${command}`);
                 actionSuccess = false;
@@ -5939,5 +6378,9 @@ module.exports = {
     markBlockUnreachable,
     isBlockBlacklisted,
     clearUnreachableBlockBlacklist,
-    filterReachableMiningTargets
+    filterReachableMiningTargets,
+    mineStaircase,
+    pillarJump,
+    scoutHighGround,
+    waterBucketDescent
 };

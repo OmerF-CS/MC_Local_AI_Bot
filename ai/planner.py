@@ -15,6 +15,8 @@ from ai.progression_tree import (
 )
 from ai.security_and_affordance import normalize_item_alias, strip_cjk, AffordanceEngine
 from ai.spatial_and_exploration import ExplorationEngine
+from ai.opportunistic_radar import OpportunityScanner, Opportunity
+from ai.player_styles import PlayerStyle, StyleStrategy
 
 logger = get_logger("AutonomousCoopBrain")
 
@@ -63,6 +65,11 @@ class AutonomousCoopBrain:
         self.recent_action_history: List[Dict[str, Any]] = []
         self._action_cooldowns: Dict[str, float] = {}
 
+        # Opportunistic Radar & Player Persona Style (Phase 2)
+        self.opportunity_scanner = OpportunityScanner()
+        self.style_strategy = StyleStrategy()
+        self.player_style = PlayerStyle.SPEEDRUNNER
+
         # F0.5: Resume from recorded progression checkpoint if available
         if self.db:
             try:
@@ -74,6 +81,14 @@ class AutonomousCoopBrain:
                     logger.info(f"💾 [Progression Checkpoint Loaded] Resuming from Era: {self.checkpoint_stage} -> Target: {self.checkpoint_target}")
             except Exception as e:
                 logger.warning(f"Failed to load latest progression checkpoint: {e}")
+
+    def set_player_style(self, style: Any) -> None:
+        """Updates the current player persona/style archetype."""
+        if isinstance(style, PlayerStyle):
+            self.player_style = style
+        elif isinstance(style, str):
+            self.player_style = PlayerStyle.from_str(style)
+        logger.info(f"🎭 [Player Style Set] Changed persona style to: {self.player_style.value}")
 
     def parse_inventory(self, items: List[Dict[str, Any]]) -> Dict[str, int]:
         """Converts inventory item list into a name -> count mapping."""
@@ -756,6 +771,27 @@ class AutonomousCoopBrain:
 
         missing_ingredients = resolve_missing_ingredients(goal["target"], inv_dict)
         missing_str = ", ".join(missing_ingredients) or "All materials ready for crafting!"
+
+        # Phase 2: Opportunistic Radar & Style Biases (prioritized before rigid LLM tech tree advancement)
+        if not state.get("active_player_task") and not state.get("is_busy", False):
+            opp = self.opportunity_scanner.evaluate_opportunities(inv_dict, state, goal)
+            if opp and opp.priority >= 7:
+                logger.info(f"✨ [Opportunistic Priority] {opp.reason} -> {opp.action}({opp.arguments})")
+                return {
+                    "text": f"Opportunistic priority: {opp.reason}",
+                    "tool_calls": [{"name": opp.action, "arguments": opp.arguments}]
+                }
+
+            style_bias = self.style_strategy.get_style_milestone_bias(self.player_style, inv_dict, state)
+            if style_bias:
+                b_action = style_bias.get("action")
+                b_args = style_bias.get("arguments", {})
+                b_reason = style_bias.get("reason", "Player style priority")
+                logger.info(f"🎭 [Style Bias Applied] {self.player_style.value} -> {b_action}({b_args}): {b_reason}")
+                return {
+                    "text": f"Style priority ({self.player_style.value}): {b_reason}",
+                    "tool_calls": [{"name": b_action, "arguments": b_args}]
+                }
 
         if owner_info:
             dist = owner_info.get("distance", 0)

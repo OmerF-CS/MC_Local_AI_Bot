@@ -841,5 +841,110 @@ MINECRAFT_TOOLS = [
                 "required": ["tier"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mine_staircase",
+            "description": "Dig a 45-degree downward staircase (1 block forward, 1 block down) clearing 3-block head clearance, placing torches on wall/ground, halting at target Y or bedrock/lava.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_y": {
+                        "type": "integer",
+                        "description": "Target Y level to descend to (default 16).",
+                        "default": 16
+                    },
+                    "direction": {
+                        "type": "string",
+                        "description": "Horizontal cardinal heading for the staircase: 'north', 'south', 'east', or 'west'.",
+                        "enum": ["north", "south", "east", "west"],
+                        "default": "north"
+                    },
+                    "place_torches": {
+                        "type": "boolean",
+                        "description": "Whether to place torches every 6 steps for lighting.",
+                        "default": True
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pillar_jump",
+            "description": "Rapidly pillar jump straight up and place blocks underneath to gain elevation or escape hostile mobs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "height": {
+                        "type": "integer",
+                        "description": "Number of blocks to pillar up (default 3).",
+                        "default": 3
+                    },
+                    "block_type": {
+                        "type": "string",
+                        "description": "Block type to pillar with (dirt, cobblestone, stone).",
+                        "default": "dirt"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "scout_high_ground",
+            "description": "Scan surrounding walkable surface blocks, pathfind to highest local elevation, rotate 360 degrees to scout landmarks and report telemetry.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "radius": {
+                        "type": "integer",
+                        "description": "Search radius in blocks for highest point (default 30).",
+                        "default": 30
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "water_bucket_descent",
+            "description": "Equip water bucket, place water at edge, ride water stream safely down cliff or shaft, and retrieve water with empty bucket once safely landed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_y": {
+                        "type": "integer",
+                        "description": "Target landing Y level."
+                    }
+                },
+                "required": ["target_y"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_player_style",
+            "description": "Set the player persona/style: 'speedrunner', 'explorer', 'builder', or 'combat'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "style": {
+                        "type": "string",
+                        "description": "Player gameplay style archetype.",
+                        "enum": ["speedrunner", "explorer", "builder", "combat"]
+                    }
+                },
+                "required": ["style"]
+            }
+        }
     }
 ]

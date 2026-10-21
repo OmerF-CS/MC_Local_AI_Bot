@@ -23,7 +23,11 @@ const {
     resetDefenseRetreatState,
     farmCrops,
     autoEatCheck,
-    getBotState
+    getBotState,
+    mineStaircase,
+    pillarJump,
+    scoutHighGround,
+    waterBucketDescent
 } = botModule;
 
 let passedTests = 0;
@@ -933,6 +937,252 @@ asyncio.run(check())
             assert.strictEqual(status.critically_damaged_tools.length, 1);
             assert.strictEqual(status.critically_damaged_tools[0].name, 'diamond_pickaxe');
             assert.strictEqual(status.critically_damaged_tools[0].remaining_uses, 2);
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // SUITE 12: Human Player Movement & Physical Mechanics (Phase 2)
+    // ------------------------------------------------------------------
+    if (!suiteFilter || suiteFilter === '12') {
+        console.log("\n[Suite 12] Human Player Physical & Movement Mechanics (Staircase, Pillar, Scout, Water Descent):");
+
+        await runTest("mineStaircase: digs 45-degree staircase and halts when reaching targetY", async () => {
+            const dugBlocks = [];
+            const mockBot = {
+                entity: {
+                    position: new Vec3(0, 20, 0),
+                    yaw: 0
+                },
+                inventory: { items: () => [] },
+                blockAt: (pos) => ({ name: 'stone', boundingBox: 'block', position: pos }),
+                dig: async (b) => { dugBlocks.push(b); },
+                chat: () => {}
+            };
+
+            const res = await mineStaircase(mockBot, 16, 'north', false);
+            assert.strictEqual(res.success, true);
+            assert.strictEqual(res.reason, 'target_y_reached');
+            assert.strictEqual(res.steps, 4, "Should dig 4 downward steps (20 -> 16)");
+            assert.strictEqual(res.reached_y, 16);
+            assert.ok(dugBlocks.length >= 12, "Each step clears 3-block head clearance (4 * 3 = 12)");
+        });
+
+        await runTest("mineStaircase: halts immediately when lava or bedrock is detected", async () => {
+            let haltedLava = false;
+            const mockBot = {
+                entity: {
+                    position: new Vec3(0, 20, 0),
+                    yaw: 0
+                },
+                inventory: { items: () => [] },
+                blockAt: (pos) => {
+                    // Lava hazard at step 2 (Y=18, Z=-2)
+                    if (pos.y <= 18 && pos.z <= -2) {
+                        return { name: 'lava', boundingBox: 'empty', position: pos };
+                    }
+                    return { name: 'stone', boundingBox: 'block', position: pos };
+                },
+                dig: async () => {},
+                chat: () => { haltedLava = true; }
+            };
+
+            const res = await mineStaircase(mockBot, 10, 'north', false);
+            assert.strictEqual(res.success, true);
+            assert.strictEqual(res.reason, 'bedrock_or_lava_detected');
+            assert.strictEqual(res.steps, 1, "Must halt before digging into lava at step 2");
+            assert.strictEqual(haltedLava, true);
+        });
+
+        await runTest("mineStaircase: places torches every 6 steps when placeTorches is enabled", async () => {
+            const placedTorches = [];
+            const mockBot = {
+                entity: {
+                    position: new Vec3(0, 30, 0),
+                    yaw: 0
+                },
+                inventory: {
+                    items: () => [{ name: 'torch', count: 10 }]
+                },
+                equip: async () => {},
+                blockAt: (pos) => {
+                    if (pos.x === 1 && pos.y === 25 && pos.z === -6) {
+                        return { name: 'air', boundingBox: 'empty', position: pos };
+                    }
+                    return { name: 'stone', boundingBox: 'block', position: pos };
+                },
+                dig: async () => {},
+                placeBlock: async (ref, face) => { placedTorches.push({ ref, face }); },
+                chat: () => {}
+            };
+
+            const res = await mineStaircase(mockBot, 22, 'north', true); // 8 steps total
+            assert.strictEqual(res.success, true);
+            assert.strictEqual(res.steps, 8);
+            assert.strictEqual(placedTorches.length >= 1, true, "Should have placed at least 1 torch at step 6");
+        });
+
+        await runTest("pillarJump: looks down, sets jump state, places blocks up to height, and stops jump", async () => {
+            let lookPitch = null;
+            const jumpStates = [];
+            const placedBlocks = [];
+            const mockBot = {
+                entity: {
+                    position: new Vec3(10, 64, 10),
+                    yaw: 0
+                },
+                inventory: {
+                    items: () => [{ name: 'dirt', count: 10 }]
+                },
+                look: async (yaw, pitch) => { lookPitch = pitch; },
+                setControlState: (ctrl, state) => {
+                    if (ctrl === 'jump') jumpStates.push(state);
+                },
+                blockAt: (pos) => ({ name: 'dirt', boundingBox: 'block', position: pos }),
+                placeBlock: async (ref, face) => { placedBlocks.push({ ref, face }); },
+                equip: async () => {}
+            };
+
+            const res = await pillarJump(mockBot, 3, 'dirt');
+            assert.strictEqual(res.success, true);
+            assert.strictEqual(res.height_placed, 3);
+            assert.strictEqual(res.final_y, 67, "Bot Y should elevate by 3 blocks (64 -> 67)");
+            assert.strictEqual(lookPitch, -Math.PI / 2, "Must look straight down (-PI/2)");
+            assert.ok(jumpStates.includes(true), "Must trigger jump control");
+            assert.strictEqual(jumpStates[jumpStates.length - 1], false, "Must release jump control upon completion");
+        });
+
+        await runTest("pillarJump: fails gracefully when no suitable pillar blocks in inventory", async () => {
+            const mockBot = {
+                entity: { position: new Vec3(0, 64, 0), yaw: 0 },
+                inventory: { items: () => [{ name: 'apple', count: 5 }] }
+            };
+
+            const res = await pillarJump(mockBot, 3, 'dirt');
+            assert.strictEqual(res.success, false);
+            assert.strictEqual(res.reason, 'no_blocks_for_pillar');
+        });
+
+        await runTest("scoutHighGround: scans elevation, pathfinds to hilltop, executes 360-degree scan, and compiles landmark telemetry", async () => {
+            const looks = [];
+            const mockBot = {
+                entity: {
+                    position: new Vec3(0, 64, 0)
+                },
+                entities: {
+                    '1': { name: 'villager', position: new Vec3(10, 70, 10) }
+                },
+                blockAt: (pos) => {
+                    // Hill peak at (6, 75, 6)
+                    if (pos.x === 6 && pos.z === 6 && pos.y === 75) {
+                        return { name: 'grass_block', boundingBox: 'block', position: pos };
+                    }
+                    if (pos.x === 6 && pos.z === 6 && pos.y > 75) {
+                        return { name: 'air', boundingBox: 'empty', position: pos };
+                    }
+                    if (pos.y <= 64) {
+                        return { name: 'stone', boundingBox: 'block', position: pos };
+                    }
+                    return { name: 'air', boundingBox: 'empty', position: pos };
+                },
+                look: async (yaw, pitch) => { looks.push({ yaw, pitch }); },
+                pathfinder: {
+                    goto: async (goal) => {
+                        mockBot.entity.position = new Vec3(goal.x, goal.y, goal.z);
+                    }
+                }
+            };
+
+            const res = await scoutHighGround(mockBot, 15);
+            assert.strictEqual(res.success, true);
+            assert.strictEqual(res.high_ground_pos.y, 75, "High ground pos should be peak elevation 75");
+            assert.strictEqual(looks.length, 4, "Must execute 4 panoramic yaw rotations (360 deg)");
+            assert.strictEqual(res.landmarks.village, true, "Telemetry should identify nearby villager entity as village");
+        });
+
+        await runTest("waterBucketDescent: equips water bucket, rides to targetY, and retrieves water", async () => {
+            const equippedItems = [];
+            let waterPlaced = false;
+            let waterRetrieved = false;
+
+            const mockBot = {
+                entity: { position: new Vec3(0, 100, 0) },
+                inventory: {
+                    items: () => [
+                        { name: 'water_bucket', count: 1 },
+                        { name: 'bucket', count: 1 }
+                    ]
+                },
+                equip: async (item) => { equippedItems.push(item.name); },
+                blockAt: (pos) => ({ name: 'stone', boundingBox: 'block', position: pos }),
+                placeBlock: async () => { waterPlaced = true; },
+                activateItem: async () => { waterRetrieved = true; }
+            };
+
+            const res = await waterBucketDescent(mockBot, 64);
+            assert.strictEqual(res.success, true);
+            assert.strictEqual(res.start_y, 100);
+            assert.strictEqual(res.landed_y, 64);
+            assert.strictEqual(res.water_retrieved, true);
+            assert.ok(equippedItems.includes('water_bucket'), "Must equip water_bucket first");
+            assert.ok(equippedItems.includes('bucket'), "Must equip empty bucket to retrieve");
+        });
+
+        await runTest("waterBucketDescent: fails when water_bucket is missing from inventory", async () => {
+            const mockBot = {
+                entity: { position: new Vec3(0, 100, 0) },
+                inventory: { items: () => [{ name: 'bucket', count: 1 }] }
+            };
+
+            const res = await waterBucketDescent(mockBot, 64);
+            assert.strictEqual(res.success, false);
+            assert.strictEqual(res.reason, 'missing_water_bucket');
+        });
+
+        await runTest("handleAction: dispatches mine_staircase, pillar_jump, scout_high_ground, water_bucket_descent with action_completed", async () => {
+            const results = [];
+            setSendToPythonOverride((payload) => {
+                if (payload.type === 'action_completed') results.push(payload);
+            });
+
+            const mockBot = {
+                entity: { position: new Vec3(0, 20, 0), yaw: 0 },
+                inventory: {
+                    items: () => [
+                        { name: 'dirt', count: 5 },
+                        { name: 'water_bucket', count: 1 },
+                        { name: 'bucket', count: 1 }
+                    ]
+                },
+                blockAt: () => ({ name: 'stone', boundingBox: 'block' }),
+                dig: async () => {},
+                equip: async () => {},
+                setControlState: () => {},
+                look: async () => {},
+                placeBlock: async () => {},
+                activateItem: async () => {},
+                chat: () => {}
+            };
+            setBotInstance(mockBot);
+
+            try {
+                // 1. mine_staircase
+                await handleAction({ command: 'mine_staircase', args: { target_y: 19 }, action_id: 'act_stair_1' });
+                // 2. pillar_jump
+                await handleAction({ command: 'pillar_jump', args: { height: 2 }, action_id: 'act_pillar_1' });
+                // 3. scout_high_ground
+                await handleAction({ command: 'scout_high_ground', args: { radius: 10 }, action_id: 'act_scout_1' });
+                // 4. water_bucket_descent
+                await handleAction({ command: 'water_bucket_descent', args: { target_y: 15 }, action_id: 'act_descend_1' });
+
+                assert.strictEqual(results.length, 4, "Must dispatch action_completed for all 4 commands");
+                assert.ok(results.every(r => r.success === true), "All 4 commands should succeed");
+                assert.strictEqual(results[0].command, 'mine_staircase');
+                assert.strictEqual(results[1].command, 'pillar_jump');
+                assert.strictEqual(results[2].command, 'scout_high_ground');
+                assert.strictEqual(results[3].command, 'water_bucket_descent');
+            } finally {
+                setSendToPythonOverride(null);
+            }
         });
     }
 

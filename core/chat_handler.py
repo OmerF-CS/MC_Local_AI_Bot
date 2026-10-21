@@ -346,6 +346,43 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("craft_tool_set", {"tier": tier})
                     return
 
+                elif cmd_name in ("staircase", "mine_staircase", "stairs"):
+                    target_y = int(cmd_args[0]) if cmd_args and cmd_args[0].lstrip('-').isdigit() else 16
+                    direction = cmd_args[1].lower() if len(cmd_args) > 1 else "north"
+                    self._assign_task(clean_message, "mine_staircase", sender, args={"target_y": target_y, "direction": direction})
+                    await self.bot.bridge.send_action("mine_staircase", {"target_y": target_y, "direction": direction, "place_torches": True})
+                    return
+
+                elif cmd_name in ("pillar", "pillar_jump"):
+                    height = int(cmd_args[0]) if cmd_args and cmd_args[0].isdigit() else 3
+                    block = cmd_args[1].lower() if len(cmd_args) > 1 else "dirt"
+                    self._assign_task(clean_message, "pillar_jump", sender, args={"height": height, "block_type": block})
+                    await self.bot.bridge.send_action("pillar_jump", {"height": height, "block_type": block})
+                    return
+
+                elif cmd_name in ("scout", "scout_high_ground", "hilltop"):
+                    radius = int(cmd_args[0]) if cmd_args and cmd_args[0].isdigit() else 30
+                    self._assign_task(clean_message, "scout_high_ground", sender, args={"radius": radius})
+                    await self.bot.bridge.send_action("scout_high_ground", {"radius": radius})
+                    return
+
+                elif cmd_name in ("descend", "water_descend", "water_bucket_descent"):
+                    cur_y = state.get("position", {}).get("y", 64) if isinstance(state.get("position"), dict) else 64
+                    target_y = int(cmd_args[0]) if cmd_args and cmd_args[0].lstrip('-').isdigit() else int(cur_y - 10)
+                    self._assign_task(clean_message, "water_bucket_descent", sender, args={"target_y": target_y})
+                    await self.bot.bridge.send_action("water_bucket_descent", {"target_y": target_y})
+                    return
+
+                elif cmd_name in ("style", "player_style", "persona"):
+                    from ai.player_styles import PlayerStyle
+                    style_input = cmd_args[0].lower() if cmd_args else "speedrunner"
+                    new_style = PlayerStyle.from_str(style_input)
+                    if hasattr(self.bot, "planner"):
+                        self.bot.planner.player_style = new_style
+                    msg = f"Player persona/style set to '{new_style.value}'!"
+                    await self.bot.bridge.send_action("say_chat", {"message": msg})
+                    return
+
                 elif cmd_name in ("scan", "ores", "radar"):
                     ores_radar = state.get("special_ores_radar", {})
                     vis = state.get("visible_resources", {})
@@ -556,6 +593,16 @@ class MinecraftChatHandler:
             await self.bot.bridge.send_action("say_chat", {"message": summary})
             return {"success": True, "message": summary}
 
+        elif cmd == "set_player_style":
+            from ai.player_styles import PlayerStyle
+            raw_style = str(args.get("style", "speedrunner")).strip().lower()
+            new_style = PlayerStyle.from_str(raw_style)
+            if hasattr(self.bot, "planner"):
+                self.bot.planner.player_style = new_style
+            msg = f"Player persona/style set to '{new_style.value}'!"
+            await self.bot.bridge.send_action("say_chat", {"message": msg})
+            return {"success": True, "style": new_style.value, "message": msg}
+
         # 2. Mineflayer Action Schema Validation
         validated_args = dict(args)
         if cmd == "craft_item":
@@ -730,6 +777,26 @@ class MinecraftChatHandler:
         elif cmd in ("follow_player", "guard_player"):
             player = str(validated_args.get("player_name", sender)).strip()
             validated_args["player_name"] = player or sender
+
+        elif cmd == "mine_staircase":
+            y = validated_args.get("target_y", 16)
+            validated_args["target_y"] = int(y) if str(y).lstrip('-').isdigit() else 16
+            validated_args["direction"] = str(validated_args.get("direction", "north")).lower()
+            validated_args["place_torches"] = bool(validated_args.get("place_torches", True))
+
+        elif cmd == "pillar_jump":
+            h = validated_args.get("height", 3)
+            validated_args["height"] = max(1, int(h) if str(h).isdigit() else 3)
+            validated_args["block_type"] = str(validated_args.get("block_type", "dirt")).lower()
+
+        elif cmd == "scout_high_ground":
+            r = validated_args.get("radius", 30)
+            validated_args["radius"] = max(5, int(r) if str(r).isdigit() else 30)
+
+        elif cmd == "water_bucket_descent":
+            cur_y = state.get("position", {}).get("y", 64) if isinstance(state.get("position"), dict) else 64
+            y = validated_args.get("target_y", cur_y - 10)
+            validated_args["target_y"] = int(y) if str(y).lstrip('-').isdigit() else int(cur_y - 10)
 
         # 3. Dispatch to Mineflayer Bridge
         if hasattr(self.bot.bridge, "clients") and isinstance(self.bot.bridge.clients, (set, list)) and len(self.bot.bridge.clients) == 0:
