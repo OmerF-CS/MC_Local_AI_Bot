@@ -1,4 +1,5 @@
 """Minecraft AI System Prompt - Ultra-compact Qwen 2.5 3B optimized format."""
+from typing import Dict, Any, List, Optional
 
 MINECRAFT_SYSTEM_PROMPT = """You are {bot_name}, an autonomous Minecraft survival speedrunner.
 Your owner/spectator is {bot_owner}.
@@ -99,3 +100,112 @@ def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic,
         base_prompt = base_prompt + "\n\nCONTEXT:\n" + "\n".join(extra_context_lines)
 
     return base_prompt
+
+
+def build_cortex_sensory_prompt(
+    state: Optional[Dict[str, Any]] = None,
+    inv_dict: Optional[Dict[str, int]] = None,
+    alerts: Optional[List[str]] = None,
+    affordances_summary: str = "",
+    opportunities: Optional[List[str]] = None,
+    style: str = "speedrunner",
+    recent_actions: str = "",
+    lessons: Optional[List[str]] = None
+) -> str:
+    """Constructs high-density, concise (~150-200 token) sensory perception text for Cognitive Cortex.
+
+    Format:
+    [STATE] HP:{hp}/20 | Food:{food}/20 | Light:{light} ({day_phase}) | Pos:({x},{y},{z}) | Biome:{biome}
+    [INV] {compact_inventory_string}
+    [AFFORD] {affordances_summary}
+    [PERCEPTION] Mobs: {mobs} | Blocks: {blocks}
+    [ALERTS] {alerts_string}
+    [OPPORTUNITIES] {opportunities_string}
+    [STYLE] {style}
+    [RECENT] {recent_actions}
+    [LESSONS] {lessons_string}
+    """
+    if not state:
+        state = {}
+    if inv_dict is None:
+        inv_dict = {}
+    if alerts is None:
+        alerts = []
+    if opportunities is None:
+        opportunities = []
+    if lessons is None:
+        lessons = []
+
+    # Health & Food
+    hp = state.get("health", 20)
+    if isinstance(hp, float) and hp.is_integer():
+        hp = int(hp)
+    food = state.get("food", 20)
+    if isinstance(food, float) and food.is_integer():
+        food = int(food)
+
+    # Light & Day phase
+    light = state.get("light_level", state.get("light", 15))
+    day_phase = state.get("day_phase")
+    if not day_phase:
+        time_of_day = state.get("time_of_day")
+        if time_of_day:
+            day_phase = str(time_of_day).capitalize()
+        else:
+            is_day = state.get("is_day", True)
+            day_phase = "Day" if is_day else "Night"
+
+    # Coordinates
+    pos = state.get("position", {})
+    x = round(pos.get("x", 0))
+    y = round(pos.get("y", 0))
+    z = round(pos.get("z", 0))
+
+    biome = state.get("biome", "plains")
+
+    # Compact Inventory String
+    if inv_dict:
+        inv_str = ", ".join(f"{k}:{v}" for k, v in inv_dict.items())
+    else:
+        inv_str = "empty"
+
+    # Affordances
+    afford_str = affordances_summary.strip() if affordances_summary else "none"
+
+    # Perception: Mobs & Blocks
+    mobs = (
+        state.get("nearby_entities_summary") or
+        ", ".join(state.get("nearby_hostiles", [])) or
+        "none"
+    )
+    blocks = (
+        state.get("nearby_blocks_summary") or
+        ", ".join(state.get("nearby_blocks", [])) or
+        "none"
+    )
+
+    # Alerts & Opportunities
+    alerts_str = "; ".join(alerts) if alerts else "none"
+    opps_str = "; ".join(opportunities) if opportunities else "none"
+
+    # Style, Recent actions, Lessons
+    style_str = style or "speedrunner"
+    recent_str = recent_actions.strip() if recent_actions else "none"
+    if isinstance(lessons, list):
+        lessons_str = "; ".join(lessons) if lessons else "none"
+    else:
+        lessons_str = str(lessons) if lessons else "none"
+
+    prompt_lines = [
+        f"[STATE] HP:{hp}/20 | Food:{food}/20 | Light:{light} ({day_phase}) | Pos:({x},{y},{z}) | Biome:{biome}",
+        f"[INV] {inv_str}",
+        f"[AFFORD] {afford_str}",
+        f"[PERCEPTION] Mobs: {mobs} | Blocks: {blocks}",
+        f"[ALERTS] {alerts_str}",
+        f"[OPPORTUNITIES] {opps_str}",
+        f"[STYLE] {style_str}",
+        f"[RECENT] {recent_str}",
+        f"[LESSONS] {lessons_str}"
+    ]
+    return "\n".join(prompt_lines)
+

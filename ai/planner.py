@@ -17,6 +17,7 @@ from ai.security_and_affordance import normalize_item_alias, strip_cjk, Affordan
 from ai.spatial_and_exploration import ExplorationEngine
 from ai.opportunistic_radar import OpportunityScanner, Opportunity
 from ai.player_styles import PlayerStyle, StyleStrategy
+from ai.cortex import CognitiveCortex
 
 logger = get_logger("AutonomousCoopBrain")
 
@@ -69,6 +70,10 @@ class AutonomousCoopBrain:
         self.opportunity_scanner = OpportunityScanner()
         self.style_strategy = StyleStrategy()
         self.player_style = PlayerStyle.SPEEDRUNNER
+
+        # Cognitive Cortex (The Mind - Phase 2 Cortex-First)
+        self.cortex = CognitiveCortex(ollama_brain=self.brain, bot_owner=self.bot_owner, db=self.db)
+        self.last_thought_chat_time = 0.0
 
         # F0.5: Resume from recorded progression checkpoint if available
         if self.db:
@@ -459,8 +464,8 @@ class AutonomousCoopBrain:
                         "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": target_x, "z": target_z, "ignore_y": True, "range": 3}}]
                     }
 
-            # F1-2: HP < 8 iken güvenli konuma çekilme:
-            if nearby_hostiles and not state.get("is_sheltered", False):
+            # F1-2: Pure physical panic shelter ONLY if health <= 4 and nearby_hostiles (Phase 2 Cortex)
+            if health <= 4 and nearby_hostiles and not state.get("is_sheltered", False):
                 logger.warning(f"🛡️ [Survival Priority] Low HP ({health}/20) with nearby hostiles! Withdrawing to emergency shelter.")
                 return {
                     "text": "Critical HP and surrounded! Securing position in emergency bunker.",
@@ -540,31 +545,25 @@ class AutonomousCoopBrain:
                     "tool_calls": []
                 }
 
-        # 2. Hunger Management (F1-1: food < 14)
-        if food < 14:
+        # 2. Imminent Starvation Reflex: Food < 4 (Phase 2 Cortex: Hunger < 14 handled by Cortex)
+        if food < 4:
             if has_food:
-                self.consecutive_hunt_failures = 0
-                self._tried_emergency_farm = False
                 if now - getattr(self, "last_eat_emergency_time", 0.0) >= 3.0:
                     self.last_eat_emergency_time = now
-                    logger.info(f"🍽️ [Hunger Check] Hunger level is {food}/20 (< 14). Consuming food from inventory.")
+                    logger.info(f"❤️ [Survival Priority] Immediate starvation reflex (Food: {food}/20, HP: {health}/20). Consuming food.")
                     return {
-                        "text": "Hunger below 14. Eating food to restore stamina.",
+                        "text": "Starvation damage imminent! Eating immediately.",
                         "tool_calls": [{"name": "eat_food", "arguments": {}}]
                     }
-                return None
             else:
-                # F1-1: Yiyecek yoksa bunu loga yaz ve yiyecek toplama hedefi ver (sadece tool call ile, sessiz geçme)
-                logger.warning(f"🍽️ [Hunger Alert] Hunger is {food}/20 (< 14) and NO food in inventory! Setting food gathering goal.")
                 from ai.farming import should_prioritize_farming, get_farming_action_plan
                 if inv_map and should_prioritize_farming(inv_map, state):
                     farm_plan = get_farming_action_plan(inv_map, state)
                     return {
-                        "text": "Hungry and out of food. Harvesting nearby crops.",
+                        "text": "Starving and out of food. Harvesting nearby crops.",
                         "tool_calls": [farm_plan]
                     }
 
-                # Stuck hunt loop breaker: if 3 consecutive hunts produced no food, switch strategy
                 hunt_failures = getattr(self, "consecutive_hunt_failures", 0)
                 if hunt_failures >= 3:
                     if not getattr(self, "_tried_emergency_farm", False):
@@ -576,7 +575,6 @@ class AutonomousCoopBrain:
                         }
                     elif not getattr(self, "_tried_emergency_fish", False):
                         self._tried_emergency_fish = True
-                        logger.warning("⚠️ [STUCK LOOP BREAK] Crops not viable! Shifting to fishing for emergency food.")
                         return {
                             "text": "No crops found! Catching fish for emergency food.",
                             "tool_calls": [{"name": "catch_fish", "arguments": {"count": 2}}]
@@ -589,7 +587,6 @@ class AutonomousCoopBrain:
                         angle = random.random() * 2 * math.pi
                         target_x = pos.get("x", 0) + math.cos(angle) * 45
                         target_z = pos.get("z", 0) + math.sin(angle) * 45
-                        logger.warning("⚠️ [STUCK LOOP BREAK] Local food sources exhausted! Relocating to scout new territory.")
                         return {
                             "text": "Starvation area exhausted. Relocating to new territory for food.",
                             "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": round(target_x), "z": round(target_z), "ignore_y": True, "range": 3}}]
@@ -605,7 +602,7 @@ class AutonomousCoopBrain:
                     self.last_hunt_emergency_time = now
                     self.consecutive_hunt_failures = hunt_failures + 1
                     return {
-                        "text": "Hungry and out of food. Hunting nearby animals for meat.",
+                        "text": "Starving and out of food. Hunting nearby animals for meat.",
                         "tool_calls": [{"name": "hunt_food", "arguments": {"animal_type": "any"}}]
                     }
                 else:
@@ -772,26 +769,45 @@ class AutonomousCoopBrain:
         missing_ingredients = resolve_missing_ingredients(goal["target"], inv_dict)
         missing_str = ", ".join(missing_ingredients) or "All materials ready for crafting!"
 
-        # Phase 2: Opportunistic Radar & Style Biases (prioritized before rigid LLM tech tree advancement)
+        # Collect sensory alerts and opportunities (Cortex-First)
+        edible_food_items = (
+            "cooked_beef", "cooked_porkchop", "bread", "apple", "cooked_chicken",
+            "cooked_mutton", "baked_potato", "golden_apple", "carrot", "beetroot",
+            "sweet_berries", "cooked_salmon", "cooked_cod", "melon_slice",
+            "beef", "porkchop", "mutton", "chicken"
+        )
+        has_food = any(inv_dict.get(f, 0) > 0 for f in edible_food_items) or any(f in inv_summary for f in edible_food_items)
+
+        alerts: List[str] = []
+        if food < 14:
+            alerts.append(f"Hunger low ({food}/20). Need food soon.")
+            if not has_food:
+                logger.warning(f"🍽️ [Hunger Alert] Hunger is {food}/20 (< 14) and NO food in inventory! Setting food gathering goal.")
+        if food < 6:
+            alerts.append(f"STARVATION RISK: Hunger critical ({food}/20)!")
+        if health <= 6:
+            alerts.append(f"CRITICAL HEALTH: HP {health}/20!")
+        if health < 8 and not has_food and not state.get("is_sheltered"):
+            logger.warning(f"🍽️ [Survival Priority] Critical HP ({health}/20) but NO food in inventory! Setting food gathering goal.")
+
+        time_of_day = str(state.get("time_of_day", "")).lower()
+        if time_of_day in ("night", "dusk") or (not state.get("is_day", True) and not state.get("is_sheltered")):
+            alerts.append("Night is falling/present. Phantom/monster risk.")
+
+        # Check carried tools for low durability (< 5 uses)
+        tool_base = state.get("tool_base", {})
+        if isinstance(tool_base, dict):
+            for t_name, t_info in tool_base.items():
+                if isinstance(t_info, dict) and t_info.get("durability", 100) < 5:
+                    alerts.append(f"Tool {t_name} critically damaged ({t_info.get('durability')} uses left)!")
+
+        # Scan opportunities (pass to Cortex; do NOT hardcode override!)
+        opportunities: List[str] = []
+        opp = None
         if not state.get("active_player_task") and not state.get("is_busy", False):
             opp = self.opportunity_scanner.evaluate_opportunities(inv_dict, state, goal)
-            if opp and opp.priority >= 7:
-                logger.info(f"✨ [Opportunistic Priority] {opp.reason} -> {opp.action}({opp.arguments})")
-                return {
-                    "text": f"Opportunistic priority: {opp.reason}",
-                    "tool_calls": [{"name": opp.action, "arguments": opp.arguments}]
-                }
-
-            style_bias = self.style_strategy.get_style_milestone_bias(self.player_style, inv_dict, state)
-            if style_bias:
-                b_action = style_bias.get("action")
-                b_args = style_bias.get("arguments", {})
-                b_reason = style_bias.get("reason", "Player style priority")
-                logger.info(f"🎭 [Style Bias Applied] {self.player_style.value} -> {b_action}({b_args}): {b_reason}")
-                return {
-                    "text": f"Style priority ({self.player_style.value}): {b_reason}",
-                    "tool_calls": [{"name": b_action, "arguments": b_args}]
-                }
+            if opp:
+                opportunities.append(f"{opp.name} ({opp.reason})")
 
         if owner_info:
             dist = owner_info.get("distance", 0)
@@ -806,37 +822,69 @@ class AutonomousCoopBrain:
         pos = state.get("position", {"x": 0, "y": 0, "z": 0})
         biome = state.get("biome", "unknown")
         self.exploration_engine.update_position(pos, biome)
-        state["affordances_summary"] = self.affordance_engine.format_affordances_context(inv_dict)
-        state["recent_actions_summary"] = self.format_recent_actions_context()
+        affordances_summary = self.affordance_engine.format_affordances_context(inv_dict)
+        state["affordances_summary"] = affordances_summary
+        recent_actions = self.format_recent_actions_context()
+        state["recent_actions_summary"] = recent_actions
+        recent_lessons = []
         if self.db and hasattr(self.db, "get_recent_lessons"):
             lessons = self.db.get_recent_lessons(limit=3)
             if lessons:
+                recent_lessons = lessons
                 state["learned_lessons_summary"] = "; ".join(lessons)
 
-        active_task = state.get("active_player_task")
-        if active_task:
-            decision_prompt = (
-                f"Directive from {self.bot_owner}: '{active_task.get('instruction')}'. "
-                f"Target: {goal['target']}. Sub-Goal: {substep_hint}. Missing: {missing_str}. {surv_summary} Decide 1 tool."
-            )
-        else:
-            decision_prompt = (
-                f"Milestone: {goal['target']} ({goal['stage']}). Sub-Goal: {substep_hint}. "
-                f"Missing: {missing_str}. HP: {health}/20, Food: {food}/20. {surv_summary} Decide 1 tool to progress."
-            )
-
         try:
-            logger.info(f"🎯 Milestone: {goal['target']} | Evaluating tactical action...")
-            raw_response = await self.brain.process_chat(
-                sender="System/Autonomous",
-                message=decision_prompt,
-                state=state
+            logger.info(f"🎯 Milestone: {goal['target']} | Evaluating tactical action via Cortex...")
+            cortex_decision = await self.cortex.think_and_decide(
+                state=state,
+                inv_dict=inv_dict,
+                alerts=alerts,
+                affordances_summary=affordances_summary,
+                opportunities=opportunities,
+                style=self.player_style.value,
+                recent_actions=recent_actions,
+                lessons=recent_lessons
             )
-            response = dict(raw_response or {})
-            tool_calls = [dict(tc) for tc in response.get("tool_calls", [])]
 
-            # If LLM returned no tool calls, trigger fallback heuristics (F1-6)
-            if not tool_calls:
+            tool_calls = []
+            response: Dict[str, Any] = {}
+            is_fallback = False
+            if cortex_decision and cortex_decision.get("tool_calls"):
+                is_fallback = False
+                response = dict(cortex_decision)
+                tool_calls = [dict(tc) for tc in cortex_decision.get("tool_calls", [])]
+                self.fallback_consecutive_count = 0
+                self._consecutive_same_fallback_count = 0
+                self._last_fallback_key = None
+
+                # Broadcast thought periodically (rate-limited to 30s)
+                now = time.time()
+                if now - getattr(self, "last_thought_chat_time", 0.0) >= 30.0:
+                    self.last_thought_chat_time = now
+                    thought_text = cortex_decision.get("thought", "")
+                    if thought_text:
+                        logger.info(f"💭 [Player Thought] {thought_text}")
+            else:
+                is_fallback = True
+                # Cortex returned None or empty tool calls -> Clean fallback heuristics
+                if opp and opp.priority >= 7:
+                    logger.info(f"✨ [Opportunistic Priority] {opp.reason} -> {opp.action}({opp.arguments})")
+                    return {
+                        "text": f"Opportunistic priority: {opp.reason}",
+                        "tool_calls": [{"name": opp.action, "arguments": opp.arguments}]
+                    }
+
+                style_bias = self.style_strategy.get_style_milestone_bias(self.player_style, inv_dict, state)
+                if style_bias:
+                    b_action = style_bias.get("action")
+                    b_args = style_bias.get("arguments", {})
+                    b_reason = style_bias.get("reason", "Player style priority")
+                    logger.info(f"🎭 [Style Bias Applied] {self.player_style.value} -> {b_action}({b_args}): {b_reason}")
+                    return {
+                        "text": f"Style priority ({self.player_style.value}): {b_reason}",
+                        "tool_calls": [{"name": b_action, "arguments": b_args}]
+                    }
+
                 self.fallback_count += 1
                 if hasattr(self.brain, "fallback_count"):
                     self.brain.fallback_count = self.fallback_count
@@ -854,7 +902,6 @@ class AutonomousCoopBrain:
                         self._last_fallback_key = action_sig
                         self._consecutive_same_fallback_count = 1
 
-                    # F1-6: Aynı fallback üst üste 3 kez seçilirse planner farklı bir kategoriye geçsin (örn. keşif, bekleme)
                     if self._consecutive_same_fallback_count >= 3:
                         fallback_action = self.trigger_category_shift(
                             state,
@@ -862,15 +909,16 @@ class AutonomousCoopBrain:
                         )
 
                     tool_calls = [fallback_action]
-                    response["tool_calls"] = tool_calls
+                    response = {
+                        "text": f"Progression fallback: {rule_name}",
+                        "tool_calls": tool_calls
+                    }
                     self.fallback_consecutive_count += 1
                 else:
                     self.fallback_consecutive_count = 0
-            else:
-                self.fallback_consecutive_count = 0
-                self._consecutive_same_fallback_count = 0
-                self._last_fallback_key = None
+                    return None
 
+            if not is_fallback:
                 # Validate tool calls - prevent blind impossible craft loops
                 sanitized_calls = []
                 for tc in tool_calls:
@@ -1088,6 +1136,14 @@ class AutonomousCoopBrain:
         if inv.get("chorus_fruit", 0) > 0:
             if state.get("is_falling", False) or (state.get("health", 20) <= 6 and state.get("nearby_hostiles_count", 0) >= 2):
                 return "emergency_chorus", {"name": "eat_chorus_fruit", "arguments": {}}
+
+        # 2b. Low HP safety rules when Cortex/LLM unavailable
+        health_level = state.get("health", 20)
+        nearby_hostiles = state.get("nearby_hostiles", [])
+        if nearby_hostiles and health_level < 8 and not state.get("is_sheltered", False):
+            return "emergency_shelter", {"name": "build_shelter", "arguments": {"mode": "auto"}}
+        if health_level < 8 and has_eatable and food_level < 20:
+            return "emergency_eat", {"name": "eat_food", "arguments": {}}
 
         # 3. Hunger check - consume food if hungry
         food_level = state.get("food", 20)
@@ -1474,3 +1530,8 @@ class AutonomousCoopBrain:
                 "target_z": closest["z"]
             }
         }
+
+    async def close(self) -> None:
+        """Closes cortex session and cleans up resources."""
+        if hasattr(self, "cortex") and self.cortex:
+            await self.cortex.close()
