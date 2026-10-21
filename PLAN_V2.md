@@ -1,6 +1,6 @@
 # MC Local AI Bot — V2 Progression & Architecture Matrix (1.20.4 Survival)
 
-> **Live Test & Verification Status:** **75 / 75 Tests Passing (100% OK)**  
+> **Live Test & Verification Status:** **149 / 149 Python Tests + 33 / 33 Node.js Stability Tests Passing (100% OK)**  
 > **Dedicated Live Server:** Tested against official Mojang 1.20.4 `server.jar` via OpenJDK (`tests/test_live_server_integration.py` passing in ~11.5s).  
 > **Target Environment:** Minecraft Java Edition 1.20.4, Local Qwen 2.5 3B (RTX 3060 6 GB GPU) + Node.js Mineflayer Worker + SQLite Memory.  
 > **Language & Code Purity:** 100% English across all codebases, docstrings, console logs, and datasets.
@@ -34,6 +34,7 @@ The bot operates on a strict separation of concerns:
 | **F2.4** | Persistent Ore Mapping & Special Ore Radar | **Verified** | 32m `SPECIAL_ORE_CATEGORIES` radar synced to SQLite `ore_map`; recalls iron, diamond, emerald, gold, lapis, redstone, copper, quartz, amethyst, ancient_debris. | `minecraft_bot/bot.js`, `main.py`, `ai/planner.py` |
 | **F2.5** | Full Tool Base & Durability Guard | **Verified** | Complete 5-core + 9-utility tool base (`craft_tool_set`), `critically_damaged_tools` guard, and F1-5 reachable wood trunk filter + blacklist. | `minecraft_bot/tool_learner.js`, `minecraft_bot/bot.js` |
 | **F2.6** | Golem Construction & Expanded Survival Inventory | **Verified** | 3D Iron/Snow Golem builder (`build_golem`), 8-section `survival_inventory` telemetry, and 32m dual-input villager trading. | `minecraft_bot/bot.js`, `ai/planner.py`, `tests/test_f2_survival_expansion.py` |
+| **F2.7** | SecurityGuard, Affordances, Frontier Exploration & 4-Layer JSON Recovery | **Verified** | Injection/anti-troll shield (`SecurityGuard`), real-time craft/smelt affordances & TR/EN aliasing (`AffordanceEngine`), hazard-aware frontier exploration & death reflection (`ExplorationEngine`), and 4-layer inline JSON tool recovery. | `ai/security_and_affordance.py`, `ai/spatial_and_exploration.py`, `ai/ollama_client.py`, `tests/test_local_brain_integration.py` |
 | **F3.1** | Weapon Cooldown & Criticals | **Verified** | 1.20.4 attack delay calculation (`getWeaponCooldownMs`); jump-critical downward strikes. | `minecraft_bot/bot.js:performChargedAttack` |
 | **F3.2** | Active Shield Blocking | **Verified** | Timed shield activation (`activateItem('off-hand')`) blocking arrows/explosions. | `minecraft_bot/bot.js:autoSelfDefenseCheck` |
 | **F3.3** | Mob Tactical Reflexes | **Verified** | Long-range Skeleton LOS cover break, Zombie swarm barrier funneling, Ghast fireball deflection. | `minecraft_bot/bot.js:autoSelfDefenseCheck` |

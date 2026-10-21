@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional, List
 from utils.logger import get_logger
 from ai.minecraft_registry import lookup_component_data
 from ai.progression_tree import resolve_missing_ingredients
+from ai.security_and_affordance import SecurityGuard, normalize_item_alias
 
 logger = get_logger("MinecraftChatHandler")
 
@@ -17,6 +18,7 @@ class MinecraftChatHandler:
     def __init__(self, bot):
         self.bot = bot
         self.last_response_time = 0.0
+        self.security_guard = SecurityGuard()
 
     def _assign_task(self, instruction: str, primary_action: str, sender: str, priority: int = 5, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Saves a player directive into SQLite task queue and marks it as active."""
@@ -94,6 +96,26 @@ class MinecraftChatHandler:
         # Ignore accidental keystrokes when player opens/closes chat (e.g. 't', 'tt')
         if len(clean_message) <= 2 and not clean_message.startswith("!") and not clean_message.isdigit() and clean_message not in ("?", "!"):
             logger.debug(f"🔇 Ignored short / accidental chat: [{sender}] '{clean_message}'")
+            return
+
+        # Security Guard: Validate against prompt injection and malicious shell commands
+        is_safe, clean_message, reject_reason = self.security_guard.sanitize_chat_input(sender, clean_message)
+        if not is_safe:
+            logger.warning(f"🛡️ [Security Reject] Blocked unsafe chat from '{sender}': {reject_reason}")
+            if hasattr(self.bot, "db") and self.bot.db:
+                self.bot.db.update_player_trust(sender, -4)
+            rejection_msg = "Command rejected: input contains disallowed script or shell injection patterns."
+            await self.bot.bridge.send_action("say_chat", {"message": rejection_msg})
+            return
+
+        # Anti-Troll Guard: Block suicide, lava diving, or drop equipment troll commands
+        is_troll, troll_reason = self.security_guard.check_in_game_troll(clean_message)
+        if is_troll:
+            logger.warning(f"🛡️ [Anti-Troll Guard] Blocked troll command from '{sender}': {troll_reason}")
+            if hasattr(self.bot, "db") and self.bot.db:
+                self.bot.db.update_player_trust(sender, -3)
+            refusal_msg = "Nice try! I am an autonomous survival speedrunner, not falling for dangerous traps."
+            await self.bot.bridge.send_action("say_chat", {"message": refusal_msg})
             return
 
         # Save to database
@@ -461,16 +483,23 @@ class MinecraftChatHandler:
         # Output response text if say_chat was not already emitted
         has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
         if response_text and not has_say_chat:
-            await self.bot.bridge.send_action("say_chat", {"message": response_text})
+            redacted_resp = self.security_guard.redact_secrets(response_text)
+            await self.bot.bridge.send_action("say_chat", {"message": redacted_resp})
 
         # Log AI response to database
         if hasattr(self.bot, "db") and response_text:
-            self.bot.db.log_chat(self.bot.config.BOT_NAME, response_text, role="assistant")
+            redacted_log = self.security_guard.redact_secrets(response_text)
+            self.bot.db.log_chat(self.bot.config.BOT_NAME, redacted_log, role="assistant")
 
     async def _execute_tool(self, cmd: str, args: Dict[str, Any], state: Dict[str, Any], sender: str) -> Dict[str, Any]:
         """Validates and dispatches Python-level memory actions or Mineflayer commands."""
         if not args:
             args = {}
+
+        # Normalize argument aliases
+        for key in ("item_name", "block_name", "input_item", "target_name"):
+            if key in args and isinstance(args[key], str):
+                args[key] = normalize_item_alias(args[key])
 
         # 1. Memory and Knowledge Tools
         if cmd == "save_current_location":

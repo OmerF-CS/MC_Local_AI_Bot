@@ -144,6 +144,17 @@ class Database:
                 )
             """)
 
+            # Lessons / Autonomous Memory (Phase 2)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS lessons (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT DEFAULT 'general',
+                    lesson TEXT UNIQUE,
+                    run_id TEXT DEFAULT '',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Run Isolation & Metadata (Task 1)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS runs (
@@ -228,6 +239,55 @@ class Database:
                     last_seen = datetime('now'),
                     total_messages = total_messages + 1
             """, (username,))
+
+    def get_player_trust(self, username: str) -> int:
+        """Gets current player trust score clamped between 0 and 100 (default 10)."""
+        if not username:
+            return 10
+        cur = self.conn.cursor()
+        cur.execute("SELECT trust_score FROM players WHERE username = ?", (username,))
+        row = cur.fetchone()
+        if row and row["trust_score"] is not None:
+            return max(0, min(100, int(row["trust_score"])))
+        return 10
+
+    def update_player_trust(self, username: str, delta: int) -> int:
+        """Updates and clamps player trust score between 0 and 100."""
+        if not username:
+            return 10
+        current_trust = self.get_player_trust(username)
+        new_trust = max(0, min(100, current_trust + delta))
+        with self.conn:
+            self.conn.execute("""
+                INSERT INTO players (username, first_seen, last_seen, trust_score)
+                VALUES (?, datetime('now'), datetime('now'), ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    trust_score = ?,
+                    last_seen = datetime('now')
+            """, (username, new_trust, new_trust))
+        return new_trust
+
+    def save_lesson(self, lesson: str, category: str = "general", run_id: Optional[str] = None) -> bool:
+        """Saves a learned tactical or death lesson to persistent database."""
+        if not lesson:
+            return False
+        rid = run_id or get_current_run_id()
+        with self.conn:
+            self.conn.execute("""
+                INSERT OR IGNORE INTO lessons (category, lesson, run_id)
+                VALUES (?, ?, ?)
+            """, (category, lesson.strip(), rid))
+            return True
+
+    def get_recent_lessons(self, limit: int = 4) -> List[str]:
+        """Retrieves the most recent unique lessons learned across runs."""
+        cur = self.conn.cursor()
+        cur.execute("""
+            SELECT lesson FROM lessons
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,))
+        return [row["lesson"] for row in cur.fetchall()]
 
     # --- PROGRESSION CHECKPOINTS ---
 

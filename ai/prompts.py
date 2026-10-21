@@ -31,6 +31,9 @@ STATUS:
 
 def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic, active_task):
     """Build ultra-compact system prompt with dynamic state injection."""
+    if not state:
+        state = {}
+
     health = state.get("health", 20)
     food = state.get("food", 20)
     pos = state.get("position", {"x": 0, "y": 0, "z": 0})
@@ -51,8 +54,8 @@ def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic,
         owner_summary = f"{bot_owner} out of sight"
 
     carried_tools = state.get("carried_tools", "None")
-    goal_stage = goal.get("stage", "early")
-    goal_target = goal.get("target", "wooden_pickaxe")
+    goal_stage = goal.get("stage", "early") if goal else "early"
+    goal_target = goal.get("target", "wooden_pickaxe") if goal else "wooden_pickaxe"
 
     missing = state.get("missing_ingredients", [])
     if isinstance(missing, list):
@@ -67,7 +70,7 @@ def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic,
     else:
         active_task_header = "None (Autonomous)"
 
-    return MINECRAFT_SYSTEM_PROMPT.format(
+    base_prompt = MINECRAFT_SYSTEM_PROMPT.format(
         bot_name=bot_name,
         bot_owner=bot_owner,
         health=health,
@@ -82,3 +85,17 @@ def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic,
         owner_summary=owner_summary,
         active_task_header=active_task_header
     )
+
+    # Dynamic contextual extensions: affordances, recent actions, and learned lessons
+    extra_context_lines = []
+    if state.get("affordances_summary"):
+        extra_context_lines.append(f"AFFORDANCES: {state['affordances_summary']}")
+    if state.get("recent_actions_summary"):
+        extra_context_lines.append(f"RECENT ACTIONS: {state['recent_actions_summary']}")
+    if state.get("learned_lessons_summary"):
+        extra_context_lines.append(f"MEMORY LESSONS: {state['learned_lessons_summary']}")
+
+    if extra_context_lines:
+        base_prompt = base_prompt + "\n\nCONTEXT:\n" + "\n".join(extra_context_lines)
+
+    return base_prompt

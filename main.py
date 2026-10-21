@@ -22,6 +22,7 @@ from core.chat_handler import MinecraftChatHandler
 from ai.ollama_client import OllamaBrain
 from ai.planner import AutonomousCoopBrain
 from ai.dataset_collector import DatasetCollector
+from ai.spatial_and_exploration import analyze_death_reflection
 
 logger = get_logger("Main")
 
@@ -347,6 +348,13 @@ class MinecraftAIBot:
         """Called when the bot dies in-game."""
         logger.warning("💀 Bot has fallen! Waiting for respawn...")
         self._bot_ready.clear()
+
+        # Death reflection analysis & lesson persistence (Phase 2)
+        cause = (data.get("cause") or data.get("reason") or "unknown hazard") if isinstance(data, dict) else "unknown hazard"
+        reflection = analyze_death_reflection(str(cause))
+        logger.warning(f"🧠 [Death Reflection] {reflection['lesson']}")
+        if hasattr(self, "db") and self.db and hasattr(self.db, "save_lesson"):
+            self.db.save_lesson(reflection["lesson"], category=reflection["category"])
 
         # F0.3: Record death location and inventory snapshot to database for corpse recovery
         death_pos = data.get("death_pos") if isinstance(data, dict) else None

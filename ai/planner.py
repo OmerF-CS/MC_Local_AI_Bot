@@ -13,6 +13,8 @@ from ai.progression_tree import (
     get_milestone_by_stage,
     get_optimal_ore_height
 )
+from ai.security_and_affordance import normalize_item_alias, strip_cjk, AffordanceEngine
+from ai.spatial_and_exploration import ExplorationEngine
 
 logger = get_logger("AutonomousCoopBrain")
 
@@ -55,6 +57,12 @@ class AutonomousCoopBrain:
         self.checkpoint_stage = None
         self.checkpoint_target = None
 
+        # Affordance, Exploration, History and Cooldown Engines (Phase 2)
+        self.affordance_engine = AffordanceEngine()
+        self.exploration_engine = ExplorationEngine()
+        self.recent_action_history: List[Dict[str, Any]] = []
+        self._action_cooldowns: Dict[str, float] = {}
+
         # F0.5: Resume from recorded progression checkpoint if available
         if self.db:
             try:
@@ -75,6 +83,31 @@ class AutonomousCoopBrain:
             count = item.get("count", 0)
             inv[name] = inv.get(name, 0) + count
         return inv
+
+    def is_action_on_cooldown(self, action: str, target_str: str) -> bool:
+        """Checks if a specific action on target is currently on cooldown."""
+        key = f"{action}:{target_str}"
+        expiry = self._action_cooldowns.get(key, 0.0)
+        return time.time() < expiry
+
+    def set_action_cooldown(self, action: str, target_str: str, duration: Optional[float] = None) -> None:
+        """Sets action cooldown timestamp (15s default, 45s for go_to_coordinates)."""
+        if duration is None:
+            duration = 45.0 if action == "go_to_coordinates" else 15.0
+        key = f"{action}:{target_str}"
+        self._action_cooldowns[key] = time.time() + duration
+
+    def format_recent_actions_context(self) -> str:
+        """Formats the last recorded actions (up to 4) into a compact context string."""
+        if not self.recent_action_history:
+            return ""
+        entries = []
+        for entry in self.recent_action_history[-4:]:
+            action = entry.get("action", "")
+            target = entry.get("target_str") or entry.get("target") or ""
+            outcome = "OK" if entry.get("status") == "success" else "FAIL"
+            entries.append(f"{action}({target})->{outcome}")
+        return f"[Recent: {', '.join(entries)}]"
 
     # ------------------------------------------------------------------
     # F1-R11: Action Failure Reason Mapping & Repetition Tracking
@@ -154,12 +187,16 @@ class AutonomousCoopBrain:
         """Generates category shift action purely without side effects or logging (F1-R11)."""
         if shift_cat == "exploration":
             pos = (state or {}).get("position", {"x": 0, "y": 64, "z": 0})
-            angle = random.random() * 2 * math.pi
-            target_x = round(pos.get("x", 0) + math.cos(angle) * 30)
-            target_z = round(pos.get("z", 0) + math.sin(angle) * 30)
+            engine = ExplorationEngine()
+            frontier = engine.get_frontier_target(pos)
             return {
                 "name": "go_to_coordinates",
-                "arguments": {"x": target_x, "z": target_z, "ignore_y": True, "range": 3}
+                "arguments": {
+                    "x": frontier["x"],
+                    "z": frontier["z"],
+                    "ignore_y": True,
+                    "range": frontier.get("range", 3)
+                }
             }
         else:
             return {
@@ -234,6 +271,21 @@ class AutonomousCoopBrain:
             "action_id": action_id
         }
         self.action_failure_history.append(failure_entry)
+        self.recent_action_history.append({
+            "action": action,
+            "target": norm_target,
+            "target_str": target_str,
+            "reason": norm_reason,
+            "status": "failure",
+            "timestamp": now
+        })
+        if len(self.recent_action_history) > 5:
+            self.recent_action_history.pop(0)
+
+        # Mark unreachable in exploration engine
+        reason_lower = norm_reason.lower()
+        if any(k in reason_lower for k in ("not_found", "no_block", "no_crop_found", "cannot_reach", "unreachable")) or self._consecutive_action_failure_count >= 2:
+            self.exploration_engine.mark_unreachable(target_str, duration=90.0)
 
         failure_key = f"{action}:{norm_reason}:{target_str}"
         if failure_key == getattr(self, "_last_action_failure_key", None):
@@ -268,6 +320,17 @@ class AutonomousCoopBrain:
             if action_id in self._processed_action_ids:
                 return
             self._processed_action_ids.add(action_id)
+
+        norm_target, target_str = self._normalize_target(target, action, None)
+        self.recent_action_history.append({
+            "action": action,
+            "target": norm_target,
+            "target_str": target_str,
+            "status": "success",
+            "timestamp": time.time()
+        })
+        if len(self.recent_action_history) > 5:
+            self.recent_action_history.pop(0)
 
         self._consecutive_action_failure_count = 0
         self._consecutive_same_fallback_count = 0
@@ -703,6 +766,17 @@ class AutonomousCoopBrain:
         surv_summary = self.format_survival_inventory_context(state)
         state["survival_status_summary"] = surv_summary
 
+        # Update spatial exploration tracking and prompt context summaries (Phase 2)
+        pos = state.get("position", {"x": 0, "y": 0, "z": 0})
+        biome = state.get("biome", "unknown")
+        self.exploration_engine.update_position(pos, biome)
+        state["affordances_summary"] = self.affordance_engine.format_affordances_context(inv_dict)
+        state["recent_actions_summary"] = self.format_recent_actions_context()
+        if self.db and hasattr(self.db, "get_recent_lessons"):
+            lessons = self.db.get_recent_lessons(limit=3)
+            if lessons:
+                state["learned_lessons_summary"] = "; ".join(lessons)
+
         active_task = state.get("active_player_task")
         if active_task:
             decision_prompt = (
@@ -766,6 +840,35 @@ class AutonomousCoopBrain:
                 for tc in tool_calls:
                     c_name = tc.get("name")
                     c_args = tc.get("arguments", {})
+                    if not isinstance(c_args, dict):
+                        c_args = {}
+
+                    # Normalize argument aliases
+                    for arg_key in ("block_name", "item_name", "input_item", "target_name"):
+                        if arg_key in c_args and isinstance(c_args[arg_key], str):
+                            c_args[arg_key] = normalize_item_alias(c_args[arg_key])
+
+                    # Attack-vs-Block Disambiguation
+                    if c_name in ("attack", "attack_target"):
+                        t_name = str(c_args.get("target_name", "")).lower()
+                        if any(k in t_name for k in ("_log", "log", "_ore", "stone", "cobblestone", "deepslate", "dirt", "sand", "gravel", "planks", "crafting_table", "furnace")):
+                            logger.info(f"🔄 Disambiguating attack_target('{t_name}') -> collect_block('{t_name}').")
+                            sanitized_calls.append({"name": "collect_block", "arguments": {"block_name": t_name, "count": 1}})
+                            continue
+
+                    # Stage 0 Priority Guard: Prevent aimless wandering at spawn without wood/tools
+                    if c_name == "go_to_coordinates" and not state.get("active_player_task"):
+                        has_pickaxe = any("pickaxe" in item for item in inv_dict.keys())
+                        wood_count = sum(c for i, c in inv_dict.items() if "log" in i or "plank" in i)
+                        has_death_recovery = False
+                        if self.db and hasattr(self.db, "get_unrecovered_death_point"):
+                            if self.db.get_unrecovered_death_point():
+                                has_death_recovery = True
+                        if not has_pickaxe and wood_count < 4 and not has_death_recovery:
+                            logger.info("🛡️ [Stage 0 Guard] Wandering without pickaxe and <4 wood at spawn! Substituting milestone action: collect_block('log').")
+                            sanitized_calls.append(milestone_action if milestone_action else {"name": "collect_block", "arguments": {"block_name": "log", "count": 3}})
+                            continue
+
                     if c_name == "collect_block":
                         b_name = str(c_args.get("block_name", "")).lower()
                         if "plank" in b_name:
