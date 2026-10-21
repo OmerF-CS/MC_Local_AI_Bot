@@ -1,7 +1,7 @@
 {
-  "name": "minecraft-mineflayer-bot",
+  "name": "mc-local-ai-bot",
   "version": "1.0.0",
-  "description": "Mineflayer bot worker with Python bridge and pathfinding skills",
+  "description": "MC local AI - Autonomous Minecraft Survival & Progression Bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",

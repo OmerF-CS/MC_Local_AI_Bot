@@ -751,6 +751,173 @@ asyncio.run(check())
         });
     }
 
+    // ------------------------------------------------------------------
+    // SUITE 11: Survival Inventory, Tool Base, Villager Trade, Golem & Special Ores
+    // ------------------------------------------------------------------
+    if (!suiteFilter || suiteFilter === '11') {
+        console.log("\n[Suite 11] Survival Inventory, Tool Base, Villager Trading, Golem & Special Ores:");
+        const toolLearner = require('./tool_learner');
+
+        await runTest("survival_inventory: getBotState reports slots, tool_base, trading_capital, and golem_readiness", () => {
+            const mockBot = {
+                health: 20,
+                food: 20,
+                version: '1.20.4',
+                entity: { position: new Vec3(0, 64, 0), velocity: new Vec3(0, 0, 0) },
+                inventory: {
+                    items: () => [
+                        { name: 'iron_pickaxe', count: 1, maxDurability: 250, durabilityUsed: 25 },
+                        { name: 'iron_hoe', count: 1, maxDurability: 250, durabilityUsed: 0 },
+                        { name: 'shears', count: 1 },
+                        { name: 'iron_ingot', count: 36 },
+                        { name: 'carved_pumpkin', count: 1 },
+                        { name: 'emerald', count: 5 },
+                        { name: 'cooked_beef', count: 8 }
+                    ],
+                    slots: { 5: { name: 'iron_helmet', maxDurability: 165, durabilityUsed: 15 }, 45: { name: 'shield' } }
+                },
+                entities: {},
+                players: {},
+                blockAt: () => null,
+                time: { timeOfDay: 1000, isDay: true },
+                game: { dimension: 'overworld' }
+            };
+            setBotInstance(mockBot);
+            const state = getBotState();
+            assert.ok(state.survival_inventory, "Expected survival_inventory in state");
+            assert.strictEqual(state.survival_inventory.slots.used_slots, 7);
+            assert.strictEqual(state.survival_inventory.tool_base.core_tools.hoe.best, 'iron_hoe');
+            assert.strictEqual(state.survival_inventory.tool_base.utility_tools.shears, true);
+            assert.strictEqual(state.survival_inventory.trading_capital.emeralds, 5);
+            assert.strictEqual(state.survival_inventory.trading_capital.can_trade_now, true);
+            assert.strictEqual(state.survival_inventory.golem_readiness.equivalent_iron_blocks, 4);
+            assert.strictEqual(state.survival_inventory.golem_readiness.can_build_iron_golem, true);
+        });
+
+        await runTest("tool_base: getFullToolBaseStatus tracks all 5 core tool categories and utility tools", () => {
+            const mockBot = {
+                inventory: {
+                    items: () => [
+                        { name: 'diamond_pickaxe', count: 1 },
+                        { name: 'iron_axe', count: 1 },
+                        { name: 'stone_shovel', count: 1 },
+                        { name: 'wooden_hoe', count: 1 },
+                        { name: 'iron_sword', count: 1 },
+                        { name: 'shield', count: 1 },
+                        { name: 'water_bucket', count: 1 },
+                        { name: 'shears', count: 1 },
+                        { name: 'flint_and_steel', count: 1 }
+                    ],
+                    slots: {}
+                }
+            };
+            const status = toolLearner.getFullToolBaseStatus(mockBot);
+            assert.strictEqual(status.missing_core_tools.length, 0);
+            assert.strictEqual(status.missing_utility_tools.length, 0);
+            assert.strictEqual(status.completeness_pct, 100);
+        });
+
+        await runTest("tradeWithVillager: validates inputItem1+inputItem2, rejects unaffordable tradeItem, and caps count by remaining uses", async () => {
+            let tradedCount = 0;
+            const villagerEntity = { name: 'villager', position: new Vec3(2, 64, 2) };
+            const mockBot = {
+                entity: { position: new Vec3(0, 64, 0) },
+                entities: { '1': villagerEntity },
+                inventory: {
+                    items: () => [
+                        { name: 'emerald', count: 10 },
+                        { name: 'book', count: 1 }
+                    ]
+                },
+                pathfinder: { goto: async () => {} },
+                openVillager: async () => ({
+                    trades: [
+                        {
+                            inputItem1: { name: 'emerald', count: 2 },
+                            inputItem2: { name: 'book', count: 1 },
+                            outputItem: { name: 'enchanted_book', count: 1 },
+                            nbTradeUses: 2,
+                            maximumNbTradeUses: 3,
+                            tradeDisabled: false
+                        }
+                    ],
+                    close: () => {}
+                }),
+                trade: async (_v, _idx, cnt) => { tradedCount = cnt; },
+                chat: () => {}
+            };
+            const resOk = await botModule.tradeWithVillager(mockBot, 'enchanted_book', 5);
+            assert.strictEqual(resOk.success, true);
+            assert.strictEqual(tradedCount, 1, "Must cap trade count by inputItem2 and remaining uses (3-2=1)");
+
+            // Now test unaffordable explicit tradeItem
+            mockBot.inventory.items = () => [{ name: 'dirt', count: 5 }];
+            const resFail = await botModule.tradeWithVillager(mockBot, 'enchanted_book', 1);
+            assert.strictEqual(resFail.success, false);
+            assert.strictEqual(resFail.reason, 'trade_prerequisites_missing');
+        });
+
+        await runTest("buildGolem: constructs iron_golem and snow_golem with carved_pumpkin placed last", async () => {
+            const equippedOrder = [];
+            let placeCalls = 0;
+            const mockBot = {
+                entity: { position: new Vec3(0, 64, 0) },
+                inventory: {
+                    items: () => [
+                        { name: 'iron_block', count: 4 },
+                        { name: 'snow_block', count: 2 },
+                        { name: 'carved_pumpkin', count: 2 }
+                    ]
+                },
+                blockAt: (pos) => ({ position: pos, name: pos.y < 64 ? 'stone' : 'air' }),
+                equip: async (item) => { equippedOrder.push(item.name); },
+                placeBlock: async () => { placeCalls++; },
+                chat: () => {}
+            };
+            const resIron = await botModule.buildGolem(mockBot, 'iron_golem', 1);
+            assert.strictEqual(resIron.success, true);
+            assert.strictEqual(placeCalls, 5, "Iron golem must place 4 iron blocks + 1 head block");
+            assert.strictEqual(equippedOrder[equippedOrder.length - 1], 'carved_pumpkin', "Carved pumpkin must be equipped last");
+
+            placeCalls = 0;
+            equippedOrder.length = 0;
+            const resSnow = await botModule.buildGolem(mockBot, 'snow_golem', 1);
+            assert.strictEqual(resSnow.success, true);
+            assert.strictEqual(placeCalls, 3, "Snow golem must place 2 snow blocks + 1 head block");
+            assert.strictEqual(equippedOrder[equippedOrder.length - 1], 'carved_pumpkin');
+        });
+
+        await runTest("special_ores_radar: SPECIAL_ORE_CATEGORIES and tickResourceScanner detect special ores", () => {
+            assert.ok(botModule.SPECIAL_ORE_CATEGORIES.precious_overworld.includes('deepslate_emerald_ore'));
+            assert.ok(botModule.SPECIAL_ORE_CATEGORIES.geode_crystal.includes('amethyst_cluster'));
+            assert.ok(botModule.SPECIAL_ORE_CATEGORIES.nether_special.includes('ancient_debris'));
+            assert.ok(botModule.ORE_INTEREST_NAMES.includes('emerald_ore'));
+            assert.ok(botModule.ORE_INTEREST_NAMES.includes('raw_iron_block'));
+        });
+
+        await runTest("GP-2 (F1-5): filterReachableMiningTargets prioritizes reachable trunk logs and skips blacklisted blocks", () => {
+            botModule.clearUnreachableBlockBlacklist();
+            const mockBot = { entity: { position: new Vec3(0, 64, 0) } };
+            const highCanopyLog = new Vec3(2, 75, 2); // dy = +11 (unreachable canopy)
+            const trunkLog = new Vec3(4, 65, 4);      // dy = +1 (reachable trunk)
+            const blacklistedLog = new Vec3(1, 64, 1);
+
+            botModule.markBlockUnreachable(blacklistedLog);
+            assert.strictEqual(botModule.isBlockBlacklisted(blacklistedLog), true);
+
+            const selected = botModule.filterReachableMiningTargets(
+                mockBot,
+                [blacklistedLog, highCanopyLog, trunkLog],
+                1,
+                true
+            );
+            assert.strictEqual(selected.length, 1);
+            assert.strictEqual(selected[0].x, 4);
+            assert.strictEqual(selected[0].y, 65);
+            botModule.clearUnreachableBlockBlacklist();
+        });
+    }
+
     console.log("\n=================================================");
     console.log(`🎉 All ${passedTests}/${totalTests} unit stability tests PASSED!`);
     console.log("=================================================\n");

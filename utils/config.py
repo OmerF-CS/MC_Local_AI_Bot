@@ -1,3 +1,4 @@
+"""MC local AI - Configuration Management & Environment Loader."""
 import os
 from dataclasses import dataclass, field
 from typing import List

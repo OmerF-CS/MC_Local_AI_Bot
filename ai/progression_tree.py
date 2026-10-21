@@ -160,6 +160,58 @@ TECH_TREE: Dict[str, Dict[str, Any]] = {
         "requires_tools": ["crafting_table"],
         "ingredients": {"ender_pearl": 1, "blaze_powder": 1},
         "description": "Locates the Stronghold and fills End Portal frames."
+    },
+
+    # --- FULL TOOL BASE & GOLEM CONSTRUCTION ---
+    "wooden_hoe": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"planks": 2, "stick": 2},
+        "description": "Tills soil and harvests hay bales quickly."
+    },
+    "stone_hoe": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"stone_tool_materials": 2, "stick": 2},
+        "description": "Durable stone hoe for farming and hay harvesting."
+    },
+    "iron_hoe": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"iron_ingot": 2, "stick": 2},
+        "description": "High-speed iron hoe for farming, hay bales, and leaves."
+    },
+    "diamond_hoe": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"diamond": 2, "stick": 2},
+        "description": "Master tier diamond hoe."
+    },
+    "shears": {
+        "requires_tools": [],
+        "ingredients": {"iron_ingot": 2},
+        "description": "Shears sheep, carves pumpkins for golems, and harvests leaves/cobwebs."
+    },
+    "fishing_rod": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"stick": 3, "string": 2},
+        "description": "Catches fish and treasure from water."
+    },
+    "bow": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"stick": 3, "string": 3},
+        "description": "Ranged combat weapon for Blazes, Ghasts, and End Crystals."
+    },
+    "iron_block": {
+        "requires_tools": ["crafting_table"],
+        "ingredients": {"iron_ingot": 9},
+        "description": "Compact iron storage and body block for Iron Golem construction (4 needed)."
+    },
+    "snow_block": {
+        "requires_tools": [],
+        "ingredients": {"snowball": 4},
+        "description": "Body block for Snow Golem construction (2 needed)."
+    },
+    "carved_pumpkin": {
+        "requires_tools": ["shears"],
+        "ingredients": {"pumpkin": 1},
+        "description": "Head block required to spawn Iron Golems and Snow Golems."
     }
 }
 
@@ -272,8 +324,11 @@ def get_milestone_by_stage(stage: str) -> Optional[Dict[str, Any]]:
 ORE_OPTIMAL_Y: Dict[str, int] = {
     "coal": 95,
     "iron": 16,
+    "emerald": 16,
     "copper": 48,
+    "quartz": 60,
     "gold": -16,
+    "amethyst": -20,
     "redstone": -58,
     "lapis": 0,
     "diamond": -58,

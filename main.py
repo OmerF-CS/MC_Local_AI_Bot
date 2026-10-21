@@ -99,7 +99,7 @@ class MinecraftAIBot:
         self._shutdown_event.set()
 
     def _update_last_known_state(self, state: Dict[str, Any]):
-        """Caches last known non-empty inventory, coordinates and dimension."""
+        """Caches last known non-empty inventory, coordinates, dimension, and syncs special_ores_radar to SQLite ore_map."""
         if not state or not isinstance(state, dict):
             return
         inv = state.get("inventory")
@@ -111,6 +111,25 @@ class MinecraftAIBot:
         dim = state.get("dimension")
         if dim:
             self.last_known_dimension = str(dim)
+
+        # GP-3: Sync discovered special_ores_radar coordinates into persistent SQLite ore_map
+        if hasattr(self, "db") and self.db:
+            if not hasattr(self, "_synced_radar_ores"):
+                self._synced_radar_ores = set()
+            cur_dim = str(dim or self.last_known_dimension or "overworld").lower()
+            ores_radar = state.get("special_ores_radar")
+            if isinstance(ores_radar, dict):
+                for entries in ores_radar.values():
+                    if isinstance(entries, list):
+                        for entry in entries:
+                            if isinstance(entry, dict) and entry.get("block") and isinstance(entry.get("closest_pos"), dict):
+                                cpos = entry["closest_pos"]
+                                ox, oy, oz = cpos.get("x"), cpos.get("y"), cpos.get("z")
+                                if ox is not None and oy is not None and oz is not None:
+                                    ore_key = f"{cur_dim}:{int(ox)},{int(oy)},{int(oz)}:{entry['block']}"
+                                    if ore_key not in self._synced_radar_ores:
+                                        self._synced_radar_ores.add(ore_key)
+                                        self.db.save_ore(cur_dim, int(ox), int(oy), int(oz), str(entry["block"]))
 
     async def check_and_trigger_corpse_recovery(self, state: Dict[str, Any]):
         """Checks for unrecovered death point with dropped inventory and queues recovery task."""

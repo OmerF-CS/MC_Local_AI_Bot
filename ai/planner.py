@@ -700,16 +700,19 @@ class AutonomousCoopBrain:
         else:
             owner_summary = f"{self.bot_owner} out of sight"
 
+        surv_summary = self.format_survival_inventory_context(state)
+        state["survival_status_summary"] = surv_summary
+
         active_task = state.get("active_player_task")
         if active_task:
             decision_prompt = (
                 f"Directive from {self.bot_owner}: '{active_task.get('instruction')}'. "
-                f"Target: {goal['target']}. Sub-Goal: {substep_hint}. Missing: {missing_str}. Decide 1 tool."
+                f"Target: {goal['target']}. Sub-Goal: {substep_hint}. Missing: {missing_str}. {surv_summary} Decide 1 tool."
             )
         else:
             decision_prompt = (
                 f"Milestone: {goal['target']} ({goal['stage']}). Sub-Goal: {substep_hint}. "
-                f"Missing: {missing_str}. HP: {health}/20, Food: {food}/20. Decide 1 tool to progress."
+                f"Missing: {missing_str}. HP: {health}/20, Food: {food}/20. {surv_summary} Decide 1 tool to progress."
             )
 
         try:
@@ -1006,11 +1009,16 @@ class AutonomousCoopBrain:
     def get_milestone_action(
         self,
         goal: Dict[str, Any],
-        inv: Dict[str, int],
+        inv: Any,
         state: Optional[Dict[str, Any]] = None
     ) -> tuple[str, Dict[str, Any]]:
         """Determines the specific sub-step guidance and tactical action for the active milestone."""
-        if not state:
+        # Support calling with full state dict as 2nd arg: get_milestone_action(goal, state)
+        if state is None and isinstance(inv, dict) and ("survival_inventory" in inv or "nearby_iron_golems_count" in inv or isinstance(inv.get("inventory"), list)):
+            state = inv
+            inv_items = state.get("inventory", []) or state.get("inventory_items", [])
+            inv = self.parse_inventory(inv_items) if isinstance(inv_items, list) else {}
+        elif not state:
             state = {}
 
         target = goal.get("target")
@@ -1071,10 +1079,36 @@ class AutonomousCoopBrain:
             if "anvil" in inv or state.get("nearby_anvil", False):
                 return "Repair damaged gear at anvil", {"name": "repair_gear_anvil", "arguments": {"target_item": "auto"}}
 
-        # Tactical Gear Buff: Village trading when villagers are nearby (F2)
+        # Tactical Gear Buff: Village trading when villagers are nearby (F2 / GP-1.2)
         nearby_villagers = state.get("nearby_villagers_count", 0)
-        if nearby_villagers > 0 and (inv.get("emerald", 0) > 0 or inv.get("wheat", 0) >= 20 or inv.get("raw_iron", 0) >= 15):
+        surv_inv = state.get("survival_inventory", {}) if isinstance(state.get("survival_inventory"), dict) else {}
+        trading_cap = surv_inv.get("trading_capital", {}) if isinstance(surv_inv.get("trading_capital"), dict) else {}
+        can_trade_flag = bool(trading_cap.get("can_trade_now", False))
+        if nearby_villagers > 0 and (
+            can_trade_flag
+            or inv.get("emerald", 0) > 0
+            or inv.get("wheat", 0) >= 20
+            or inv.get("hay_block", 0) >= 3
+            or inv.get("raw_iron", 0) >= 15
+        ):
             return "Trade with nearby village villager for provisions and gear", {"name": "trade_with_villager", "arguments": {"trade_item": "auto", "count": 1}}
+
+        # Tactical Defense Buff: Autonomous Golem Construction when materials are ready and no golem is nearby (F2 / GP-1.1)
+        golem_ready = surv_inv.get("golem_readiness", {}) if isinstance(surv_inv.get("golem_readiness"), dict) else {}
+        if golem_ready.get("can_build_iron_golem", False) and state.get("nearby_iron_golems_count", 0) == 0:
+            return "Construct Iron Golem for autonomous base and village defense", {"name": "build_golem", "arguments": {"golem_type": "iron_golem", "count": 1}}
+        if golem_ready.get("can_build_snow_golem", False) and state.get("nearby_snow_golems_count", 0) == 0 and state.get("nearby_iron_golems_count", 0) == 0:
+            return "Construct Snow Golem for perimeter defense", {"name": "build_golem", "arguments": {"golem_type": "snow_golem", "count": 1}}
+
+        # Tactical Tool Base Completion: Craft full survival tool set if tool base completeness < 60% and iron/diamond surplus exists (F2 / GP-1.3)
+        tool_base_info = surv_inv.get("tool_base", {}) if isinstance(surv_inv.get("tool_base"), dict) else {}
+        if (
+            tool_base_info
+            and tool_base_info.get("completeness_pct", 100) < 60
+            and (inv.get("iron_ingot", 0) >= 6 or inv.get("diamond", 0) >= 5)
+            and target not in ("wooden_pickaxe", "stone_pickaxe")
+        ):
+            return "Complete survival tool base with craft_tool_set", {"name": "craft_tool_set", "arguments": {"tier": "auto"}}
 
         # Tactical Gear Buff: Spare tool check (F2)
         total_pickaxes = inv.get("iron_pickaxe", 0) + inv.get("diamond_pickaxe", 0)
@@ -1252,3 +1286,34 @@ class AutonomousCoopBrain:
 
         # Default: Stay near partner
         return "Follow partner", {"name": "follow_player", "arguments": {"player_name": self.bot_owner}}
+
+    def format_survival_inventory_context(self, state: Dict[str, Any]) -> str:
+        """Builds a compact summary of expanded survival inventory, tool base, trading capital, golem readiness, and special ores."""
+        surv = state.get("survival_inventory")
+        if not isinstance(surv, dict) or not surv:
+            return ""
+        parts = []
+        tb = surv.get("tool_base", {})
+        if isinstance(tb, dict):
+            missing_core = tb.get("missing_core_tools", [])
+            parts.append(f"ToolBase:{tb.get('completeness_pct', 0)}%(missing:{','.join(missing_core) if missing_core else 'none'})")
+        tc = surv.get("trading_capital", {})
+        if isinstance(tc, dict) and tc.get("can_trade_now"):
+            parts.append(f"TradeReady(emeralds:{tc.get('emeralds', 0)})")
+        gr = surv.get("golem_readiness", {})
+        if isinstance(gr, dict):
+            if gr.get("can_build_iron_golem"):
+                parts.append("IronGolemReady")
+            elif gr.get("can_build_snow_golem"):
+                parts.append("SnowGolemReady")
+        ores = surv.get("special_ores_radar", {}) or state.get("special_ores_radar", {})
+        if isinstance(ores, dict) and ores:
+            found_ores = []
+            for entries in ores.values():
+                if isinstance(entries, list):
+                    for e in entries[:2]:
+                        if isinstance(e, dict) and e.get("block"):
+                            found_ores.append(f"{e['block']}@{e.get('closest_distance', '?')}m")
+            if found_ores:
+                parts.append(f"SpecialOres:{','.join(found_ores[:4])}")
+        return f"[Survival: {' | '.join(parts)}]" if parts else ""

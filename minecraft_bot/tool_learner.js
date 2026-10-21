@@ -27,13 +27,37 @@ const TOOL_TIERS = {
     diamond_shovel: 4,
     netherite_shovel: 5,
 
+    wooden_hoe: 1,
+    golden_hoe: 1,
+    stone_hoe: 2,
+    iron_hoe: 3,
+    diamond_hoe: 4,
+    netherite_hoe: 5,
+
     wooden_sword: 1,
     golden_sword: 1,
     stone_sword: 2,
     iron_sword: 3,
     diamond_sword: 4,
-    netherite_sword: 5
+    netherite_sword: 5,
+
+    shears: 2,
+    flint_and_steel: 2,
+    fishing_rod: 2,
+    bucket: 2,
+    water_bucket: 3,
+    lava_bucket: 3,
+    shield: 3,
+    bow: 3,
+    crossbow: 4,
+    trident: 5
 };
+
+const CORE_TOOL_CATEGORIES = ['pickaxe', 'axe', 'shovel', 'hoe', 'sword'];
+const UTILITY_TOOL_NAMES = [
+    'shield', 'water_bucket', 'bucket', 'lava_bucket',
+    'shears', 'flint_and_steel', 'fishing_rod', 'bow', 'crossbow'
+];
 
 const MEMORY_FILE = path.resolve(__dirname, '../data/tool_learning_memory.json');
 
@@ -74,6 +98,11 @@ function analyzeBlockHarvest(botVersion, blockName) {
         else if (toolIds.some(n => n.includes('axe'))) optimalCategory = 'axe';
         else if (toolIds.some(n => n.includes('shovel'))) optimalCategory = 'shovel';
         else if (toolIds.some(n => n.includes('hoe'))) optimalCategory = 'hoe';
+        else if (toolIds.some(n => n.includes('shears'))) optimalCategory = 'shears';
+    } else if (['hay_block', 'sponge', 'wet_sponge', 'sculk', 'target', 'shroomlight', 'moss_block'].some(h => blockName.includes(h)) || blockName.includes('wart_block')) {
+        optimalCategory = 'hoe';
+    } else if (blockName.includes('wool') || blockName.includes('leaves') || blockName === 'cobweb') {
+        optimalCategory = 'shears';
     } else if (b.material) {
         // Fallback to material-based heuristic
         if (['rock', 'stone', 'metal', 'iron', 'ore'].some(m => b.material.includes(m))) optimalCategory = 'pickaxe';
@@ -128,6 +157,95 @@ function getCarriedToolsSummary(bot) {
     return tools.map(t => `${t.name} (x${t.count})`).join(', ');
 }
 
+function getFullToolBaseStatus(bot) {
+    const emptyStatus = {
+        core_tools: {
+            pickaxe: { best: null, tier: 0, durability_pct: 0, count: 0 },
+            axe: { best: null, tier: 0, durability_pct: 0, count: 0 },
+            shovel: { best: null, tier: 0, durability_pct: 0, count: 0 },
+            hoe: { best: null, tier: 0, durability_pct: 0, count: 0 },
+            sword: { best: null, tier: 0, durability_pct: 0, count: 0 }
+        },
+        utility_tools: {
+            shield: false,
+            water_bucket: false,
+            bucket: false,
+            lava_bucket: false,
+            shears: false,
+            flint_and_steel: false,
+            fishing_rod: false,
+            bow: false,
+            crossbow: false,
+            arrows: 0
+        },
+        missing_core_tools: [...CORE_TOOL_CATEGORIES],
+        missing_utility_tools: ['shield', 'water_bucket', 'shears', 'flint_and_steel'],
+        completeness_pct: 0
+    };
+    if (!bot || !bot.inventory || typeof bot.inventory.items !== 'function') return emptyStatus;
+
+    const items = bot.inventory.items();
+    const offhandItem = (bot.inventory.slots && bot.inventory.slots[45]) ? bot.inventory.slots[45] : null;
+    const allItems = offhandItem ? [...items, offhandItem] : items;
+
+    const coreTools = {};
+    for (const cat of CORE_TOOL_CATEGORIES) {
+        const matching = allItems.filter(i => i && i.name && i.name.endsWith(`_${cat}`));
+        let bestItem = null;
+        let bestTier = 0;
+        for (const m of matching) {
+            const t = TOOL_TIERS[m.name] || 0;
+            if (t > bestTier) {
+                bestTier = t;
+                bestItem = m;
+            }
+        }
+        let durPct = 100;
+        if (bestItem && bestItem.maxDurability) {
+            const rem = Math.max(0, bestItem.maxDurability - (bestItem.durabilityUsed || 0));
+            durPct = Math.round((rem / bestItem.maxDurability) * 100);
+        }
+        coreTools[cat] = {
+            best: bestItem ? bestItem.name : null,
+            tier: bestTier,
+            durability_pct: bestItem ? durPct : 0,
+            count: matching.reduce((s, i) => s + (i.count || 1), 0)
+        };
+    }
+
+    const hasName = (nm) => allItems.some(i => i && i.name === nm);
+    const arrowCount = allItems
+        .filter(i => i && i.name && i.name.includes('arrow'))
+        .reduce((s, i) => s + (i.count || 0), 0);
+
+    const utilityTools = {
+        shield: hasName('shield'),
+        water_bucket: hasName('water_bucket'),
+        bucket: hasName('bucket'),
+        lava_bucket: hasName('lava_bucket'),
+        shears: hasName('shears'),
+        flint_and_steel: hasName('flint_and_steel'),
+        fishing_rod: hasName('fishing_rod'),
+        bow: hasName('bow'),
+        crossbow: hasName('crossbow'),
+        arrows: arrowCount
+    };
+
+    const missingCore = CORE_TOOL_CATEGORIES.filter(c => !coreTools[c].best);
+    const keyUtilities = ['shield', 'water_bucket', 'shears', 'flint_and_steel'];
+    const missingUtil = keyUtilities.filter(u => !utilityTools[u]);
+    const totalTargets = CORE_TOOL_CATEGORIES.length + keyUtilities.length;
+    const presentCount = (CORE_TOOL_CATEGORIES.length - missingCore.length) + (keyUtilities.length - missingUtil.length);
+
+    return {
+        core_tools: coreTools,
+        utility_tools: utilityTools,
+        missing_core_tools: missingCore,
+        missing_utility_tools: missingUtil,
+        completeness_pct: Math.round((presentCount / totalTargets) * 100)
+    };
+}
+
 async function prepareAndEquipToolForBlock(bot, blockName, smartCraftFn) {
     const analysis = analyzeBlockHarvest(bot.version, blockName);
     if (!analysis) {
@@ -161,8 +279,34 @@ async function prepareAndEquipToolForBlock(bot, blockName, smartCraftFn) {
                 ).reduce((s, i) => s + i.count, 0);
 
                 if (cobbleCount >= 3) {
-                    bot.chat("⛏️ Harvesting iron ore requires a stone pickaxe! Crafting one first...");
+                    bot.chat("⛏️ Harvesting iron/copper/lapis ore requires a stone pickaxe! Crafting one first...");
                     const crafted = await smartCraftFn(bot, 'stone_pickaxe', 1);
+                    if (crafted) {
+                        tool = getBestToolInInventory(bot, analysis.validTools);
+                        if (tool) {
+                            await bot.equip(tool, 'hand').catch(() => {});
+                            return { canHarvest: true, toolEquipped: tool.name };
+                        }
+                    }
+                }
+            } else if (analysis.minToolName === 'iron_pickaxe') {
+                const ironCount = bot.inventory.items().filter(i => i.name === 'iron_ingot').reduce((s, i) => s + i.count, 0);
+                if (ironCount >= 3) {
+                    bot.chat("⛏️ Harvesting precious ore requires an iron pickaxe! Crafting one first...");
+                    const crafted = await smartCraftFn(bot, 'iron_pickaxe', 1);
+                    if (crafted) {
+                        tool = getBestToolInInventory(bot, analysis.validTools);
+                        if (tool) {
+                            await bot.equip(tool, 'hand').catch(() => {});
+                            return { canHarvest: true, toolEquipped: tool.name };
+                        }
+                    }
+                }
+            } else if (analysis.minToolName === 'diamond_pickaxe') {
+                const diamondCount = bot.inventory.items().filter(i => i.name === 'diamond').reduce((s, i) => s + i.count, 0);
+                if (diamondCount >= 3) {
+                    bot.chat("⛏️ Harvesting obsidian/ancient debris requires a diamond pickaxe! Crafting one first...");
+                    const crafted = await smartCraftFn(bot, 'diamond_pickaxe', 1);
                     if (crafted) {
                         tool = getBestToolInInventory(bot, analysis.validTools);
                         if (tool) {
@@ -183,13 +327,19 @@ async function prepareAndEquipToolForBlock(bot, blockName, smartCraftFn) {
         };
     }
 
-    // 2. Blocks that drop without tools (Wood, Dirt, Sand), but break faster with optimal tool
+    // 2. Blocks that drop without tools (Wood, Dirt, Sand, Hay, Leaves), but break faster with optimal tool
     if (analysis.optimalCategory === 'axe') {
         const axe = getBestToolInInventory(bot, null, 'axe');
         if (axe) await bot.equip(axe, 'hand').catch(() => {});
     } else if (analysis.optimalCategory === 'shovel') {
         const shovel = getBestToolInInventory(bot, null, 'shovel');
         if (shovel) await bot.equip(shovel, 'hand').catch(() => {});
+    } else if (analysis.optimalCategory === 'hoe') {
+        const hoe = getBestToolInInventory(bot, null, 'hoe');
+        if (hoe) await bot.equip(hoe, 'hand').catch(() => {});
+    } else if (analysis.optimalCategory === 'shears') {
+        const shears = getBestToolInInventory(bot, ['shears'], null);
+        if (shears) await bot.equip(shears, 'hand').catch(() => {});
     }
 
     return {
@@ -256,9 +406,12 @@ function recordExperience(blockName, toolUsed, durationMs, success, itemsGained 
 
 module.exports = {
     TOOL_TIERS,
+    CORE_TOOL_CATEGORIES,
+    UTILITY_TOOL_NAMES,
     analyzeBlockHarvest,
     getBestToolInInventory,
     getCarriedToolsSummary,
+    getFullToolBaseStatus,
     prepareAndEquipToolForBlock,
     recordExperience
 };

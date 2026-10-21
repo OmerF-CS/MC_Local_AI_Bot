@@ -302,6 +302,54 @@ class MinecraftChatHandler:
                     await self.bot.bridge.send_action("manage_chest", {"action_type": "withdraw", "target_item": target, "count": count})
                     return
 
+                elif cmd_name in ("golem", "build_golem", "irongolem", "snowgolem"):
+                    raw_g = cmd_args[0].lower() if cmd_args else ("snow_golem" if cmd_name == "snowgolem" else "iron_golem")
+                    g_type = "snow_golem" if "snow" in raw_g else ("auto" if "auto" in raw_g else "iron_golem")
+                    count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 1
+                    self._assign_task(clean_message, "build_golem", sender, args={"golem_type": g_type, "count": count})
+                    await self.bot.bridge.send_action("build_golem", {"golem_type": g_type, "count": count})
+                    return
+
+                elif cmd_name in ("trade", "villager", "trade_with_villager"):
+                    item = cmd_args[0].lower() if cmd_args else None
+                    count = int(cmd_args[1]) if len(cmd_args) > 1 and cmd_args[1].isdigit() else 1
+                    t_args = {"trade_item": item, "count": count} if item else {"count": count}
+                    self._assign_task(clean_message, "trade_with_villager", sender, args=t_args)
+                    await self.bot.bridge.send_action("trade_with_villager", t_args)
+                    return
+
+                elif cmd_name in ("tools", "toolset", "craft_tool_set"):
+                    tier = cmd_args[0].lower() if cmd_args and cmd_args[0].lower() in ("wooden", "stone", "iron", "diamond", "auto") else "auto"
+                    self._assign_task(clean_message, "craft_tool_set", sender, args={"tier": tier})
+                    await self.bot.bridge.send_action("craft_tool_set", {"tier": tier})
+                    return
+
+                elif cmd_name in ("scan", "ores", "radar"):
+                    ores_radar = state.get("special_ores_radar", {})
+                    vis = state.get("visible_resources", {})
+                    ore_parts = []
+                    for cat, entries in ores_radar.items():
+                        for e in entries:
+                            ore_parts.append(f"{e.get('block')}({e.get('closest_distance')}m)")
+                    msg = f"📡 Radar (32m) -> Special Ores: {', '.join(ore_parts) if ore_parts else 'None'} | Total Resource Types: {len(vis)}"
+                    await self.bot.bridge.send_action("say_chat", {"message": msg})
+                    return
+
+                elif cmd_name in ("inv", "survival_inv", "status"):
+                    surv = state.get("survival_inventory", {})
+                    slots = surv.get("slots", {})
+                    tb = surv.get("tool_base", {})
+                    tc = surv.get("trading_capital", {})
+                    gr = surv.get("golem_readiness", {})
+                    msg = (
+                        f"🎒 Inv: {slots.get('used_slots', 0)}/{slots.get('max_slots', 36)} slots | "
+                        f"Tools: {tb.get('completeness_pct', 0)}% | "
+                        f"Emeralds: {tc.get('emeralds', 0)} (TradeReady={tc.get('can_trade_now', False)}) | "
+                        f"IronGolem={gr.get('can_build_iron_golem', False)}, SnowGolem={gr.get('can_build_snow_golem', False)}"
+                    )
+                    await self.bot.bridge.send_action("say_chat", {"message": msg})
+                    return
+
                 elif cmd_name in ("tasks", "queue", "task_list"):
                     active = self.bot.active_player_task
                     pending = self.bot.db.get_pending_tasks() if hasattr(self.bot, "db") and self.bot.db else []

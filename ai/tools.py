@@ -40,7 +40,7 @@ MINECRAFT_TOOLS = [
         "type": "function",
         "function": {
             "name": "collect_block",
-            "description": "Mine and collect blocks. Examples: log, stone, iron_ore, coal_ore, diamond_ore, cobblestone, dirt, sand, obsidian, netherrack, glowstone, lapis_ore, gold_ore, copper_ore, deepslate_iron_ore, deepslate_diamond_ore, deepslate_coal_ore.",
+            "description": "Mine and collect blocks or universal special ore categories (log, stone, iron, coal, diamond, emerald, gold, copper, lapis, redstone, quartz, amethyst, ancient_debris, special_ore, pumpkin, obsidian, netherrack, glowstone).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -796,6 +796,49 @@ MINECRAFT_TOOLS = [
                     "z": {"type": "number", "description": "Target Z coordinate"}
                 },
                 "required": ["x", "y", "z"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_golem",
+            "description": "Construct an Iron Golem (requires 4 iron_block or 36 iron_ingot + 1 carved_pumpkin/pumpkin) or Snow Golem (requires 2 snow_block or 8 snowball + 1 carved_pumpkin) for base/village defense.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "golem_type": {
+                        "type": "string",
+                        "description": "Type of golem to construct: 'iron_golem', 'snow_golem', or 'auto'.",
+                        "enum": ["iron_golem", "snow_golem", "auto"],
+                        "default": "iron_golem"
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of golems to construct (default 1).",
+                        "default": 1
+                    }
+                },
+                "required": ["golem_type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "craft_tool_set",
+            "description": "Craft or upgrade the full survival tool base (pickaxe, axe, sword, shovel, hoe + shield, bucket, shears, flint_and_steel) in one action.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tier": {
+                        "type": "string",
+                        "description": "Preferred material tier: 'auto', 'wooden', 'stone', 'iron', or 'diamond'.",
+                        "enum": ["auto", "wooden", "stone", "iron", "diamond"],
+                        "default": "auto"
+                    }
+                },
+                "required": ["tier"]
             }
         }
     }

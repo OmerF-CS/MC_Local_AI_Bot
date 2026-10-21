@@ -125,15 +125,27 @@ function sendToPython(payload) {
 
 // Round-Robin Resource Scanner State (Non-blocking background radar)
 const RESOURCE_CATEGORIES = [
-    'crafting_table', 'furnace', 'chest', 'bed',
-    'hay_block', 'wheat', 'carrots', 'potatoes', 'farmland',
-    'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'acacia_log', 'jungle_log', 'cherry_log',
-    'stone', 'cobblestone', 'deepslate', 'coal_ore', 'iron_ore', 'copper_ore', 'gold_ore', 'redstone_ore', 'lapis_ore', 'diamond_ore',
-    'deepslate_coal_ore', 'deepslate_iron_ore', 'deepslate_copper_ore', 'deepslate_gold_ore', 'deepslate_redstone_ore', 'deepslate_lapis_ore', 'deepslate_diamond_ore', 'ancient_debris',
+    'crafting_table', 'furnace', 'chest', 'bed', 'brewing_stand', 'anvil',
+    'hay_block', 'wheat', 'carrots', 'potatoes', 'farmland', 'pumpkin', 'carved_pumpkin', 'melon', 'snow_block', 'iron_block',
+    'oak_log', 'birch_log', 'spruce_log', 'dark_oak_log', 'acacia_log', 'jungle_log', 'cherry_log', 'mangrove_log',
+    'stone', 'cobblestone', 'deepslate', 'obsidian', 'crying_obsidian',
+    'coal_ore', 'iron_ore', 'copper_ore', 'gold_ore', 'redstone_ore', 'lapis_ore', 'diamond_ore', 'emerald_ore',
+    'deepslate_coal_ore', 'deepslate_iron_ore', 'deepslate_copper_ore', 'deepslate_gold_ore', 'deepslate_redstone_ore', 'deepslate_lapis_ore', 'deepslate_diamond_ore', 'deepslate_emerald_ore',
+    'raw_iron_block', 'raw_copper_block', 'raw_gold_block',
+    'amethyst_cluster', 'budding_amethyst', 'amethyst_block',
+    'nether_gold_ore', 'nether_quartz_ore', 'gilded_blackstone', 'ancient_debris',
     'water', 'lava'
 ];
 const cachedVisibleResources = {};
 const reportedOreVeins = new Set();
+const SPECIAL_ORE_CATEGORIES = {
+    precious_overworld: ['diamond_ore', 'deepslate_diamond_ore', 'emerald_ore', 'deepslate_emerald_ore'],
+    conductive_mystic: ['gold_ore', 'deepslate_gold_ore', 'redstone_ore', 'deepslate_redstone_ore', 'lapis_ore', 'deepslate_lapis_ore'],
+    industrial_base: ['iron_ore', 'deepslate_iron_ore', 'copper_ore', 'deepslate_copper_ore', 'coal_ore', 'deepslate_coal_ore'],
+    raw_vein_blocks: ['raw_iron_block', 'raw_copper_block', 'raw_gold_block'],
+    geode_crystal: ['amethyst_cluster', 'budding_amethyst', 'amethyst_block'],
+    nether_special: ['ancient_debris', 'nether_gold_ore', 'nether_quartz_ore', 'gilded_blackstone', 'crying_obsidian']
+};
 const ORE_INTEREST_NAMES = [
     'coal_ore', 'deepslate_coal_ore',
     'iron_ore', 'deepslate_iron_ore',
@@ -142,76 +154,100 @@ const ORE_INTEREST_NAMES = [
     'redstone_ore', 'deepslate_redstone_ore',
     'lapis_ore', 'deepslate_lapis_ore',
     'diamond_ore', 'deepslate_diamond_ore',
+    'emerald_ore', 'deepslate_emerald_ore',
+    'raw_iron_block', 'raw_copper_block', 'raw_gold_block',
+    'amethyst_cluster', 'budding_amethyst',
+    'nether_gold_ore', 'nether_quartz_ore', 'gilded_blackstone',
     'ancient_debris'
 ];
 let scanRoundRobinIndex = 0;
 let botCreatedTime = Date.now();
 let lastSleepTime = Date.now();
 
+function getOreSpecialCategory(blockName) {
+    for (const [cat, names] of Object.entries(SPECIAL_ORE_CATEGORIES)) {
+        if (names.includes(blockName)) return cat;
+    }
+    return null;
+}
+
 function tickResourceScanner() {
     if (!bot || !bot.entity) return;
     try {
         const mcData = require('minecraft-data')(bot.version);
-        const bName = RESOURCE_CATEGORIES[scanRoundRobinIndex % RESOURCE_CATEGORIES.length];
-        scanRoundRobinIndex++;
+        const SCAN_BATCH_SIZE = 4;
+        const curDim = (bot.game && bot.game.dimension ? String(bot.game.dimension).toLowerCase() : 'overworld');
 
-        const bType = mcData.blocksByName[bName];
-        if (!bType) return;
+        for (let step = 0; step < SCAN_BATCH_SIZE; step++) {
+            const bName = RESOURCE_CATEGORIES[scanRoundRobinIndex % RESOURCE_CATEGORIES.length];
+            scanRoundRobinIndex++;
 
-        // Radius 32m (8x smaller volume than 64m), count 4
-        const found = bot.findBlocks({
-            matching: bType.id,
-            maxDistance: 32,
-            count: 4
-        });
+            const bType = mcData.blocksByName[bName];
+            if (!bType) continue;
 
-        if (found.length > 0) {
-            let exposedCount = 0;
-            let closestDist = 999;
-            const curDim = (bot.game && bot.game.dimension ? String(bot.game.dimension).toLowerCase() : 'overworld');
+            // Radius 32m (8x smaller volume than 64m), count 6
+            const found = bot.findBlocks({
+                matching: bType.id,
+                maxDistance: 32,
+                count: 6
+            });
 
-            for (const pos of found) {
-                const dist = Math.round(bot.entity.position.distanceTo(pos));
-                if (dist < closestDist) closestDist = dist;
+            if (found.length > 0) {
+                let exposedCount = 0;
+                let closestDist = 999;
+                let closestPos = null;
 
-                const b = bot.blockAt(pos);
-                if (b) {
-                    const neighbors = [
-                        bot.blockAt(pos.offset(0, 1, 0)),
-                        bot.blockAt(pos.offset(0, -1, 0)),
-                        bot.blockAt(pos.offset(1, 0, 0)),
-                        bot.blockAt(pos.offset(-1, 0, 0)),
-                        bot.blockAt(pos.offset(0, 0, 1)),
-                        bot.blockAt(pos.offset(0, 0, -1))
-                    ];
-                    if (neighbors.some(n => n && (n.name === 'air' || n.name === 'cave_air'))) {
-                        exposedCount++;
+                for (const pos of found) {
+                    const dist = Math.round(bot.entity.position.distanceTo(pos));
+                    if (dist < closestDist) {
+                        closestDist = dist;
+                        closestPos = { x: pos.x, y: pos.y, z: pos.z };
+                    }
+
+                    const b = bot.blockAt(pos);
+                    if (b) {
+                        const neighbors = [
+                            bot.blockAt(pos.offset(0, 1, 0)),
+                            bot.blockAt(pos.offset(0, -1, 0)),
+                            bot.blockAt(pos.offset(1, 0, 0)),
+                            bot.blockAt(pos.offset(-1, 0, 0)),
+                            bot.blockAt(pos.offset(0, 0, 1)),
+                            bot.blockAt(pos.offset(0, 0, -1))
+                        ];
+                        if (neighbors.some(n => n && (n.name === 'air' || n.name === 'cave_air'))) {
+                            exposedCount++;
+                        }
+                    }
+
+                    // Phase 2 / F2.3: Record persistent ore vein locations to SQLite
+                    if (ORE_INTEREST_NAMES.includes(bName)) {
+                        const oreKey = `${curDim}:${pos.x},${pos.y},${pos.z}`;
+                        if (!reportedOreVeins.has(oreKey)) {
+                            reportedOreVeins.add(oreKey);
+                            sendToPython({
+                                type: 'ore_discovered',
+                                dim: curDim,
+                                x: pos.x,
+                                y: pos.y,
+                                z: pos.z,
+                                block: bName,
+                                special_category: getOreSpecialCategory(bName)
+                            });
+                        }
                     }
                 }
-
-                // Phase 2 / F2.3: Record persistent ore vein locations to SQLite
-                if (ORE_INTEREST_NAMES.includes(bName)) {
-                    const oreKey = `${curDim}:${pos.x},${pos.y},${pos.z}`;
-                    if (!reportedOreVeins.has(oreKey)) {
-                        reportedOreVeins.add(oreKey);
-                        sendToPython({
-                            type: 'ore_discovered',
-                            dim: curDim,
-                            x: pos.x,
-                            y: pos.y,
-                            z: pos.z,
-                            block: bName
-                        });
-                    }
-                }
+                const harvestInfo = toolLearner.analyzeBlockHarvest(bot.version, bName);
+                cachedVisibleResources[bName] = {
+                    total_found: found.length,
+                    visible_exposed: exposedCount,
+                    closest_distance: closestDist,
+                    closest_pos: closestPos,
+                    special_category: getOreSpecialCategory(bName),
+                    min_tool: harvestInfo ? harvestInfo.minToolName : 'hand'
+                };
+            } else {
+                delete cachedVisibleResources[bName];
             }
-            cachedVisibleResources[bName] = {
-                total_found: found.length,
-                visible_exposed: exposedCount,
-                closest_distance: closestDist
-            };
-        } else {
-            delete cachedVisibleResources[bName];
         }
     } catch (_) {}
 }
@@ -279,6 +315,195 @@ function isPhysicallySheltered(bot) {
         }
     }
     return solidWalls >= 3;
+}
+
+function buildSurvivalInventoryStatus(bot, inventoryItems, visibleResources) {
+    const countItem = (predicate) => inventoryItems.filter(predicate).reduce((s, i) => s + (i.count || 0), 0);
+    const countExact = (name) => countItem(i => i.name === name);
+
+    const usedSlots = (bot && bot.inventory && typeof bot.inventory.items === 'function')
+        ? bot.inventory.items().length
+        : inventoryItems.length;
+    const maxSlots = 36;
+    const freeSlots = Math.max(0, maxSlots - usedSlots);
+
+    const toolBase = toolLearner.getFullToolBaseStatus(bot);
+
+    // Armor detail
+    const slots = (bot && bot.inventory && bot.inventory.slots) ? bot.inventory.slots : [];
+    const armorSlots = [slots[5], slots[6], slots[7], slots[8]];
+    const equippedArmorCount = armorSlots.filter(Boolean).length;
+    let lowestArmorDurPct = 100;
+    for (const a of armorSlots) {
+        if (a && a.maxDurability) {
+            const rem = Math.max(0, a.maxDurability - (a.durabilityUsed || 0));
+            const pct = Math.round((rem / a.maxDurability) * 100);
+            if (pct < lowestArmorDurPct) lowestArmorDurPct = pct;
+        }
+    }
+
+    // Food status
+    const HIGH_TIER_FOODS = ['cooked_beef', 'cooked_porkchop', 'golden_carrot', 'cooked_mutton', 'cooked_salmon', 'bread', 'baked_potato', 'cooked_chicken', 'cooked_cod'];
+    const ALL_EDIBLE_FOODS = [
+        ...HIGH_TIER_FOODS, 'apple', 'carrot', 'potato', 'sweet_berries', 'glow_berries',
+        'melon_slice', 'beetroot', 'beetroot_soup', 'mushroom_stew', 'rabbit_stew', 'cooked_rabbit',
+        'dried_kelp', 'cookie', 'pumpkin_pie', 'golden_apple', 'enchanted_golden_apple', 'chorus_fruit',
+        'beef', 'porkchop', 'mutton', 'chicken', 'rabbit', 'cod', 'salmon'
+    ];
+    const totalEdible = countItem(i => ALL_EDIBLE_FOODS.includes(i.name));
+    const highTierFood = countItem(i => HIGH_TIER_FOODS.includes(i.name));
+    const goldenApples = countExact('golden_apple') + countExact('enchanted_golden_apple');
+
+    // Raw & refined materials
+    const logsCount = countItem(i => i.name.endsWith('_log') || i.name.endsWith('_stem') || i.name.endsWith('_wood'));
+    const planksCount = countItem(i => i.name.endsWith('_planks'));
+    const sticksCount = countExact('stick');
+    const cobbleCount = countItem(i => ['cobblestone', 'cobbled_deepslate', 'blackstone'].includes(i.name));
+    const coalCount = countExact('coal') + countExact('charcoal');
+    const ironIngots = countExact('iron_ingot');
+    const rawIron = countExact('raw_iron') + countExact('iron_ore') + countExact('deepslate_iron_ore');
+    const ironBlocks = countExact('iron_block');
+    const copperIngots = countExact('copper_ingot');
+    const goldIngots = countExact('gold_ingot');
+    const diamonds = countExact('diamond');
+    const emeralds = countExact('emerald') + (countExact('emerald_block') * 9);
+    const netheriteIngots = countExact('netherite_ingot');
+    const netheriteScrap = countExact('netherite_scrap') + countExact('ancient_debris');
+    const redstoneCount = countExact('redstone');
+    const lapisCount = countExact('lapis_lazuli');
+    const quartzCount = countExact('quartz');
+    const amethystCount = countExact('amethyst_shard');
+
+    // Villager Trading Capital
+    const wheatCount = countExact('wheat') + (countExact('hay_block') * 9);
+    const hayBlocks = countExact('hay_block');
+    const paperCount = countExact('paper');
+    const rottenFlesh = countExact('rotten_flesh');
+    const stringCount = countExact('string');
+    const flintCount = countExact('flint');
+    const pumpkins = countExact('pumpkin');
+    const carvedPumpkins = countExact('carved_pumpkin') + countExact('jack_o_lantern');
+    const melons = countExact('melon') + Math.floor(countExact('melon_slice') / 9);
+    const canTradeNow = (
+        emeralds >= 1 || wheatCount >= 20 || sticksCount >= 32 ||
+        (logsCount * 8 + planksCount * 2 + sticksCount) >= 32 ||
+        coalCount >= 15 || ironIngots >= 4 || paperCount >= 24 ||
+        rottenFlesh >= 32 || stringCount >= 14 || flintCount >= 24 || pumpkins >= 6
+    );
+
+    // Golem Construction Readiness
+    const snowBlocks = countExact('snow_block');
+    const snowballs = countExact('snowball');
+    const equivalentIronBlocks = ironBlocks + Math.floor(ironIngots / 9);
+    const equivalentSnowBlocks = snowBlocks + Math.floor(snowballs / 4);
+    const hasShears = toolBase.utility_tools.shears || ironIngots >= 2;
+    const effectiveCarvedPumpkins = carvedPumpkins + (pumpkins > 0 && hasShears ? pumpkins : 0);
+
+    const canBuildIronGolem = equivalentIronBlocks >= 4 && effectiveCarvedPumpkins >= 1;
+    const canBuildSnowGolem = equivalentSnowBlocks >= 2 && effectiveCarvedPumpkins >= 1;
+    const missingForIronGolem = [];
+    if (equivalentIronBlocks < 4) {
+        const neededIngots = Math.max(0, (4 * 9) - (ironBlocks * 9 + ironIngots));
+        missingForIronGolem.push(`iron_ingot x${neededIngots} (or iron_block x${4 - equivalentIronBlocks})`);
+    }
+    if (effectiveCarvedPumpkins < 1) {
+        if (pumpkins > 0 && !hasShears) {
+            missingForIronGolem.push('shears (or 2 iron_ingot to carve pumpkin)');
+        } else {
+            missingForIronGolem.push('carved_pumpkin (or pumpkin + shears)');
+        }
+    }
+
+    // Special Ores Radar grouped by category
+    const specialOresRadar = {};
+    for (const [catName, oreNames] of Object.entries(SPECIAL_ORE_CATEGORIES)) {
+        const detected = [];
+        for (const oName of oreNames) {
+            if (visibleResources && visibleResources[oName]) {
+                detected.push({
+                    block: oName,
+                    total_found: visibleResources[oName].total_found,
+                    visible_exposed: visibleResources[oName].visible_exposed,
+                    closest_distance: visibleResources[oName].closest_distance,
+                    closest_pos: visibleResources[oName].closest_pos || null,
+                    min_tool: visibleResources[oName].min_tool || 'pickaxe'
+                });
+            }
+        }
+        if (detected.length > 0) {
+            specialOresRadar[catName] = detected;
+        }
+    }
+
+    return {
+        slots: {
+            used_slots: usedSlots,
+            free_slots: freeSlots,
+            max_slots: maxSlots,
+            capacity_pct: Math.round((usedSlots / maxSlots) * 100),
+            is_nearly_full: freeSlots <= 4
+        },
+        tool_base: toolBase,
+        armor_status: {
+            equipped_count: equippedArmorCount,
+            lowest_durability_pct: equippedArmorCount > 0 ? lowestArmorDurPct : 0,
+            has_shield: Boolean((slots[45] && slots[45].name === 'shield') || toolBase.utility_tools.shield)
+        },
+        food_status: {
+            total_edible_count: totalEdible,
+            high_tier_count: highTierFood,
+            golden_apples: goldenApples,
+            is_low_food_stock: totalEdible < 6
+        },
+        materials: {
+            logs: logsCount,
+            planks: planksCount,
+            sticks: sticksCount,
+            cobblestone: cobbleCount,
+            coal: coalCount,
+            iron_ingot: ironIngots,
+            raw_iron: rawIron,
+            iron_block: ironBlocks,
+            copper_ingot: copperIngots,
+            gold_ingot: goldIngots,
+            diamond: diamonds,
+            emerald: emeralds,
+            netherite_ingot: netheriteIngots,
+            netherite_scrap: netheriteScrap,
+            redstone: redstoneCount,
+            lapis_lazuli: lapisCount,
+            quartz: quartzCount,
+            amethyst_shard: amethystCount
+        },
+        trading_capital: {
+            emeralds: emeralds,
+            wheat_equivalent: wheatCount,
+            hay_blocks: hayBlocks,
+            sticks: sticksCount,
+            paper: paperCount,
+            rotten_flesh: rottenFlesh,
+            string: stringCount,
+            flint: flintCount,
+            pumpkins: pumpkins,
+            melons: melons,
+            can_trade_now: canTradeNow
+        },
+        golem_readiness: {
+            iron_blocks: ironBlocks,
+            iron_ingots: ironIngots,
+            equivalent_iron_blocks: equivalentIronBlocks,
+            snow_blocks: snowBlocks,
+            snowballs: snowballs,
+            equivalent_snow_blocks: equivalentSnowBlocks,
+            carved_pumpkins: carvedPumpkins,
+            pumpkins: pumpkins,
+            has_shears: hasShears,
+            can_build_iron_golem: canBuildIronGolem,
+            can_build_snow_golem: canBuildSnowGolem,
+            missing_for_iron_golem: missingForIronGolem
+        },
+        special_ores_radar: specialOresRadar
+    };
 }
 
 // --- ADVANCED 3D SPATIAL PERCEPTION & VISION ENGINE ---
@@ -370,14 +595,18 @@ function getBotState() {
     let villagersCount = 0;
     let piglinsCount = 0;
     let blazesCount = 0;
+    let ironGolemsCount = 0;
+    let snowGolemsCount = 0;
     for (const id in bot.entities) {
         const ent = bot.entities[id];
         if (!ent || !ent.position || !ent.name) continue;
         const d = ent.position.distanceTo(bot.entity.position);
         const nm = ent.name.toLowerCase();
-        if (nm.includes('villager') && !nm.includes('zombie') && !nm.includes('pillager') && d <= 24) villagersCount++;
+        if (nm.includes('villager') && !nm.includes('zombie') && !nm.includes('pillager') && d <= 32) villagersCount++;
         if (nm.includes('piglin') && !nm.includes('brute') && !nm.includes('zombified') && d <= 20) piglinsCount++;
         if (nm.includes('blaze') && d <= 24) blazesCount++;
+        if (nm === 'iron_golem' && d <= 32) ironGolemsCount++;
+        if (nm === 'snow_golem' && d <= 32) snowGolemsCount++;
     }
 
     let hasNearbyBrewingStand = false;
@@ -472,6 +701,7 @@ function getBotState() {
     }
 
     const dragonDefeated = dragonDefeatedFlag || (dimension === 'the_end' && endPortalBlockFound && !enderDragonInfo);
+    const survivalInventory = buildSurvivalInventoryStatus(bot, inventoryItems, visibleResources);
 
     return {
         health: (typeof bot.health === 'number') ? bot.health : 20,
@@ -484,6 +714,9 @@ function getBotState() {
         dimension: dimension,
         inventory_items: inventoryItems,
         inventory_summary: inventorySummary,
+        survival_inventory: survivalInventory,
+        tool_base: survivalInventory.tool_base,
+        special_ores_radar: survivalInventory.special_ores_radar,
         nearby_players: nearbyPlayers,
         visible_resources: visibleResources,
         nearby_hostiles: hostiles,
@@ -540,6 +773,8 @@ function getBotState() {
         nearby_villagers_count: villagersCount,
         nearby_piglins_count: piglinsCount,
         nearby_blazes_count: blazesCount,
+        nearby_iron_golems_count: ironGolemsCount,
+        nearby_snow_golems_count: snowGolemsCount,
         nearby_brewing_stand: hasNearbyBrewingStand,
         nearby_anvil: hasNearbyAnvil,
         nearby_bastion: hasNearbyBastion,
@@ -1664,28 +1899,36 @@ function normalizeCraftItemName(rawName, bot) {
         return 'oak_planks';
     }
     if (['workbench', 'table'].includes(name)) return 'crafting_table';
+    if (['lighter', 'igniter'].includes(name)) return 'flint_and_steel';
+    if (['rod', 'fishing_pole'].includes(name)) return 'fishing_rod';
+    if (['block_of_iron'].includes(name)) return 'iron_block';
+    if (['block_of_snow', 'snow'].includes(name)) return 'snow_block';
 
-    // Auto-detect best tier if generic tool name was given
+    // Auto-detect best tier if generic tool or armor name was given
     if (bot && bot.inventory) {
-        const invNames = bot.inventory.items().map(i => i.name);
-        if (name === 'pickaxe' || name === 'pickaxes') {
-            if (invNames.some(i => i.includes('diamond'))) return 'diamond_pickaxe';
-            if (invNames.some(i => i.includes('iron_ingot'))) return 'iron_pickaxe';
-            if (invNames.some(i => i.includes('cobble') || i.includes('deepslate') || i.includes('blackstone'))) return 'stone_pickaxe';
-            return 'wooden_pickaxe';
-        }
-        if (name === 'axe' || name === 'axes') {
-            if (invNames.some(i => i.includes('diamond'))) return 'diamond_axe';
-            if (invNames.some(i => i.includes('iron_ingot'))) return 'iron_axe';
-            if (invNames.some(i => i.includes('cobble') || i.includes('deepslate') || i.includes('blackstone'))) return 'stone_axe';
-            return 'wooden_axe';
-        }
-        if (name === 'sword' || name === 'swords') {
-            if (invNames.some(i => i.includes('diamond'))) return 'diamond_sword';
-            if (invNames.some(i => i.includes('iron_ingot'))) return 'iron_sword';
-            if (invNames.some(i => i.includes('cobble') || i.includes('deepslate') || i.includes('blackstone'))) return 'stone_sword';
-            return 'wooden_sword';
-        }
+        const items = bot.inventory.items();
+        const countBy = (pred) => items.filter(pred).reduce((s, i) => s + i.count, 0);
+        const diamonds = countBy(i => i.name === 'diamond');
+        const irons = countBy(i => i.name === 'iron_ingot');
+        const cobbles = countBy(i => ['cobblestone', 'cobbled_deepslate', 'blackstone'].includes(i.name));
+
+        const resolveToolTier = (toolSuffix, matNeeded) => {
+            if (diamonds >= matNeeded) return `diamond_${toolSuffix}`;
+            if (irons >= matNeeded) return `iron_${toolSuffix}`;
+            if (cobbles >= matNeeded) return `stone_${toolSuffix}`;
+            return `wooden_${toolSuffix}`;
+        };
+
+        if (name === 'pickaxe' || name === 'pickaxes') return resolveToolTier('pickaxe', 3);
+        if (name === 'axe' || name === 'axes') return resolveToolTier('axe', 3);
+        if (name === 'sword' || name === 'swords') return resolveToolTier('sword', 2);
+        if (name === 'shovel' || name === 'shovels' || name === 'spade') return resolveToolTier('shovel', 1);
+        if (name === 'hoe' || name === 'hoes') return resolveToolTier('hoe', 2);
+
+        if (name === 'helmet') return diamonds >= 5 ? 'diamond_helmet' : 'iron_helmet';
+        if (name === 'chestplate') return diamonds >= 8 ? 'diamond_chestplate' : 'iron_chestplate';
+        if (name === 'leggings') return diamonds >= 7 ? 'diamond_leggings' : 'iron_leggings';
+        if (name === 'boots') return diamonds >= 4 ? 'diamond_boots' : 'iron_boots';
     }
 
     try {
@@ -1920,6 +2163,16 @@ async function ensureCraftingTableInWorld(bot) {
 }
 
 async function smartCraft(bot, rawItemName, count = 1) {
+    const rawClean = (rawItemName || '').toLowerCase().trim();
+    if (['tool_set', 'full_tools', 'all_tools', 'wooden_tool_set', 'stone_tool_set', 'iron_tool_set', 'diamond_tool_set'].includes(rawClean)) {
+        const tierHint = rawClean.startsWith('wooden') ? 'wooden'
+            : rawClean.startsWith('stone') ? 'stone'
+            : rawClean.startsWith('iron') ? 'iron'
+            : rawClean.startsWith('diamond') ? 'diamond' : 'auto';
+        const res = await craftFullToolSet(bot, tierHint);
+        return res.success;
+    }
+
     const mcData = require('minecraft-data')(bot.version);
     const Recipe = require('prismarine-recipe')(bot.registry).Recipe;
 
@@ -1958,6 +2211,10 @@ async function smartCraft(bot, rawItemName, count = 1) {
         await ensureSticks(bot, 2 * count);
     } else if (itemName.includes('sword')) {
         await ensureSticks(bot, 1 * count);
+    } else if (itemName === 'fishing_rod' || itemName === 'bow' || itemName === 'crossbow') {
+        await ensureSticks(bot, 3 * count);
+    } else if (itemName === 'arrow') {
+        await ensureSticks(bot, Math.ceil(count / 4));
     } else if (itemName === 'torch') {
         await ensureSticks(bot, Math.ceil(count / 4));
     }
@@ -1966,13 +2223,15 @@ async function smartCraft(bot, rawItemName, count = 1) {
     if (itemName.startsWith('wooden_')) {
         if (itemName.includes('pickaxe') || itemName.includes('axe')) {
             await ensurePlanks(bot, 3 * count);
-        } else if (itemName.includes('sword')) {
+        } else if (itemName.includes('sword') || itemName.includes('hoe')) {
             await ensurePlanks(bot, 2 * count);
         } else if (itemName.includes('shovel')) {
             await ensurePlanks(bot, 1 * count);
         }
     } else if (itemName === 'shield') {
         await ensurePlanks(bot, 6 * count);
+    } else if (itemName === 'chest') {
+        await ensurePlanks(bot, 8 * count);
     } else if (itemName === 'crafting_table') {
         await ensurePlanks(bot, 4 * count);
     }
@@ -2021,6 +2280,95 @@ async function smartCraft(bot, rawItemName, count = 1) {
     }
 
     return true;
+}
+
+async function craftFullToolSet(bot, preferredTier = 'auto', includeUtility = true) {
+    if (!bot || !bot.inventory) return { success: false, crafted: [], reason: 'bot_not_ready' };
+
+    const tierMap = { wooden: 1, stone: 2, iron: 3, diamond: 4 };
+    const statusBefore = toolLearner.getFullToolBaseStatus(bot);
+    const craftedItems = [];
+
+    const coreCategories = [
+        { cat: 'pickaxe', matCost: 3 },
+        { cat: 'axe', matCost: 3 },
+        { cat: 'sword', matCost: 2 },
+        { cat: 'shovel', matCost: 1 },
+        { cat: 'hoe', matCost: 2 }
+    ];
+
+    for (const { cat, matCost } of coreCategories) {
+        const currentTier = statusBefore.core_tools[cat]?.tier || 0;
+        let targetToolName = null;
+
+        if (preferredTier !== 'auto' && tierMap[preferredTier]) {
+            if (currentTier < tierMap[preferredTier]) {
+                targetToolName = `${preferredTier}_${cat}`;
+            }
+        } else {
+            const candidate = normalizeCraftItemName(cat, bot);
+            const candidateTier = toolLearner.TOOL_TIERS[candidate] || 1;
+            if (currentTier < candidateTier) {
+                targetToolName = candidate;
+            }
+        }
+
+        if (targetToolName) {
+            const ok = await smartCraft(bot, targetToolName, 1);
+            if (ok) craftedItems.push(targetToolName);
+        }
+    }
+
+    if (includeUtility) {
+        const invItems = bot.inventory.items();
+        const countBy = (nm) => invItems.filter(i => i.name === nm).reduce((s, i) => s + i.count, 0);
+        let irons = countBy('iron_ingot');
+        const flints = countBy('flint');
+
+        if (!statusBefore.utility_tools.shield && irons >= 1) {
+            const ok = await smartCraft(bot, 'shield', 1);
+            if (ok) {
+                craftedItems.push('shield');
+                irons -= 1;
+            }
+        }
+        if (!statusBefore.utility_tools.water_bucket && !statusBefore.utility_tools.bucket && irons >= 3) {
+            const ok = await smartCraft(bot, 'bucket', 1);
+            if (ok) {
+                craftedItems.push('bucket');
+                irons -= 3;
+            }
+        }
+        if (!statusBefore.utility_tools.shears && irons >= 2) {
+            const ok = await smartCraft(bot, 'shears', 1);
+            if (ok) {
+                craftedItems.push('shears');
+                irons -= 2;
+            }
+        }
+        if (!statusBefore.utility_tools.flint_and_steel && irons >= 1 && flints >= 1) {
+            const ok = await smartCraft(bot, 'flint_and_steel', 1);
+            if (ok) {
+                craftedItems.push('flint_and_steel');
+                irons -= 1;
+            }
+        }
+    }
+
+    if (craftedItems.length > 0) {
+        bot.chat(`🛠️ Tool Base Upgraded! Crafted: ${craftedItems.join(', ')}`);
+        return { success: true, crafted: craftedItems, reason: 'tool_set_crafted' };
+    }
+
+    const statusAfter = toolLearner.getFullToolBaseStatus(bot);
+    if (statusAfter.missing_core_tools.length === 0) {
+        return { success: true, crafted: [], reason: 'all_core_tools_already_present' };
+    }
+    return {
+        success: false,
+        crafted: [],
+        reason: `missing_materials_for_${statusAfter.missing_core_tools.join('_')}`
+    };
 }
 
 async function smartSmelt(bot, inputItemName, count = 1) {
@@ -3131,9 +3479,15 @@ async function manageChest(bot, actionType = 'deposit_surplus', targetItem = nul
         await bot.pathfinder.goto(new GoalNear(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z, 2.5));
         const chestWindow = await bot.openChest(chestBlock);
         const ESSENTIAL_ITEMS = [
-            'iron_pickaxe', 'diamond_pickaxe', 'stone_pickaxe', 'wooden_pickaxe',
-            'iron_sword', 'diamond_sword', 'stone_sword', 'shield', 'water_bucket',
-            'cooked_beef', 'cooked_porkchop', 'bread', 'cooked_mutton', 'torch'
+            'wooden_pickaxe', 'stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe',
+            'wooden_axe', 'stone_axe', 'iron_axe', 'diamond_axe', 'netherite_axe',
+            'wooden_sword', 'stone_sword', 'iron_sword', 'diamond_sword', 'netherite_sword',
+            'wooden_shovel', 'stone_shovel', 'iron_shovel', 'diamond_shovel', 'netherite_shovel',
+            'wooden_hoe', 'stone_hoe', 'iron_hoe', 'diamond_hoe', 'netherite_hoe',
+            'shield', 'water_bucket', 'bucket', 'lava_bucket', 'shears', 'flint_and_steel',
+            'fishing_rod', 'bow', 'crossbow', 'arrow',
+            'cooked_beef', 'cooked_porkchop', 'bread', 'cooked_mutton', 'golden_carrot', 'golden_apple',
+            'torch', 'emerald', 'iron_ingot', 'diamond', 'carved_pumpkin'
         ];
 
         let transCount = 0;
@@ -3187,11 +3541,46 @@ async function tradeWithVillager(bot, tradeItem = null, count = 1) {
     if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
     const { GoalNear } = goals;
 
-    const villager = bot.nearestEntity(e => {
+    const getInvCount = (itemName) => {
+        if (!bot.inventory || typeof bot.inventory.items !== 'function') return 0;
+        return bot.inventory.items().filter(i => i.name === itemName).reduce((s, i) => s + (i.count || 0), 0);
+    };
+
+    // Pre-trade auto-preparation: unpack hay_block -> wheat or logs/planks -> sticks if needed
+    const hayCount = getInvCount('hay_block');
+    if (hayCount > 0 && getInvCount('wheat') < 20) {
+        try {
+            await smartCraft(bot, 'wheat', 1);
+        } catch (_) {}
+    }
+    const stickCount = getInvCount('stick');
+    const hasWoodForSticks = bot.inventory && typeof bot.inventory.items === 'function' &&
+        bot.inventory.items().some(i => i.name.endsWith('_log') || i.name.endsWith('_planks') || i.name.endsWith('_stem'));
+    if (stickCount < 32 && hasWoodForSticks && (!tradeItem || tradeItem === 'emerald' || tradeItem === 'stick' || tradeItem === 'auto')) {
+        try {
+            await ensureSticks(bot, 32);
+        } catch (_) {}
+    }
+
+    const candidateVillagers = Object.values(bot.entities || {}).filter(e => {
+        if (!e || !e.name || !e.position) return false;
+        const n = e.name.toLowerCase();
+        if (!n.includes('villager') || n.includes('zombie') || n.includes('pillager')) return false;
+        const dist = (bot.entity.position && typeof bot.entity.position.distanceTo === 'function')
+            ? bot.entity.position.distanceTo(e.position)
+            : 10;
+        return dist <= 32;
+    }).sort((a, b) => {
+        const da = (bot.entity.position && typeof bot.entity.position.distanceTo === 'function') ? bot.entity.position.distanceTo(a.position) : 0;
+        const db = (bot.entity.position && typeof bot.entity.position.distanceTo === 'function') ? bot.entity.position.distanceTo(b.position) : 0;
+        return da - db;
+    });
+
+    const villager = candidateVillagers[0] || (typeof bot.nearestEntity === 'function' ? bot.nearestEntity(e => {
         if (!e || !e.name) return false;
         const n = e.name.toLowerCase();
         return (n.includes('villager') && !n.includes('zombie') && !n.includes('pillager'));
-    });
+    }) : null);
 
     if (!villager) {
         bot.chat("No villagers found within trading range! 🏘️");
@@ -3206,46 +3595,241 @@ async function tradeWithVillager(bot, tradeItem = null, count = 1) {
     try {
         const villagerWindow = await bot.openVillager(villager);
         if (!villagerWindow || !villagerWindow.trades || villagerWindow.trades.length === 0) {
-            if (villagerWindow) villagerWindow.close();
+            if (villagerWindow && typeof villagerWindow.close === 'function') villagerWindow.close();
             bot.chat("Villager has no available trade offers right now.");
             return { success: false, reason: 'no_trades_available' };
         }
 
+        const cleanTarget = (tradeItem && tradeItem !== 'auto') ? tradeItem.toLowerCase().trim() : null;
         let selectedTradeIndex = -1;
+        let bestScore = -1;
+
         for (let i = 0; i < villagerWindow.trades.length; i++) {
             const t = villagerWindow.trades[i];
-            if (t.tradeDisabled) continue;
+            if (!t || t.tradeDisabled) continue;
+            if (t.maximumNbTradeUses != null && t.nbTradeUses != null && t.nbTradeUses >= t.maximumNbTradeUses) continue;
 
-            if (tradeItem) {
-                const outName = t.outputItem ? t.outputItem.name.toLowerCase() : '';
-                const inName1 = t.inputItem1 ? t.inputItem1.name.toLowerCase() : '';
-                if (outName.includes(tradeItem.toLowerCase()) || inName1.includes(tradeItem.toLowerCase())) {
+            const hasIn1 = Boolean(t.inputItem1 && t.inputItem1.name && getInvCount(t.inputItem1.name) >= (t.inputItem1.count || 1));
+            const hasIn2 = !t.inputItem2 || !t.inputItem2.name || getInvCount(t.inputItem2.name) >= (t.inputItem2.count || 1);
+            if (!hasIn1 || !hasIn2) continue;
+
+            const outName = t.outputItem && t.outputItem.name ? t.outputItem.name.toLowerCase() : '';
+            const inName1 = t.inputItem1 && t.inputItem1.name ? t.inputItem1.name.toLowerCase() : '';
+
+            if (cleanTarget) {
+                if (outName.includes(cleanTarget) || inName1.includes(cleanTarget)) {
                     selectedTradeIndex = i;
                     break;
                 }
             } else {
-                const hasIn1 = bot.inventory.items().some(item => t.inputItem1 && item.name === t.inputItem1.name && item.count >= t.inputItem1.count);
-                if (hasIn1) {
+                let score = 10;
+                if (outName === 'ender_pearl') score = 100;
+                else if (outName.startsWith('diamond_')) score = 95;
+                else if (outName.startsWith('iron_')) score = 85;
+                else if (outName === 'enchanted_book') score = 80;
+                else if (outName === 'golden_carrot' || outName === 'bread' || outName === 'cooked_porkchop') score = 75;
+                else if (outName === 'arrow' || outName === 'shield' || outName === 'bow') score = 70;
+                else if (outName === 'emerald') score = 60;
+
+                if (score > bestScore) {
+                    bestScore = score;
                     selectedTradeIndex = i;
-                    break;
                 }
             }
         }
 
         if (selectedTradeIndex === -1) {
-            villagerWindow.close();
+            if (typeof villagerWindow.close === 'function') villagerWindow.close();
             bot.chat("No compatible trades matching current inventory items.");
             return { success: false, reason: 'trade_prerequisites_missing' };
         }
 
-        await bot.trade(villager, selectedTradeIndex, count);
-        villagerWindow.close();
-        bot.chat(`Successfully traded with villager! 💎🌾`);
-        return { success: true, reason: 'traded_successfully' };
+        const chosenTrade = villagerWindow.trades[selectedTradeIndex];
+        const in1Count = chosenTrade.inputItem1.count || 1;
+        const maxAff1 = Math.floor(getInvCount(chosenTrade.inputItem1.name) / in1Count);
+        const maxAff2 = (chosenTrade.inputItem2 && chosenTrade.inputItem2.name)
+            ? Math.floor(getInvCount(chosenTrade.inputItem2.name) / (chosenTrade.inputItem2.count || 1))
+            : Infinity;
+        const remUses = (chosenTrade.maximumNbTradeUses != null && chosenTrade.nbTradeUses != null)
+            ? Math.max(1, chosenTrade.maximumNbTradeUses - chosenTrade.nbTradeUses)
+            : count;
+        const actualCount = Math.max(1, Math.min(count, maxAff1, maxAff2, remUses));
+
+        await bot.trade(villager, selectedTradeIndex, actualCount);
+        if (typeof villagerWindow.close === 'function') villagerWindow.close();
+        const outLabel = chosenTrade.outputItem ? `${(chosenTrade.outputItem.count || 1) * actualCount}x ${chosenTrade.outputItem.name}` : 'items';
+        bot.chat(`Successfully traded with villager for ${outLabel}! 💎🌾`);
+        return {
+            success: true,
+            reason: 'traded_successfully',
+            traded_output: chosenTrade.outputItem?.name || 'unknown',
+            count: actualCount
+        };
     } catch (tErr) {
         console.warn(`[VillagerTrade] Error: ${tErr.message}`);
         return { success: false, reason: tErr.message };
     }
+}
+
+// --- AUTONOMOUS GOLEM CONSTRUCTION ENGINE (IRON GOLEM & SNOW GOLEM) ---
+async function buildGolem(bot, golemType = 'iron_golem', count = 1) {
+    if (!bot || !bot.entity) return { success: false, reason: 'bot_not_ready' };
+
+    const rawType = (golemType || 'iron_golem').toLowerCase().trim();
+    let normalizedType = 'iron_golem';
+    if (rawType === 'snow' || rawType === 'snow_golem') {
+        normalizedType = 'snow_golem';
+    } else if (rawType === 'auto') {
+        const readiness = getBotState().survival_inventory?.golem_readiness;
+        if (readiness && !readiness.can_build_iron_golem && readiness.can_build_snow_golem) {
+            normalizedType = 'snow_golem';
+        }
+    }
+
+    const getInvCount = (name) => {
+        if (!bot.inventory || typeof bot.inventory.items !== 'function') return 0;
+        return bot.inventory.items().filter(i => i.name === name).reduce((s, i) => s + (i.count || 0), 0);
+    };
+    const findItem = (name) => {
+        if (!bot.inventory || typeof bot.inventory.items !== 'function') return null;
+        return bot.inventory.items().find(i => i.name === name) || null;
+    };
+
+    // 1. Ensure body blocks (4x iron_block for Iron Golem, 2x snow_block for Snow Golem)
+    if (normalizedType === 'iron_golem') {
+        let ironBlocks = getInvCount('iron_block');
+        if (ironBlocks < 4 * count) {
+            const needed = (4 * count) - ironBlocks;
+            if (getInvCount('iron_ingot') >= needed * 9) {
+                await smartCraft(bot, 'iron_block', needed);
+            }
+            ironBlocks = getInvCount('iron_block');
+        }
+        if (ironBlocks < 4) {
+            bot.chat(`Cannot build Iron Golem: need 4x iron_block (have ${ironBlocks}). 🛡️`);
+            return { success: false, reason: 'missing_iron_blocks' };
+        }
+    } else {
+        let snowBlocks = getInvCount('snow_block');
+        if (snowBlocks < 2 * count) {
+            const needed = (2 * count) - snowBlocks;
+            if (getInvCount('snowball') >= needed * 4) {
+                await smartCraft(bot, 'snow_block', needed);
+            }
+            snowBlocks = getInvCount('snow_block');
+        }
+        if (snowBlocks < 2) {
+            bot.chat(`Cannot build Snow Golem: need 2x snow_block (have ${snowBlocks}). ⛄`);
+            return { success: false, reason: 'missing_snow_blocks' };
+        }
+    }
+
+    // 2. Ensure carved_pumpkin / jack_o_lantern head (or carve a regular pumpkin with shears)
+    let headItem = findItem('carved_pumpkin') || findItem('jack_o_lantern');
+    if (!headItem) {
+        const regularPumpkin = findItem('pumpkin');
+        if (regularPumpkin) {
+            let shearsItem = findItem('shears');
+            if (!shearsItem && getInvCount('iron_ingot') >= 2) {
+                await smartCraft(bot, 'shears', 1);
+                shearsItem = findItem('shears');
+            }
+            if (shearsItem) {
+                try {
+                    let carveLoc = null;
+                    try { carveLoc = findPlacementLocation(bot); } catch (_) {}
+                    if (carveLoc) {
+                        await bot.equip(regularPumpkin, 'hand');
+                        await bot.placeBlock(carveLoc.referenceBlock, carveLoc.faceVector);
+                        const placedPumpkin = bot.blockAt(carveLoc.placedPos) || { position: carveLoc.placedPos, name: 'pumpkin' };
+                        await bot.equip(shearsItem, 'hand');
+                        if (typeof bot.activateBlock === 'function') {
+                            await bot.activateBlock(placedPumpkin);
+                        }
+                        await bot.dig(placedPumpkin);
+                    }
+                } catch (_) {}
+            }
+        }
+        headItem = findItem('carved_pumpkin') || findItem('jack_o_lantern');
+    }
+
+    if (!headItem) {
+        bot.chat("Cannot build Golem: need a Carved Pumpkin (or Pumpkin + Shears)! 🎃");
+        return { success: false, reason: 'missing_carved_pumpkin' };
+    }
+
+    // 3. Physical 3D Structure Placement (Head MUST be placed LAST)
+    let builtCount = 0;
+    for (let g = 0; g < count; g++) {
+        let loc = null;
+        try { loc = findPlacementLocation(bot); } catch (_) {}
+        if (!loc) {
+            const flooredPos = (typeof bot.entity.position.floored === 'function')
+                ? bot.entity.position.floored()
+                : new Vec3(Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z));
+            const fallbackGroundPos = flooredPos.offset(2, -1, 0);
+            const fallbackPlacePos = flooredPos.offset(2, 0, 0);
+            loc = {
+                referenceBlock: (typeof bot.blockAt === 'function' && bot.blockAt(fallbackGroundPos)) || { position: fallbackGroundPos, name: 'stone' },
+                faceVector: new Vec3(0, 1, 0),
+                placedPos: fallbackPlacePos
+            };
+        }
+
+        const basePos = loc.placedPos;
+        const pos1 = basePos.offset(0, 1, 0);
+        const refAt = (pos) => (typeof bot.blockAt === 'function' && bot.blockAt(pos)) || { position: pos, name: 'placed_block' };
+
+        try {
+            if (normalizedType === 'snow_golem') {
+                const snowItem = findItem('snow_block');
+                const currentHead = findItem('carved_pumpkin') || findItem('jack_o_lantern');
+                if (!snowItem || !currentHead) break;
+
+                await bot.equip(snowItem, 'hand');
+                await bot.placeBlock(loc.referenceBlock, new Vec3(0, 1, 0));
+                await bot.placeBlock(refAt(basePos), new Vec3(0, 1, 0));
+
+                await bot.equip(currentHead, 'hand');
+                await bot.placeBlock(refAt(pos1), new Vec3(0, 1, 0));
+                builtCount++;
+                bot.chat("⛄ Constructed Snow Golem guardian! 🎃❄️");
+            } else {
+                const ironBlockItem = findItem('iron_block');
+                const currentHead = findItem('carved_pumpkin') || findItem('jack_o_lantern');
+                if (!ironBlockItem || !currentHead) break;
+
+                await bot.equip(ironBlockItem, 'hand');
+                // Lower trunk at basePos
+                await bot.placeBlock(loc.referenceBlock, new Vec3(0, 1, 0));
+                // Upper center trunk at pos1 (Y+1)
+                await bot.placeBlock(refAt(basePos), new Vec3(0, 1, 0));
+                // Left arm (-X) and Right arm (+X) attached to upper center trunk
+                await bot.placeBlock(refAt(pos1), new Vec3(-1, 0, 0));
+                await bot.placeBlock(refAt(pos1), new Vec3(1, 0, 0));
+
+                // Carved pumpkin head placed LAST on top of pos1 (Y+2)
+                await bot.equip(currentHead, 'hand');
+                await bot.placeBlock(refAt(pos1), new Vec3(0, 1, 0));
+                builtCount++;
+                bot.chat("🛡️ Constructed Iron Golem bodyguard! 🎃⚙️");
+            }
+        } catch (gErr) {
+            console.warn(`[BuildGolem] Placement error: ${gErr.message}`);
+            return { success: false, reason: `golem_placement_error: ${gErr.message}` };
+        }
+    }
+
+    if (builtCount === 0) {
+        return { success: false, reason: 'golem_placement_failed' };
+    }
+    return {
+        success: true,
+        reason: 'golem_built',
+        golem_type: normalizedType,
+        count: builtCount
+    };
 }
 
 // --- BREWING STAND POTION CRAFTING ENGINE (F2) ---
@@ -4242,7 +4826,7 @@ async function handleAction(action) {
         return;
     }
 
-    if (['craft_item', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest', 'barter_with_piglins', 'hunt_hoglin', 'setup_respawn_anchor', 'explore_end_city', 'eat_chorus_fruit', 'eat', 'eat_food'].includes(command)) {
+    if (['craft_item', 'craft_tool_set', 'collect_block', 'hunt_food', 'smelt_item', 'place_block', 'go_to_coordinates', 'build_nether_portal', 'throw_eye_of_ender', 'activate_end_portal', 'destroy_end_crystals', 'fight_ender_dragon', 'enter_exit_portal', 'farm_crops', 'build_shelter', 'break_out_shelter', 'enchant_gear', 'build_nether_outpost', 'bridge_chasm', 'trade_with_villager', 'build_golem', 'brew_potion', 'repair_gear_anvil', 'breed_animals', 'catch_fish', 'manage_chest', 'barter_with_piglins', 'hunt_hoglin', 'setup_respawn_anchor', 'explore_end_city', 'eat_chorus_fruit', 'eat', 'eat_food'].includes(command)) {
         isBusy = true;
         currentActionName = `${command}_${args.item_name || args.block_name || args.input_item || args.tactic || args.action_type || args.mode || args.gear_type || ''}`;
         sendToPython({
@@ -4308,10 +4892,10 @@ async function handleAction(action) {
                         if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
                     }
                 }
-                // 3. Universal Iron Ore Variants
+                // 3. Universal Iron Ore & Raw Vein Variants
                 else if (rawName.includes('iron')) {
                     categoryLabel = 'iron ore';
-                    for (const name of ['iron_ore', 'deepslate_iron_ore']) {
+                    for (const name of ['iron_ore', 'deepslate_iron_ore', 'raw_iron_block']) {
                         if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
                     }
                 }
@@ -4329,7 +4913,75 @@ async function handleAction(action) {
                         if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
                     }
                 }
-                // 6. Direct Specific Block Match
+                // 6. Universal Emerald Ore Variants
+                else if (rawName.includes('emerald')) {
+                    categoryLabel = 'emerald ore';
+                    for (const name of ['emerald_ore', 'deepslate_emerald_ore']) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 7. Universal Gold Ore Variants (Overworld + Nether + Raw Block)
+                else if (rawName.includes('gold')) {
+                    categoryLabel = 'gold ore';
+                    for (const name of ['gold_ore', 'deepslate_gold_ore', 'nether_gold_ore', 'gilded_blackstone', 'raw_gold_block']) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 8. Universal Copper Ore Variants
+                else if (rawName.includes('copper')) {
+                    categoryLabel = 'copper ore';
+                    for (const name of ['copper_ore', 'deepslate_copper_ore', 'raw_copper_block']) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 9. Universal Lapis Lazuli Ore Variants
+                else if (rawName.includes('lapis')) {
+                    categoryLabel = 'lapis ore';
+                    for (const name of ['lapis_ore', 'deepslate_lapis_ore']) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 10. Universal Redstone Ore Variants
+                else if (rawName.includes('redstone')) {
+                    categoryLabel = 'redstone ore';
+                    for (const name of ['redstone_ore', 'deepslate_redstone_ore']) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 11. Universal Nether Quartz Ore
+                else if (rawName.includes('quartz')) {
+                    categoryLabel = 'nether quartz ore';
+                    for (const name of ['nether_quartz_ore']) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 12. Universal Amethyst Crystal / Geode Blocks
+                else if (rawName.includes('amethyst')) {
+                    categoryLabel = 'amethyst crystal';
+                    for (const name of ['amethyst_cluster', 'budding_amethyst', 'amethyst_block']) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 13. Universal Ancient Debris / Netherite
+                else if (rawName.includes('ancient_debris') || rawName.includes('netherite')) {
+                    categoryLabel = 'ancient debris';
+                    if (mcData.blocksByName['ancient_debris']) matchingIds.push(mcData.blocksByName['ancient_debris'].id);
+                }
+                // 14. Any Special / Precious Ore Category
+                else if (rawName === 'special_ore' || rawName === 'precious_ore' || rawName === 'all_ores') {
+                    categoryLabel = 'special ores';
+                    for (const name of ORE_INTEREST_NAMES) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 15. Universal Pumpkin Variants (for Golem & Trading)
+                else if (rawName === 'pumpkin' || rawName === 'pumpkins') {
+                    categoryLabel = 'pumpkin';
+                    for (const name of ['pumpkin', 'carved_pumpkin']) {
+                        if (mcData.blocksByName[name]) matchingIds.push(mcData.blocksByName[name].id);
+                    }
+                }
+                // 16. Direct Specific Block Match
                 else {
                     const blockType = mcData.blocksByName[rawName];
                     if (blockType) matchingIds.push(blockType.id);
@@ -4360,7 +5012,11 @@ async function handleAction(action) {
                     }
                 }
 
-                let targets = bot.findBlocks({ matching: matchingIds, maxDistance: 48, count: count });
+                const isWoodSearch = (categoryLabel === 'wood/trees');
+                const searchMaxDist = isWoodSearch ? 64 : 48;
+                const rawCandidateCount = isWoodSearch ? Math.max(count * 8, 24) : Math.max(count * 3, 8);
+                let rawTargets = bot.findBlocks({ matching: matchingIds, maxDistance: searchMaxDist, count: rawCandidateCount });
+                let targets = filterReachableMiningTargets(bot, rawTargets, count, isWoodSearch);
 
                 if (targets.length === 0 && args.target_x !== undefined && args.target_y !== undefined && args.target_z !== undefined) {
                     const directVec = new Vec3(Number(args.target_x), Number(args.target_y), Number(args.target_z));
@@ -4373,13 +5029,16 @@ async function handleAction(action) {
                 if (targets.length === 0) {
                     let optimalY = bot.entity.position.y;
                     if (rawName.includes('diamond')) optimalY = -58;
+                    else if (rawName.includes('emerald')) optimalY = 16;
                     else if (rawName.includes('iron')) optimalY = 16;
                     else if (rawName.includes('gold')) optimalY = -16;
                     else if (rawName.includes('redstone')) optimalY = -58;
                     else if (rawName.includes('lapis')) optimalY = 0;
                     else if (rawName.includes('copper')) optimalY = 48;
                     else if (rawName.includes('coal')) optimalY = 95;
-                    else if (rawName.includes('ancient_debris')) optimalY = 15;
+                    else if (rawName.includes('quartz')) optimalY = 60;
+                    else if (rawName.includes('amethyst')) optimalY = -20;
+                    else if (rawName.includes('ancient_debris') || rawName.includes('netherite')) optimalY = 15;
 
                     if (Math.abs(bot.entity.position.y - optimalY) > 8) {
                         bot.chat(`No ${categoryLabel} at current elevation (Y: ${Math.round(bot.entity.position.y)}). Navigating towards optimal depth Y: ${optimalY}! ⛏️`);
@@ -4437,6 +5096,11 @@ async function handleAction(action) {
 
                     try {
                         await Promise.race([bot.collectBlock.collect(blocks), timeoutPromise]);
+                    } catch (collectErr) {
+                        for (const b of blocks) {
+                            if (b && b.position) markBlockUnreachable(b.position);
+                        }
+                        throw collectErr;
                     } finally {
                         clearTimeout(timeoutId);
                     }
@@ -5024,6 +5688,28 @@ async function handleAction(action) {
                 break;
             }
 
+            case 'build_golem': {
+                isBusy = true;
+                currentActionName = 'building_golem';
+                const golemType = args.golem_type || args.type || 'iron_golem';
+                const count = parseInt(args.count || 1, 10);
+                const res = await buildGolem(bot, golemType, count);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
+            case 'craft_tool_set': {
+                isBusy = true;
+                currentActionName = 'crafting_tool_set';
+                const preferredTier = args.tier || args.preferred_tier || 'auto';
+                const includeUtility = args.include_utility !== false;
+                const res = await craftFullToolSet(bot, preferredTier, includeUtility);
+                actionSuccess = res.success;
+                if (!res.success) actionError = res.reason;
+                break;
+            }
+
             case 'brew_potion': {
                 isBusy = true;
                 currentActionName = 'brewing_potion';
@@ -5162,6 +5848,64 @@ async function handleAction(action) {
     }
 }
 
+// F1-5 / GP-2: Unreachable Block Blacklist & Reachable Trunk Filter for Wood/Trees
+const unreachableBlockBlacklist = new Map(); // "x,y,z" -> timestampMs
+const UNREACHABLE_BLACKLIST_TTL_MS = 120000; // 2 minutes TTL
+
+function getBlockPosKey(pos) {
+    if (!pos) return '';
+    return `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
+}
+
+function markBlockUnreachable(pos, nowMs = Date.now()) {
+    const key = getBlockPosKey(pos);
+    if (key) unreachableBlockBlacklist.set(key, nowMs);
+}
+
+function isBlockBlacklisted(pos, nowMs = Date.now()) {
+    const key = getBlockPosKey(pos);
+    if (!key || !unreachableBlockBlacklist.has(key)) return false;
+    const ts = unreachableBlockBlacklist.get(key);
+    if (nowMs - ts > UNREACHABLE_BLACKLIST_TTL_MS) {
+        unreachableBlockBlacklist.delete(key);
+        return false;
+    }
+    return true;
+}
+
+function clearUnreachableBlockBlacklist() {
+    unreachableBlockBlacklist.clear();
+}
+
+/**
+ * Filters raw findBlocks coordinates by removing blacklisted blocks and, for wood/tree targets,
+ * prioritizing lower reachable trunk logs (|dy| <= 4 from bot Y) that are not completely encased.
+ */
+function filterReachableMiningTargets(botInstance, rawPositions, desiredCount = 1, isWoodSearch = false, nowMs = Date.now()) {
+    if (!Array.isArray(rawPositions) || rawPositions.length === 0) return [];
+    const botPos = (botInstance && botInstance.entity && botInstance.entity.position)
+        ? botInstance.entity.position
+        : { x: 0, y: 64, z: 0 };
+
+    const nonBlacklisted = rawPositions.filter(p => !isBlockBlacklisted(p, nowMs));
+    if (nonBlacklisted.length === 0) return [];
+
+    if (!isWoodSearch) {
+        return nonBlacklisted.slice(0, desiredCount);
+    }
+
+    // Score wood/log blocks: strongly prefer trunk blocks near bot's Y level (dy between -2 and +4)
+    const scored = nonBlacklisted.map(p => {
+        const dy = p.y - botPos.y;
+        const horizDist = Math.hypot(p.x - botPos.x, p.z - botPos.z);
+        const verticalPenalty = (dy > 4) ? (dy - 4) * 12 : (dy < -3 ? Math.abs(dy + 3) * 8 : 0);
+        return { pos: p, score: horizDist + verticalPenalty, dy };
+    });
+
+    scored.sort((a, b) => a.score - b.score);
+    return scored.slice(0, desiredCount).map(s => s.pos);
+}
+
 // Startup & Initialization (only run directly, allow unit testing via require)
 if (require.main === module) {
     connectBridge();
@@ -5184,5 +5928,16 @@ module.exports = {
     formatDisconnectReason,
     farmCrops,
     autoEatCheck,
-    getBotState
+    getBotState,
+    buildGolem,
+    tradeWithVillager,
+    craftFullToolSet,
+    tickResourceScanner,
+    SPECIAL_ORE_CATEGORIES,
+    ORE_INTEREST_NAMES,
+    RESOURCE_CATEGORIES,
+    markBlockUnreachable,
+    isBlockBlacklisted,
+    clearUnreachableBlockBlacklist,
+    filterReachableMiningTargets
 };

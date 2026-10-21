@@ -225,7 +225,11 @@ You can talk to the bot normally in chat or use **instant shortcut commands** (0
 | `!bridge [distance]` | Crouch-bridges safely across chasms, lava, or End void without falling |
 | `!follow` / `!come` | Follows the owner |
 | `!guard` | Defends the owner against hostile mobs |
-| `!status` | Reports current HP, hunger, coordinates, and inventory |
+| `!golem [iron\|snow] [count]` | Constructs Iron Golems or Snow Golems (auto-crafts blocks & carves pumpkins) |
+| `!trade [item] [count]` | Trades with villagers within 32m (auto-prepares wheat/sticks & validates dual inputs) |
+| `!tools [tier]` | Crafts or upgrades the full survival tool base (`pickaxe`, `axe`, `sword`, `shovel`, `hoe` + utilities) |
+| `!scan` / `!ores` / `!radar` | Scans 32m radius and reports special ores & total visible resource categories |
+| `!inv` / `!status` | Reports expanded survival inventory slots, tool base %, emeralds, and golem readiness |
 | `!tasks` / `!queue` | Lists active task and pending SQLite queue length |
 | `!clear` | Cancels all active and queued tasks |
 | `!gpu` | Displays RTX 3060 VRAM, GPU utilization, and model acceleration |
