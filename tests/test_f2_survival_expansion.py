@@ -169,6 +169,55 @@ class TestF2SurvivalExpansion(unittest.TestCase):
         bot._update_last_known_state(state)
         self.assertEqual(bot.db.save_ore.call_count, 1)
 
+    def test_gp5_special_ore_navigation_from_sqlite_ore_map(self):
+        """Verify GP-5 directs bot to recorded special ore (emerald/gold/lapis/ancient_debris) in SQLite ore_map."""
+        db_mock = MagicMock()
+        db_mock.get_unmined_ores.return_value = [
+            {"block": "deepslate_emerald_ore", "x": 42, "y": 14, "z": -18, "distance": 11.0}
+        ]
+        brain = AutonomousCoopBrain(ollama_brain=None, bot_owner="Omer", db=db_mock)
+        state = {"dimension": "overworld", "position": {"x": 35, "y": 16, "z": -15}, "inventory": []}
+        reason, tool_call = brain.get_milestone_action({"target": "emerald", "stage": "VILLAGE_TRADE"}, state)
+        self.assertEqual(tool_call["name"], "collect_block")
+        self.assertEqual(tool_call["arguments"]["block_name"], "deepslate_emerald_ore")
+        self.assertEqual(tool_call["arguments"]["target_x"], 42)
+        self.assertEqual(tool_call["arguments"]["target_y"], 14)
+        self.assertEqual(tool_call["arguments"]["target_z"], -18)
+
+    def test_gp7_live_path_golem_failure_triggers_single_count_and_category_shift(self):
+        """Verify GP-7 live callback path: 3 consecutive build_golem failures with unique action_ids trigger category shift and deduplicate duplicate action_ids."""
+        from main import MinecraftAIBot
+        bot = MinecraftAIBot.__new__(MinecraftAIBot)
+        bot.db = MagicMock()
+        bot.db.get_pending_tasks.return_value = []
+        bot.db.get_unrecovered_death_point.return_value = None
+        bot.chat_handler = MagicMock()
+        bot.bridge = MagicMock()
+        bot.bridge.send_action = AsyncMock()
+        bot.bridge._last_action_args = {}
+        bot.planner = AutonomousCoopBrain(ollama_brain=None, bot_owner="Omer", db=bot.db)
+        bot.active_player_task = None
+        bot.last_known_inventory = []
+        bot.last_known_position = {"x": 0, "y": 64, "z": 0}
+        bot.last_known_dimension = "overworld"
+        bot._loop_wakeup = asyncio.Event()
+
+        state = {"health": 20, "food": 20, "position": {"x": 0, "y": 64, "z": 0}, "dimension": "overworld"}
+        golem_args = {"golem_type": "iron_golem", "count": 1}
+
+        # Failure 1 (plus duplicate callback with same action_id 'act-g1' must only count once!)
+        asyncio.run(bot.on_action_completed("build_golem", False, "missing_iron_blocks_for_iron_golem", state, args=golem_args, action_id="act-g1"))
+        asyncio.run(bot.on_action_completed("build_golem", False, "missing_iron_blocks_for_iron_golem", state, args=golem_args, action_id="act-g1"))
+        self.assertEqual(bot.planner._consecutive_same_fallback_count, 1)
+
+        # Failure 2
+        asyncio.run(bot.on_action_completed("build_golem", False, "missing_iron_blocks_for_iron_golem", state, args=golem_args, action_id="act-g2"))
+        self.assertEqual(bot.planner._consecutive_same_fallback_count, 2)
+
+        # Failure 3 -> triggers category shift!
+        asyncio.run(bot.on_action_completed("build_golem", False, "missing_iron_blocks_for_iron_golem", state, args=golem_args, action_id="act-g3"))
+        self.assertIsNotNone(bot.planner._pending_category_shift_action)
+
 
 if __name__ == "__main__":
     unittest.main()

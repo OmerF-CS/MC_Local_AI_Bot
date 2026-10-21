@@ -123,25 +123,33 @@ function analyzeBlockHarvest(botVersion, blockName) {
     };
 }
 
+function getToolRemainingUses(item) {
+    if (!item || !item.maxDurability) return Infinity;
+    return Math.max(0, item.maxDurability - (item.durabilityUsed || 0));
+}
+
 function getBestToolInInventory(bot, validToolNames = null, preferredCategory = null) {
     if (!bot || !bot.inventory) return null;
 
     const items = bot.inventory.items();
     let bestItem = null;
-    let highestTier = -1;
+    let highestScore = -1;
 
     for (const item of items) {
         const name = item.name;
         const tier = TOOL_TIERS[name] || 0;
+        const remUses = getToolRemainingUses(item);
+        // GP-6: Deprioritize tools about to shatter (<= 3 uses left) when a healthy tool is available
+        const score = (remUses <= 3) ? (tier * 0.1) : tier;
 
         if (validToolNames && validToolNames.length > 0) {
-            if (validToolNames.includes(name) && tier > highestTier) {
-                highestTier = tier;
+            if (validToolNames.includes(name) && score > highestScore) {
+                highestScore = score;
                 bestItem = item;
             }
         } else if (preferredCategory) {
-            if (name.includes(preferredCategory) && tier > highestTier) {
-                highestTier = tier;
+            if (name.includes(preferredCategory) && score > highestScore) {
+                highestScore = score;
                 bestItem = item;
             }
         }
@@ -180,6 +188,7 @@ function getFullToolBaseStatus(bot) {
         },
         missing_core_tools: [...CORE_TOOL_CATEGORIES],
         missing_utility_tools: ['shield', 'water_bucket', 'shears', 'flint_and_steel'],
+        critically_damaged_tools: [],
         completeness_pct: 0
     };
     if (!bot || !bot.inventory || typeof bot.inventory.items !== 'function') return emptyStatus;
@@ -187,6 +196,17 @@ function getFullToolBaseStatus(bot) {
     const items = bot.inventory.items();
     const offhandItem = (bot.inventory.slots && bot.inventory.slots[45]) ? bot.inventory.slots[45] : null;
     const allItems = offhandItem ? [...items, offhandItem] : items;
+
+    const criticallyDamaged = [];
+    for (const item of allItems) {
+        if (item && item.maxDurability) {
+            const rem = getToolRemainingUses(item);
+            const pct = Math.round((rem / item.maxDurability) * 100);
+            if (rem <= 10 || pct <= 10) {
+                criticallyDamaged.push({ name: item.name, remaining_uses: rem, durability_pct: pct });
+            }
+        }
+    }
 
     const coreTools = {};
     for (const cat of CORE_TOOL_CATEGORIES) {
@@ -242,6 +262,7 @@ function getFullToolBaseStatus(bot) {
         utility_tools: utilityTools,
         missing_core_tools: missingCore,
         missing_utility_tools: missingUtil,
+        critically_damaged_tools: criticallyDamaged,
         completeness_pct: Math.round((presentCount / totalTargets) * 100)
     };
 }

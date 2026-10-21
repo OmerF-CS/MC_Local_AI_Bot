@@ -916,6 +916,24 @@ asyncio.run(check())
             assert.strictEqual(selected[0].y, 65);
             botModule.clearUnreachableBlockBlacklist();
         });
+
+        await runTest("GP-6: getBestToolInInventory avoids shattering a 2-use diamond pickaxe when a healthy iron pickaxe exists, and getFullToolBaseStatus reports critically_damaged_tools", () => {
+            const mockBot = {
+                inventory: {
+                    items: () => [
+                        { name: 'diamond_pickaxe', count: 1, maxDurability: 1561, durabilityUsed: 1559 }, // 2 uses left!
+                        { name: 'iron_pickaxe', count: 1, maxDurability: 250, durabilityUsed: 20 }        // 230 uses left
+                    ],
+                    slots: {}
+                }
+            };
+            const chosen = toolLearner.getBestToolInInventory(mockBot, ['iron_pickaxe', 'diamond_pickaxe']);
+            assert.strictEqual(chosen.name, 'iron_pickaxe', "Should pick healthy iron_pickaxe over 2-use diamond_pickaxe");
+            const status = toolLearner.getFullToolBaseStatus(mockBot);
+            assert.strictEqual(status.critically_damaged_tools.length, 1);
+            assert.strictEqual(status.critically_damaged_tools[0].name, 'diamond_pickaxe');
+            assert.strictEqual(status.critically_damaged_tools[0].remaining_uses, 2);
+        });
     }
 
     console.log("\n=================================================");

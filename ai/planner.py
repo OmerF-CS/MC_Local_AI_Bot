@@ -1130,24 +1130,17 @@ class AutonomousCoopBrain:
             elif inv.get("glistering_melon_slice", 0) > 0:
                 return "Brew Healing potion using brewing stand", {"name": "brew_potion", "arguments": {"ingredient": "glistering_melon_slice"}}
 
+        # GP-5: Universal Special Ore Navigation from SQLite ore_map when target is a special ore
+        if target in ("emerald", "gold", "lapis", "redstone", "copper", "quartz", "amethyst", "ancient_debris"):
+            nav_act = self.get_recorded_ore_navigation_action(target, 3, dim, pos)
+            if nav_act:
+                return nav_act
+
         if target == "iron_pickaxe":
             if raw_iron < 3 and iron_ingots < 3:
-                # F2.4: Query SQLite ore_map for recorded unmined iron veins!
-                if self.db:
-                    unmined = self.db.get_unmined_ores(dim=dim, block_type="iron", x=pos.get("x", 0), y=pos.get("y", 0), z=pos.get("z", 0), max_dist=256.0)
-                    if unmined:
-                        closest = unmined[0]
-                        logger.info(f"💎 [Ore Map Navigator] Directing bot to known unmined {closest['block']} at ({closest['x']}, {closest['y']}, {closest['z']})!")
-                        return f"Navigate to known {closest['block']} deposit from ore map", {
-                            "name": "collect_block",
-                            "arguments": {
-                                "block_name": closest["block"],
-                                "count": 3,
-                                "target_x": closest["x"],
-                                "target_y": closest["y"],
-                                "target_z": closest["z"]
-                            }
-                        }
+                nav_act = self.get_recorded_ore_navigation_action("iron", 3, dim, pos)
+                if nav_act:
+                    return nav_act
                 return "Mine 3 iron ore (iron missing)", {"name": "collect_block", "arguments": {"block_name": "iron", "count": 3, "optimal_y": 16}}
             if raw_iron >= 3 and iron_ingots < 3:
                 return "Smelt 3 raw iron into ingots", {
@@ -1159,22 +1152,9 @@ class AutonomousCoopBrain:
         diamonds = inv.get("diamond", 0)
         if target == "diamond_pickaxe":
             if diamonds < 3:
-                # F2.4: Query SQLite ore_map for recorded unmined diamond veins!
-                if self.db:
-                    unmined = self.db.get_unmined_ores(dim=dim, block_type="diamond", x=pos.get("x", 0), y=pos.get("y", 0), z=pos.get("z", 0), max_dist=256.0)
-                    if unmined:
-                        closest = unmined[0]
-                        logger.info(f"💎 [Ore Map Navigator] Directing bot to known unmined {closest['block']} at ({closest['x']}, {closest['y']}, {closest['z']})!")
-                        return f"Navigate to known {closest['block']} deposit from ore map", {
-                            "name": "collect_block",
-                            "arguments": {
-                                "block_name": closest["block"],
-                                "count": 3,
-                                "target_x": closest["x"],
-                                "target_y": closest["y"],
-                                "target_z": closest["z"]
-                            }
-                        }
+                nav_act = self.get_recorded_ore_navigation_action("diamond", 3, dim, pos)
+                if nav_act:
+                    return nav_act
                 return "Mine 3 diamonds (diamonds missing)", {"name": "collect_block", "arguments": {"block_name": "diamond", "count": 3, "optimal_y": -58}}
             return "Craft diamond pickaxe (materials ready)", {"name": "craft_item", "arguments": {"item_name": "diamond_pickaxe", "count": 1}}
 
@@ -1317,3 +1297,41 @@ class AutonomousCoopBrain:
             if found_ores:
                 parts.append(f"SpecialOres:{','.join(found_ores[:4])}")
         return f"[Survival: {' | '.join(parts)}]" if parts else ""
+
+    def get_recorded_ore_navigation_action(
+        self,
+        ore_category: str,
+        count: int,
+        dim: str = "overworld",
+        pos: Optional[Dict[str, Any]] = None,
+        max_dist: float = 256.0
+    ) -> Optional[tuple[str, Dict[str, Any]]]:
+        """GP-5: Queries SQLite ore_map for any unmined ore matching ore_category and builds a coordinate-guided collect_block action."""
+        if not self.db:
+            return None
+        p = pos if isinstance(pos, dict) else {"x": 0, "y": 64, "z": 0}
+        unmined = self.db.get_unmined_ores(
+            dim=dim,
+            block_type=ore_category,
+            x=p.get("x", 0),
+            y=p.get("y", 64),
+            z=p.get("z", 0),
+            max_dist=max_dist
+        )
+        if not unmined:
+            return None
+        closest = unmined[0]
+        logger.info(
+            f"💎 [Ore Map Navigator] Directing bot to known unmined {closest['block']} "
+            f"at ({closest['x']}, {closest['y']}, {closest['z']})!"
+        )
+        return f"Navigate to known {closest['block']} deposit from ore map", {
+            "name": "collect_block",
+            "arguments": {
+                "block_name": closest["block"],
+                "count": count,
+                "target_x": closest["x"],
+                "target_y": closest["y"],
+                "target_z": closest["z"]
+            }
+        }
