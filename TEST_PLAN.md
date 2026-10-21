@@ -88,7 +88,7 @@ If Java 21 is not globally in `PATH`, the test suite automatically probes known 
 
 ```powershell
 # Clone and enter workspace
-cd "c:\Users\omerf\OneDrive\Desktop\Projeler tümü\education_app\Kick_asistan"
+cd "c:\Users\omerf\OneDrive\Desktop\Projeler tümü\education_app\local ai mc"
 
 # Install Python packages
 pip install -r requirements.txt
