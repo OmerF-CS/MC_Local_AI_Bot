@@ -62,6 +62,7 @@ class AutonomousCoopBrain:
 
         self.checkpoint_stage = None
         self.checkpoint_target = None
+        self._pending_speculative_commits = []
 
         # Affordance, Exploration, History and Cooldown Engines (Phase 2)
         self.affordance_engine = AffordanceEngine()
@@ -116,6 +117,28 @@ class AutonomousCoopBrain:
         elif isinstance(style, str):
             self.player_style = PlayerStyle.from_str(style)
         logger.info(f"🎭 [Player Style Set] Changed persona style to: {self.player_style.value}")
+
+    def record_pending_commit(self, callback) -> None:
+        """Enqueues a state mutation callback to be executed upon speculative confirmation."""
+        self._pending_speculative_commits.append(callback)
+
+    def commit_speculative_state(self) -> None:
+        """Applies all pending speculative state mutations and clears the queue."""
+        if not self._pending_speculative_commits:
+            return
+        logger.debug(f"💾 [Commit Speculative State] Applying {len(self._pending_speculative_commits)} pending mutations.")
+        for cb in self._pending_speculative_commits:
+            try:
+                cb()
+            except Exception as e:
+                logger.error(f"Error executing pending speculative commit: {e}")
+        self._pending_speculative_commits.clear()
+
+    def discard_speculative_state(self) -> None:
+        """Discards all pending speculative state mutations without applying them."""
+        if self._pending_speculative_commits:
+            logger.debug(f"🗑️ [Discard Speculative State] Discarding {len(self._pending_speculative_commits)} pending mutations.")
+            self._pending_speculative_commits.clear()
 
     def start_macro_plan(
         self,
@@ -721,10 +744,13 @@ class AutonomousCoopBrain:
 
         return None
 
-    async def decide_next_action(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def decide_next_action(self, state: Dict[str, Any], is_speculative: bool = False) -> Optional[Dict[str, Any]]:
         """Evaluates world state, partner directives, and tech tree to execute optimal tool calls."""
         if not state:
             return None
+
+        if not is_speculative:
+            self.discard_speculative_state()
 
         if state.get("is_busy", False):
             logger.debug("⏳ Bot is currently busy executing an action. Skipping decision cycle.")
@@ -782,22 +808,34 @@ class AutonomousCoopBrain:
                 cur.execute("SELECT dim, x, y, z FROM beds ORDER BY id ASC LIMIT 1")
                 bed_row = cur.fetchone()
                 if bed_row:
-                    self.home_base_manager.register_home_base(
-                        {"x": bed_row["x"], "y": bed_row["y"], "z": bed_row["z"]},
-                        dim=bed_row["dim"] or "overworld",
-                        source="bed_spawn"
-                    )
-                    logger.info(f"🏡 [Home Base Auto-Registered] Anchored home_base at bed ({bed_row['x']}, {bed_row['y']}, {bed_row['z']})")
+                    bx, by, bz, bdim = bed_row["x"], bed_row["y"], bed_row["z"], bed_row["dim"] or "overworld"
+                    if is_speculative:
+                        self.record_pending_commit(lambda: self.home_base_manager.register_home_base(
+                            {"x": bx, "y": by, "z": bz}, dim=bdim, source="bed_spawn"
+                        ))
+                    else:
+                        self.home_base_manager.register_home_base(
+                            {"x": bx, "y": by, "z": bz},
+                            dim=bdim,
+                            source="bed_spawn"
+                        )
+                        logger.info(f"🏡 [Home Base Auto-Registered] Anchored home_base at bed ({bx}, {by}, {bz})")
                 else:
                     cur.execute("SELECT dim, x, y, z FROM chests ORDER BY id ASC LIMIT 1")
                     chest_row = cur.fetchone()
                     if chest_row:
-                        self.home_base_manager.register_home_base(
-                            {"x": chest_row["x"], "y": chest_row["y"], "z": chest_row["z"]},
-                            dim=chest_row["dim"] or "overworld",
-                            source="chest_storage"
-                        )
-                        logger.info(f"🏡 [Home Base Auto-Registered] Anchored home_base at chest ({chest_row['x']}, {chest_row['y']}, {chest_row['z']})")
+                        cx, cy, cz, cdim = chest_row["x"], chest_row["y"], chest_row["z"], chest_row["dim"] or "overworld"
+                        if is_speculative:
+                            self.record_pending_commit(lambda: self.home_base_manager.register_home_base(
+                                {"x": cx, "y": cy, "z": cz}, dim=cdim, source="chest_storage"
+                            ))
+                        else:
+                            self.home_base_manager.register_home_base(
+                                {"x": cx, "y": cy, "z": cz},
+                                dim=cdim,
+                                source="chest_storage"
+                            )
+                            logger.info(f"🏡 [Home Base Auto-Registered] Anchored home_base at chest ({cx}, {cy}, {cz})")
             except Exception as e:
                 logger.debug(f"Home base auto-registration check notice: {e}")
 
@@ -856,14 +894,30 @@ class AutonomousCoopBrain:
             # Monotonic advancement or first startup
             goal = inv_goal
             if inv_rank > cp_rank or self.checkpoint_stage is None:
-                self.checkpoint_stage = goal["stage"]
-                self.checkpoint_target = goal["target"]
-                if self.db and goal["target"] != self.last_goal_target:
-                    self.last_goal_target = goal["target"]
-                    logger.info(f"🏆 [Milestone Advanced] Era: {goal['stage']} -> Target: {goal['target']}")
-                    self.db.save_progression(goal["stage"], goal["target"], inv_dict)
+                new_stage = goal["stage"]
+                new_target = goal["target"]
+                if is_speculative:
+                    def _commit_progression():
+                        self.checkpoint_stage = new_stage
+                        self.checkpoint_target = new_target
+                        if self.db and new_target != self.last_goal_target:
+                            self.last_goal_target = new_target
+                            logger.info(f"🏆 [Milestone Advanced] Era: {new_stage} -> Target: {new_target}")
+                            self.db.save_progression(new_stage, new_target, inv_dict)
+                    self.record_pending_commit(_commit_progression)
+                else:
+                    self.checkpoint_stage = new_stage
+                    self.checkpoint_target = new_target
+                    if self.db and new_target != self.last_goal_target:
+                        self.last_goal_target = new_target
+                        logger.info(f"🏆 [Milestone Advanced] Era: {new_stage} -> Target: {new_target}")
+                        self.db.save_progression(new_stage, new_target, inv_dict)
             else:
-                self.last_goal_target = goal["target"]
+                if is_speculative:
+                    curr_target = goal["target"]
+                    self.record_pending_commit(lambda: setattr(self, "last_goal_target", curr_target))
+                else:
+                    self.last_goal_target = goal["target"]
             substep_hint, milestone_action = self.get_milestone_action(goal, inv_dict, state)
 
         missing_ingredients = resolve_missing_ingredients(goal["target"], inv_dict)
@@ -877,7 +931,8 @@ class AutonomousCoopBrain:
         health = state.get("health", 20)
         last_hp = getattr(self, "last_known_health", None)
         health_dropped = (last_hp is not None and (last_hp - health) > 1.5)
-        self.last_known_health = health
+        if not is_speculative:
+            self.last_known_health = health
 
         # Macro Plan Execution Check
         if self.active_macro_plan and not self.active_macro_plan.is_completed():
@@ -889,29 +944,69 @@ class AutonomousCoopBrain:
             high_urgency = (current_scenario is not None and current_scenario.urgency >= 8)
 
             if health_dropped or hostile_near or high_urgency:
-                logger.warning(
-                    f"⚠️ [Macro Plan Interrupted] Aborting plan for {self.active_macro_plan.target_item} "
-                    f"(health_dropped={health_dropped}, hostile_near={hostile_near}, high_urgency={high_urgency})."
-                )
-                self.active_macro_plan = None
-            else:
-                # Advance satisfied steps
-                while self.active_macro_plan.get_current_step() and self.active_macro_plan.get_current_step().is_satisfied(inv_dict):
-                    sat_step = self.active_macro_plan.get_current_step()
-                    logger.info(f"✅ [Macro Step Satisfied] '{sat_step.description}' achieved. Advancing...")
-                    self.active_macro_plan.advance_step()
-
-                if self.active_macro_plan.is_completed():
-                    logger.info(f"🏆 [Macro Plan Complete] Achieved {self.active_macro_plan.target_item}!")
-                    self.active_macro_plan = None
+                if is_speculative:
+                    def _commit_plan_abort():
+                        if self.active_macro_plan:
+                            logger.warning(
+                                f"⚠️ [Macro Plan Interrupted] Aborting plan for {self.active_macro_plan.target_item} "
+                                f"(health_dropped={health_dropped}, hostile_near={hostile_near}, high_urgency={high_urgency})."
+                            )
+                            self.active_macro_plan = None
+                    self.record_pending_commit(_commit_plan_abort)
                 else:
-                    next_step = self.active_macro_plan.get_current_step()
-                    if next_step:
-                        logger.info(f"⚡ [Macro Step Execution] {next_step.description} -> {next_step.action}")
-                        return {
-                            "text": f"Executing plan step: {next_step.description}",
-                            "tool_calls": [{"name": next_step.action, "arguments": next_step.arguments}]
-                        }
+                    logger.warning(
+                        f"⚠️ [Macro Plan Interrupted] Aborting plan for {self.active_macro_plan.target_item} "
+                        f"(health_dropped={health_dropped}, hostile_near={hostile_near}, high_urgency={high_urgency})."
+                    )
+                    self.active_macro_plan = None
+            else:
+                if is_speculative:
+                    # Virtual advance in speculative mode: do NOT advance active_macro_plan directly!
+                    curr_idx = self.active_macro_plan.current_step_idx
+                    advance_count = 0
+                    while curr_idx < len(self.active_macro_plan.steps) and self.active_macro_plan.steps[curr_idx].is_satisfied(inv_dict):
+                        advance_count += 1
+                        curr_idx += 1
+
+                    if advance_count > 0:
+                        def _commit_plan_advance(cnt=advance_count):
+                            if self.active_macro_plan:
+                                for _ in range(cnt):
+                                    if self.active_macro_plan.get_current_step() and self.active_macro_plan.get_current_step().is_satisfied(inv_dict):
+                                        sat_step = self.active_macro_plan.get_current_step()
+                                        logger.info(f"✅ [Macro Step Satisfied] '{sat_step.description}' achieved. Advancing...")
+                                        self.active_macro_plan.advance_step()
+                                if self.active_macro_plan.is_completed():
+                                    logger.info(f"🏆 [Macro Plan Complete] Achieved {self.active_macro_plan.target_item}!")
+                                    self.active_macro_plan = None
+                        self.record_pending_commit(_commit_plan_advance)
+
+                    if curr_idx < len(self.active_macro_plan.steps):
+                        next_step = self.active_macro_plan.steps[curr_idx]
+                        if next_step:
+                            logger.info(f"⚡ [Speculative Macro Step Execution] {next_step.description} -> {next_step.action}")
+                            return {
+                                "text": f"Executing plan step: {next_step.description}",
+                                "tool_calls": [{"name": next_step.action, "arguments": next_step.arguments}]
+                            }
+                else:
+                    # Advance satisfied steps directly in non-speculative mode
+                    while self.active_macro_plan.get_current_step() and self.active_macro_plan.get_current_step().is_satisfied(inv_dict):
+                        sat_step = self.active_macro_plan.get_current_step()
+                        logger.info(f"✅ [Macro Step Satisfied] '{sat_step.description}' achieved. Advancing...")
+                        self.active_macro_plan.advance_step()
+
+                    if self.active_macro_plan.is_completed():
+                        logger.info(f"🏆 [Macro Plan Complete] Achieved {self.active_macro_plan.target_item}!")
+                        self.active_macro_plan = None
+                    else:
+                        next_step = self.active_macro_plan.get_current_step()
+                        if next_step:
+                            logger.info(f"⚡ [Macro Step Execution] {next_step.description} -> {next_step.action}")
+                            return {
+                                "text": f"Executing plan step: {next_step.description}",
+                                "tool_calls": [{"name": next_step.action, "arguments": next_step.arguments}]
+                            }
 
         # Collect sensory alerts and opportunities (Cortex-First)
         edible_food_items = (

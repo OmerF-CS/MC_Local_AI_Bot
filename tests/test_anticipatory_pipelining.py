@@ -140,7 +140,7 @@ class TestAnticipatoryPipeline(unittest.IsolatedAsyncioTestCase):
             "tool_calls": [{"name": "craft_item", "arguments": {"item_name": "iron_pickaxe"}}]
         }
 
-        async def fake_decide(state):
+        async def fake_decide(state, *args, **kwargs):
             await asyncio.sleep(0.01)  # Simulate small cognitive delay
             return speculative_decision
 

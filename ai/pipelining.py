@@ -379,7 +379,7 @@ class AnticipatoryPipeline:
         self._running_args = running_args
         self._precomputed_start_time = time.perf_counter()
         self._precomputed_task = asyncio.create_task(
-            self.planner.decide_next_action(self._anticipated_state)
+            self.planner.decide_next_action(self._anticipated_state, is_speculative=True)
         )
         logger.debug(
             f"🚀 [Pipeline]: Pre-computation launched in background for '{running_command}'."
@@ -453,6 +453,8 @@ class AnticipatoryPipeline:
             if self._precomputed_task and not self._precomputed_task.done():
                 self._precomputed_task.cancel()
             self._precomputed_task = None
+            if hasattr(self.planner, "discard_speculative_state"):
+                self.planner.discard_speculative_state()
             logger.warning(
                 f"⚠️ [Pipeline Interrupt]: Discarded pre-computed decision (reason: {reason}). "
                 "Computing fresh decision..."
@@ -474,14 +476,21 @@ class AnticipatoryPipeline:
             if decision and isinstance(decision, dict) and decision.get("tool_calls"):
                 next_action = decision["tool_calls"][0].get("name", "action")
 
+            if hasattr(self.planner, "commit_speculative_state"):
+                self.planner.commit_speculative_state()
+
             logger.info(
                 f"⚡ [Pipeline 0ms Dispatch]: Pre-computed {next_action} ready! (waited {elapsed_ms:.2f}ms)"
             )
             return decision
         except asyncio.CancelledError:
+            if hasattr(self.planner, "discard_speculative_state"):
+                self.planner.discard_speculative_state()
             logger.info("ℹ️ [Pipeline]: Pre-computation task cancelled. Computing fresh decision...")
             return await self.planner.decide_next_action(current_state)
         except Exception as e:
+            if hasattr(self.planner, "discard_speculative_state"):
+                self.planner.discard_speculative_state()
             logger.warning(
                 f"⚠️ [Pipeline Error]: Pre-computation task failed: {e}. Falling back to fresh decision..."
             )
