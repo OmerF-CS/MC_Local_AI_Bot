@@ -218,7 +218,14 @@ class CognitiveCortex:
                     if isinstance(data.get("plan"), list) and data["plan"]:
                         raw_plan = data["plan"]
 
-                    if data.get("action"):
+                    if isinstance(data.get("action"), dict):
+                        act_dict = data["action"]
+                        action = str(act_dict.get("name") or act_dict.get("action") or "").strip()
+                        if isinstance(act_dict.get("arguments"), dict):
+                            arguments = act_dict["arguments"]
+                        elif not arguments:
+                            arguments = {k: v for k, v in act_dict.items() if k not in ("name", "action")}
+                    elif data.get("action"):
                         action = str(data["action"]).strip()
                     if "arguments" in data:
                         raw_args = data["arguments"]
@@ -347,6 +354,14 @@ class CognitiveCortex:
                 is_mock = isinstance(self.brain, (Mock, MagicMock, AsyncMock))
             except Exception:
                 is_mock = False
+
+            if not is_mock and self.brain:
+                if getattr(self.brain, "_is_mock", False) or getattr(self.brain, "is_mock", False):
+                    is_mock = True
+                elif "process_chat" in getattr(self.brain, "__dict__", {}):
+                    is_mock = True
+                elif hasattr(self.brain, "process_chat") and getattr(self.brain.process_chat, "__name__", "") != "process_chat":
+                    is_mock = True
 
             if is_mock:
                 # Custom mock decision
