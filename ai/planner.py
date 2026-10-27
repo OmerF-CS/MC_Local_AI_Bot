@@ -18,6 +18,7 @@ from ai.spatial_and_exploration import ExplorationEngine
 from ai.opportunistic_radar import OpportunityScanner, Opportunity
 from ai.player_styles import PlayerStyle, StyleStrategy
 from ai.cortex import CognitiveCortex
+from ai.pipelining import StatePredictor
 
 logger = get_logger("AutonomousCoopBrain")
 
@@ -81,6 +82,7 @@ class AutonomousCoopBrain:
         )
         self.last_thought_chat_time = 0.0
         self.last_scout_time = 0.0
+        self.state_predictor = StatePredictor()
 
         # F0.5: Resume from recorded progression checkpoint if available
         if self.db:
@@ -93,6 +95,10 @@ class AutonomousCoopBrain:
                     logger.info(f"💾 [Progression Checkpoint Loaded] Resuming from Era: {self.checkpoint_stage} -> Target: {self.checkpoint_target}")
             except Exception as e:
                 logger.warning(f"Failed to load latest progression checkpoint: {e}")
+
+    def predict_post_action_state(self, current_state: Dict[str, Any], command: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Simulates post-action state delta for anticipatory pipelining."""
+        return self.state_predictor.predict_post_action_state(current_state, command, args or {})
 
     def set_player_style(self, style: Any) -> None:
         """Updates the current player persona/style archetype."""

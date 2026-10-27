@@ -23,6 +23,7 @@ from ai.ollama_client import OllamaBrain
 from ai.planner import AutonomousCoopBrain
 from ai.dataset_collector import DatasetCollector
 from ai.spatial_and_exploration import analyze_death_reflection
+from ai.pipelining import AnticipatoryPipeline
 
 logger = get_logger("Main")
 
@@ -59,6 +60,7 @@ class MinecraftAIBot:
         )
 
         self.planner = AutonomousCoopBrain(self.brain, bot_owner=config.BOT_OWNER, db=self.db)
+        self.pipeline = AnticipatoryPipeline(self.planner)
         self.dataset_collector = DatasetCollector(run_id=self.run_id)
         self.chat_handler = MinecraftChatHandler(self)
         self.node_process: subprocess.Popen | None = None
@@ -490,6 +492,7 @@ class MinecraftAIBot:
         logger.info("🌀 Autonomous Co-op Player Engine started.")
         loop_failures = 0
         max_consecutive_failures = 5
+        next_decision: Optional[Dict[str, Any]] = None
 
         while not self._shutdown_event.is_set():
             try:
@@ -499,11 +502,12 @@ class MinecraftAIBot:
                     continue
 
                 # Fast event-driven wakeup upon action completion, or periodic 0.5s check
-                try:
-                    await asyncio.wait_for(self._loop_wakeup.wait(), timeout=0.5)
-                    self._loop_wakeup.clear()
-                except asyncio.TimeoutError:
-                    pass
+                if not next_decision:
+                    try:
+                        await asyncio.wait_for(self._loop_wakeup.wait(), timeout=0.5)
+                        self._loop_wakeup.clear()
+                    except asyncio.TimeoutError:
+                        pass
 
                 if not self.autonomous_mode:
                     continue
@@ -546,7 +550,11 @@ class MinecraftAIBot:
                     continue
 
                 state["active_player_task"] = self.active_player_task
-                ai_decision = await self.planner.decide_next_action(state)
+                if next_decision:
+                    ai_decision = next_decision
+                    next_decision = None
+                else:
+                    ai_decision = await self.planner.decide_next_action(state)
                 
                 if not ai_decision:
                     continue
@@ -559,6 +567,8 @@ class MinecraftAIBot:
                     await asyncio.sleep(0.5)
                     continue
 
+                exec_res = None
+                pre_snapshot = dict(state)
                 for tc in tool_calls:
                     if self._shutdown_event.is_set():
                         break
@@ -566,6 +576,8 @@ class MinecraftAIBot:
                     args = tc.get("arguments", {})
                     logger.info(f"⚡ [PROACTIVE INITIATIVE] Action: {cmd} -> {args}")
                     pre_snapshot = dict(state)
+                    # Launch anticipatory pre-computation for the next step while current tool executes
+                    self.pipeline.start_precomputation(pre_snapshot, cmd, args)
                     start_t = time.time()
                     exec_res = await self.chat_handler._execute_tool(cmd, args, state, self.config.BOT_OWNER)
                     dur_s = time.time() - start_t
@@ -577,7 +589,7 @@ class MinecraftAIBot:
                         post_state=post_snapshot,
                         duration_s=dur_s
                     )
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.05)
 
                 has_say_chat = any(tc.get("name") == "say_chat" for tc in tool_calls)
                 now = time.time()
@@ -592,7 +604,18 @@ class MinecraftAIBot:
                     self._last_autonomous_chat_msg = response_text
                     await self.bridge.send_action("say_chat", {"message": response_text})
 
-                await asyncio.sleep(0.3)
+                # Check pre-computed decision from pipeline
+                if self.pipeline._precomputed_task is not None:
+                    next_decision = await self.pipeline.get_next_decision(
+                        current_state=dict(self.bridge.latest_state or state),
+                        pre_snapshot=pre_snapshot,
+                        exec_result=exec_res or {}
+                    )
+                else:
+                    next_decision = None
+
+                if not next_decision:
+                    await asyncio.sleep(0.3)
 
             except asyncio.CancelledError:
                 break
@@ -601,6 +624,8 @@ class MinecraftAIBot:
                 await asyncio.sleep(2)
 
         logger.info("🛑 Autonomous progression loop terminated.")
+
+    _autonomous_player_loop = autonomous_progression_loop
 
     def start_mineflayer_worker(self):
         """Spawns Mineflayer Node.js bot process as a managed subprocess."""
@@ -868,3 +893,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# Backward-compatibility alias
+MinecraftBotApp = MinecraftAIBot
