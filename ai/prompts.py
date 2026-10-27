@@ -223,7 +223,8 @@ def build_cortex_sensory_prompt(
     lessons: Optional[List[str]] = None,
     goal: Optional[Dict[str, Any]] = None,
     missing_ingredients: Optional[List[str]] = None,
-    feasible_actions: Optional[List[str]] = None
+    feasible_actions: Optional[List[str]] = None,
+    scenario: Optional[Any] = None
 ) -> str:
     """Constructs ultra-compact (<160 words, ~180 tokens) sensory perception text for Cognitive Cortex.
 
@@ -328,8 +329,15 @@ def build_cortex_sensory_prompt(
         f"[AFFORD] {afford_str}",
         f"[PERCEPTION] Mobs: {mobs} | Blocks: {blocks}",
         f"[ALERTS] {alerts_str}",
-        f"[OPPORTUNITIES] {opps_str}"
     ]
+
+    if scenario:
+        if hasattr(scenario, "format_prompt_line"):
+            prompt_lines.append(scenario.format_prompt_line())
+        else:
+            prompt_lines.append(f"[SCENARIO] {str(scenario)}")
+
+    prompt_lines.append(f"[OPPORTUNITIES] {opps_str}")
 
     # Goal line if goal present
     if goal:

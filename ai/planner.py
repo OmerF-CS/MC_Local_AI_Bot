@@ -19,6 +19,7 @@ from ai.opportunistic_radar import OpportunityScanner, Opportunity
 from ai.player_styles import PlayerStyle, StyleStrategy
 from ai.cortex import CognitiveCortex
 from ai.pipelining import StatePredictor
+from ai.scenario_engine import ScenarioDetector, ScenarioType, ScenarioFrame
 
 logger = get_logger("AutonomousCoopBrain")
 
@@ -83,6 +84,7 @@ class AutonomousCoopBrain:
         self.last_thought_chat_time = 0.0
         self.last_scout_time = 0.0
         self.state_predictor = StatePredictor()
+        self.scenario_detector = ScenarioDetector()
 
         # F0.5: Resume from recorded progression checkpoint if available
         if self.db:
@@ -862,6 +864,10 @@ class AutonomousCoopBrain:
                 elif m_name:
                     feasible_actions.append(m_name)
 
+            # Detect scenario framing for autonomous deliberation
+            current_scenario = self.scenario_detector.detect_scenario(state, inv_dict, goal)
+            state["current_scenario"] = current_scenario.scenario_type.value
+
             logger.info(f"🎯 Milestone: {goal['target']} | Evaluating tactical action via Cortex...")
             cortex_decision = await self.cortex.think_and_decide(
                 state=state,
@@ -874,7 +880,8 @@ class AutonomousCoopBrain:
                 lessons=recent_lessons,
                 goal=goal,
                 missing_ingredients=state.get("missing_ingredients"),
-                feasible_actions=feasible_actions
+                feasible_actions=feasible_actions,
+                scenario=current_scenario
             )
 
             tool_calls = []
@@ -898,6 +905,15 @@ class AutonomousCoopBrain:
             else:
                 is_fallback = True
                 # Cortex returned None or empty tool calls -> Clean fallback heuristics
+                if current_scenario and current_scenario.urgency >= 7:
+                    fallback_act = current_scenario.get_fallback_action()
+                    if fallback_act:
+                        logger.info(f"🚨 [Scenario Heuristic Fallback] Cortex offline. Executing {fallback_act['name']} for {current_scenario.scenario_type.value}")
+                        return {
+                            "text": f"Handling {current_scenario.scenario_type.value} situation.",
+                            "tool_calls": [fallback_act]
+                        }
+
                 if opp and opp.priority >= 7:
                     logger.info(f"✨ [Opportunistic Priority] {opp.reason} -> {opp.action}({opp.arguments})")
                     return {
@@ -1156,6 +1172,14 @@ class AutonomousCoopBrain:
             if hasattr(self.brain, "fallback_count"):
                 self.brain.fallback_count = self.fallback_count
             logger.warning("⏱️ LLM reasoning timed out. Using backup strategy.")
+            if 'current_scenario' in locals() and current_scenario and current_scenario.urgency >= 7:
+                fallback_act = current_scenario.get_fallback_action()
+                if fallback_act:
+                    logger.info(f"🚨 [Scenario Heuristic Fallback] Cortex offline. Executing {fallback_act['name']} for {current_scenario.scenario_type.value}")
+                    return {
+                        "text": f"Handling {current_scenario.scenario_type.value} situation.",
+                        "tool_calls": [fallback_act]
+                    }
             fallback_action = self.generate_fallback_action(goal, inv_dict, owner_info, state)
             rule_name = getattr(self, "last_fallback_rule", "fallback_rule")
             logger.info(f"ℹ️ [Fallback Rule] Triggered rule '{rule_name}' -> action '{fallback_action.get('name') if fallback_action else 'none'}' due to timeout.")

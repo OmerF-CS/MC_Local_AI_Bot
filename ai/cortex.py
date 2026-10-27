@@ -31,7 +31,8 @@ CORTEX_SYSTEM_INSTRUCTION = (
     "Then output JSON with keys 'thought' and either 'action' (with 'arguments') or 'plan' (list of 1-3 action dicts). "
     "Choose from available survival tools: collect_block, craft_item, smelt_item, attack_target, "
     "eat_food, sleep_in_bed, build_shelter, mine_staircase, pillar_jump, scout_high_ground, "
-    "water_bucket_descent, go_to_coordinates, farm_crops, catch_fish, manage_chest, trade_with_villager."
+    "water_bucket_descent, go_to_coordinates, farm_crops, catch_fish, manage_chest, trade_with_villager. "
+    "When [SCENARIO] is present, evaluate its dilemma and options carefully."
 )
 
 
@@ -133,7 +134,8 @@ class CognitiveCortex:
         lessons: Optional[List[str]] = None,
         goal: Optional[Dict[str, Any]] = None,
         missing_ingredients: Optional[List[str]] = None,
-        feasible_actions: Optional[List[str]] = None
+        feasible_actions: Optional[List[str]] = None,
+        scenario: Optional[Any] = None
     ) -> str:
         """Constructs ultra-compact (<160 words, ~180 tokens) sensory perception text."""
         return build_cortex_sensory_prompt(
@@ -147,7 +149,8 @@ class CognitiveCortex:
             lessons=lessons or [],
             goal=goal,
             missing_ingredients=missing_ingredients,
-            feasible_actions=feasible_actions
+            feasible_actions=feasible_actions,
+            scenario=scenario
         )
 
     def _normalize_single_action(self, action_name: str, args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
@@ -313,7 +316,8 @@ class CognitiveCortex:
         lessons: Optional[List[str]] = None,
         goal: Optional[Dict[str, Any]] = None,
         missing_ingredients: Optional[List[str]] = None,
-        feasible_actions: Optional[List[str]] = None
+        feasible_actions: Optional[List[str]] = None,
+        scenario: Optional[Any] = None
     ) -> Optional[Dict[str, Any]]:
         """Compiles sensory vector, calls local LLM, and produces autonomous thought + action."""
         start_t = time.perf_counter()
@@ -328,7 +332,8 @@ class CognitiveCortex:
             lessons=lessons or [],
             goal=goal,
             missing_ingredients=missing_ingredients,
-            feasible_actions=feasible_actions
+            feasible_actions=feasible_actions,
+            scenario=scenario
         )
 
         response_text = ""
