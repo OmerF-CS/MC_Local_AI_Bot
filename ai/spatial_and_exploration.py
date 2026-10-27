@@ -29,7 +29,8 @@ class ExplorationEngine:
         ("NW", -0.7071, -0.7071)
     ]
 
-    def __init__(self):
+    def __init__(self, hazard_memory: Optional[Any] = None):
+        self.hazard_memory = hazard_memory
         self.visited_chunks: Dict[Tuple[int, int], float] = {}
         self.current_chunk: Optional[Tuple[int, int]] = None
         self.chunk_entered_at: float = time.time()
@@ -108,6 +109,7 @@ class ExplorationEngine:
 
         current_x = float(pos["x"])
         current_z = float(pos["z"])
+        dim = pos.get("dimension", "overworld") if isinstance(pos, dict) else "overworld"
         now = time.time()
 
         candidates = []
@@ -138,6 +140,14 @@ class ExplorationEngine:
                         score -= 20.0
                     elif dist < 35.0:
                         score -= 8.0
+
+            # (b2) Persistent Hazard Memory penalty (-50.0 points)
+            if self.hazard_memory and hasattr(self.hazard_memory, "is_hazard_near"):
+                try:
+                    if self.hazard_memory.is_hazard_near(dim, float(target_x), float(target_z)):
+                        score -= 50.0
+                except Exception:
+                    pass
 
             # (c) Deterministic slight tie-breaker
             score += (hash((target_x, target_z)) % 100) / 1000.0
@@ -206,3 +216,133 @@ def analyze_death_reflection(cause: str) -> Dict[str, str]:
         "lesson": f"[DEATH LESSON - HAZARD]: Exercise heightened situational awareness around unknown hazards ({cause_str}).",
         "chat_message": f"I was eliminated by {cause_str}. Refining survival pathfinding."
     }
+
+
+class HomeBaseManager:
+    """Manages home base coordinate anchor registration, retrieval, and safe return decisions."""
+
+    def __init__(self, db: Optional[Any] = None):
+        self.db = db
+
+    def register_home_base(
+        self,
+        pos: Dict[str, Any],
+        dim: str = "overworld",
+        source: str = "auto"
+    ) -> bool:
+        """Saves location with name='home_base' and description='source:{source}' into persistent locations."""
+        if not self.db or not hasattr(self.db, "save_location") or not pos:
+            return False
+        try:
+            x = float(pos.get("x", 0.0))
+            y = float(pos.get("y", 64.0))
+            z = float(pos.get("z", 0.0))
+            self.db.save_location(
+                name="home_base",
+                x=x,
+                y=y,
+                z=z,
+                description=f"source:{source}",
+                created_by="system"
+            )
+            return True
+        except Exception:
+            return False
+
+    def get_home_base(self) -> Optional[Dict[str, Any]]:
+        """Retrieves registered home_base landmark."""
+        if not self.db or not hasattr(self.db, "get_location"):
+            return None
+        try:
+            return self.db.get_location("home_base")
+        except Exception:
+            return None
+
+    def should_return_home(
+        self,
+        inv_dict: Dict[str, int],
+        state: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """Evaluates inventory saturation and nightfall proximity to trigger return to home base."""
+        home = self.get_home_base()
+        if not home:
+            return False, "no_home_base"
+
+        # 1. Inventory Full Check: >= 28 item stacks or >= 26 unique non-zero items
+        items_list = state.get("inventory_items", [])
+        unique_filled = len([k for k, v in inv_dict.items() if v > 0])
+        if len(items_list) >= 28 or unique_filled >= 26:
+            return True, "inventory_full"
+
+        # 2. Night Shelter Check: Night/dusk, within 64m of home base, and no bed on person
+        is_night = not state.get("is_day", True) or str(state.get("time_of_day", "")).lower() in ("night", "dusk")
+        if is_night:
+            has_bed = any("bed" in str(k).lower() for k, v in inv_dict.items() if v > 0)
+            if not has_bed:
+                bot_pos = state.get("position") or state.get("pos") or {}
+                if "x" in bot_pos and "z" in bot_pos and "x" in home and "z" in home:
+                    try:
+                        dist = math.hypot(float(bot_pos["x"]) - float(home["x"]), float(bot_pos["z"]) - float(home["z"]))
+                        if dist <= 64.0:
+                            return True, "night_shelter"
+                    except Exception:
+                        pass
+
+        return False, "normal"
+
+
+class HazardMemoryManager:
+    """Interface to persistent SQLite hazard map for dangerous environmental voxels."""
+
+    def __init__(self, db: Optional[Any] = None):
+        self.db = db
+
+    def record_hazard(
+        self,
+        dim: str,
+        x: float,
+        y: float,
+        z: float,
+        hazard_type: str,
+        radius: float = 5.0
+    ) -> bool:
+        """Records a hazard area to database."""
+        if not self.db or not hasattr(self.db, "record_hazard"):
+            return False
+        return self.db.record_hazard(dim, x, y, z, hazard_type, radius=radius)
+
+    def record_environmental_hazard(
+        self,
+        hazard_type: str,
+        pos: Dict[str, Any],
+        dim: str = "overworld",
+        radius: float = 5.0
+    ) -> bool:
+        """Convenience method to record hazard from position dictionary."""
+        if not pos or "x" not in pos or "z" not in pos:
+            return False
+        try:
+            x = float(pos.get("x", 0.0))
+            y = float(pos.get("y", 64.0))
+            z = float(pos.get("z", 0.0))
+            return self.record_hazard(dim, x, y, z, hazard_type, radius=radius)
+        except Exception:
+            return False
+
+    def is_hazard_near(self, dim: str, x: float, z: float, margin: float = 4.0) -> bool:
+        """Checks if (x, z) is in close proximity to any recorded hazard."""
+        if not self.db or not hasattr(self.db, "is_hazard_point"):
+            return False
+        return self.db.is_hazard_point(dim, x, z, margin=margin)
+
+    def get_nearby_hazards(
+        self,
+        dim: str = "overworld",
+        x: float = 0.0,
+        z: float = 0.0,
+        max_dist: float = 64.0
+    ) -> List[Dict[str, Any]]:
+        """Queries recorded hazards within max_dist."""
+        if not self.db or not hasattr(self.db, "get_nearby_hazards"):
+            return []
+        return self.db.get_nearby_hazards(dim, x, z, max_dist=max_dist)

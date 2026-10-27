@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 import logging
+import math
 from typing import List, Dict, Any, Optional, Tuple
 
 from utils.run_context import get_current_run_id
@@ -16,7 +17,7 @@ class Database:
         else:
             chosen = db_path
 
-        if os.path.isabs(chosen):
+        if chosen == ":memory:" or os.path.isabs(chosen):
             self.db_path = chosen
         else:
             self.db_path = os.path.join(os.path.dirname(__file__), chosen)
@@ -167,6 +168,21 @@ class Database:
                 )
             """)
 
+            # Hazard Memory Map (Phase 3)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS hazard_map (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dim TEXT DEFAULT 'overworld',
+                    x REAL,
+                    y REAL,
+                    z REAL,
+                    hazard_type TEXT,
+                    radius REAL DEFAULT 5.0,
+                    run_id TEXT DEFAULT '',
+                    discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
             # Column migrations: Ensure run_id exists in operational tables
             tables_to_migrate = [
                 "progression_checkpoints",
@@ -174,7 +190,8 @@ class Database:
                 "beds",
                 "chests",
                 "ore_map",
-                "chat_history"
+                "chat_history",
+                "hazard_map"
             ]
             for tbl in tables_to_migrate:
                 try:
@@ -523,6 +540,70 @@ class Database:
                 SET mined = 1, mined_at = datetime('now')
                 WHERE dim = ? AND x = ? AND y = ? AND z = ?
             """, (dim, int(x), int(y), int(z)))
+
+    # --- HAZARD MEMORY MAP (Phase 3) ---
+
+    def record_hazard(self, dim: str, x: float, y: float, z: float, hazard_type: str, radius: float = 5.0, run_id: Optional[str] = None) -> bool:
+        """Records a dangerous hazard area (lava, void, mob spawner, cliff) to persistent memory."""
+        rid = run_id or get_current_run_id()
+        try:
+            with self.conn:
+                self.conn.execute("""
+                    INSERT INTO hazard_map (dim, x, y, z, hazard_type, radius, run_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (str(dim).lower(), float(x), float(y), float(z), str(hazard_type).lower(), float(radius), rid))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to record hazard: {e}")
+            return False
+
+    def get_nearby_hazards(self, dim: str = "overworld", x: float = 0.0, z: float = 0.0, max_dist: float = 64.0) -> List[Dict[str, Any]]:
+        """Returns recorded hazards within max_dist of (x, z) in given dimension, sorted by distance."""
+        dim_clean = str(dim).lower()
+        try:
+            cur = self.conn.cursor()
+            cur.execute("""
+                SELECT id, dim, x, y, z, hazard_type, radius, run_id, discovered_at
+                FROM hazard_map
+                WHERE dim = ?
+                ORDER BY id DESC
+            """, (dim_clean,))
+            hazards = []
+            for r in cur.fetchall():
+                rx = float(r["x"])
+                rz = float(r["z"])
+                dist = math.hypot(rx - x, rz - z)
+                if dist <= max_dist:
+                    item = dict(r)
+                    item["distance"] = round(dist, 2)
+                    hazards.append(item)
+            hazards.sort(key=lambda h: h["distance"])
+            return hazards
+        except Exception as e:
+            logger.error(f"Failed to get nearby hazards: {e}")
+            return []
+
+    def is_hazard_point(self, dim: str, x: float, z: float, margin: float = 4.0) -> bool:
+        """Returns True if (x, z) is within (radius + margin) of any recorded hazard in dimension."""
+        dim_clean = str(dim).lower()
+        try:
+            cur = self.conn.cursor()
+            cur.execute("""
+                SELECT x, z, radius
+                FROM hazard_map
+                WHERE dim = ?
+            """, (dim_clean,))
+            for r in cur.fetchall():
+                rx = float(r["x"])
+                rz = float(r["z"])
+                rad = float(r["radius"])
+                dist = math.hypot(rx - x, rz - z)
+                if dist <= (rad + margin):
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to check hazard point: {e}")
+            return False
 
     def close(self):
         """Closes the underlying SQLite database connection."""

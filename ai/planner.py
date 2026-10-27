@@ -14,7 +14,8 @@ from ai.progression_tree import (
     get_optimal_ore_height
 )
 from ai.security_and_affordance import normalize_item_alias, strip_cjk, AffordanceEngine
-from ai.spatial_and_exploration import ExplorationEngine
+from ai.spatial_and_exploration import ExplorationEngine, HomeBaseManager, HazardMemoryManager
+from ai.macro_planner import MacroPlanner, MacroPlan, PlanStep
 from ai.opportunistic_radar import OpportunityScanner, Opportunity
 from ai.player_styles import PlayerStyle, StyleStrategy
 from ai.cortex import CognitiveCortex
@@ -64,7 +65,13 @@ class AutonomousCoopBrain:
 
         # Affordance, Exploration, History and Cooldown Engines (Phase 2)
         self.affordance_engine = AffordanceEngine()
-        self.exploration_engine = ExplorationEngine()
+        self.macro_planner = MacroPlanner()
+        self.active_macro_plan: Optional[MacroPlan] = None
+        self.home_base_manager = HomeBaseManager(self.db)
+        self.hazard_memory = HazardMemoryManager(self.db)
+        self.exploration_engine = ExplorationEngine(hazard_memory=self.hazard_memory)
+        self.last_home_return_try = 0.0
+        self.last_known_health: Optional[float] = None
         self.recent_action_history: List[Dict[str, Any]] = []
         self._action_cooldowns: Dict[str, float] = {}
 
@@ -109,6 +116,35 @@ class AutonomousCoopBrain:
         elif isinstance(style, str):
             self.player_style = PlayerStyle.from_str(style)
         logger.info(f"🎭 [Player Style Set] Changed persona style to: {self.player_style.value}")
+
+    def start_macro_plan(
+        self,
+        target_item: str,
+        inv_or_state: Optional[Any] = None,
+        state: Optional[Dict[str, Any]] = None
+    ) -> Optional[MacroPlan]:
+        """Initiates a deterministic DAG macro-plan for a target item."""
+        if isinstance(inv_or_state, dict) and any(isinstance(v, int) for v in inv_or_state.values()) and "inventory_items" not in inv_or_state:
+            inv_dict = inv_or_state
+            st = state or {}
+        elif isinstance(inv_or_state, dict):
+            st = inv_or_state
+            items = st.get("inventory_items", [])
+            inv_dict = self.parse_inventory(items) if items else {}
+        else:
+            st = state or {}
+            items = st.get("inventory_items", [])
+            inv_dict = self.parse_inventory(items) if items else {}
+
+        plan = self.macro_planner.build_macro_plan(target_item, inv_dict, st)
+        if plan and not plan.is_completed():
+            self.active_macro_plan = plan
+            logger.info(f"📋 [Macro Plan Started] Target: {target_item} with {len(plan.steps)} steps.")
+            return plan
+        elif plan:
+            self.active_macro_plan = plan
+            return plan
+        return None
 
     def parse_inventory(self, items: List[Dict[str, Any]]) -> Dict[str, int]:
         """Converts inventory item list into a name -> count mapping."""
@@ -739,6 +775,55 @@ class AutonomousCoopBrain:
         time_str = "Daytime (Safe)" if is_day else "Nighttime (Hostile mobs active!)"
         biome = state.get("biome", "Unknown")
 
+        # Home Base Auto-Registration:
+        if self.db and hasattr(self, "home_base_manager") and not self.home_base_manager.get_home_base():
+            try:
+                cur = self.db.conn.cursor()
+                cur.execute("SELECT dim, x, y, z FROM beds ORDER BY id ASC LIMIT 1")
+                bed_row = cur.fetchone()
+                if bed_row:
+                    self.home_base_manager.register_home_base(
+                        {"x": bed_row["x"], "y": bed_row["y"], "z": bed_row["z"]},
+                        dim=bed_row["dim"] or "overworld",
+                        source="bed_spawn"
+                    )
+                    logger.info(f"🏡 [Home Base Auto-Registered] Anchored home_base at bed ({bed_row['x']}, {bed_row['y']}, {bed_row['z']})")
+                else:
+                    cur.execute("SELECT dim, x, y, z FROM chests ORDER BY id ASC LIMIT 1")
+                    chest_row = cur.fetchone()
+                    if chest_row:
+                        self.home_base_manager.register_home_base(
+                            {"x": chest_row["x"], "y": chest_row["y"], "z": chest_row["z"]},
+                            dim=chest_row["dim"] or "overworld",
+                            source="chest_storage"
+                        )
+                        logger.info(f"🏡 [Home Base Auto-Registered] Anchored home_base at chest ({chest_row['x']}, {chest_row['y']}, {chest_row['z']})")
+            except Exception as e:
+                logger.debug(f"Home base auto-registration check notice: {e}")
+
+        # Home Base Return Check:
+        nearby_hostiles = state.get("nearby_hostiles", [])
+        if hasattr(self, "home_base_manager"):
+            should_ret, ret_reason = self.home_base_manager.should_return_home(inv_dict, state)
+            if should_ret and not nearby_hostiles and not state.get("active_player_task"):
+                now = time.time()
+                if now - getattr(self, "last_home_return_try", 0.0) >= 45.0:
+                    self.last_home_return_try = now
+                    home = self.home_base_manager.get_home_base()
+                    if home:
+                        cur_pos = state.get("position", {"x": 0, "y": 64, "z": 0})
+                        dist = math.hypot(float(cur_pos.get("x", 0)) - float(home["x"]), float(cur_pos.get("z", 0)) - float(home["z"]))
+                        if dist <= 4.0:
+                            return {
+                                "text": "Safely arrived home. Depositing surplus items into base storage.",
+                                "tool_calls": [{"name": "manage_chest", "arguments": {"action_type": "deposit_surplus"}}]
+                            }
+                        else:
+                            return {
+                                "text": f"Returning to home base ({ret_reason}).",
+                                "tool_calls": [{"name": "go_to_coordinates", "arguments": {"x": round(home['x']), "y": round(home['y']), "z": round(home['z']), "range": 3}}]
+                            }
+
         # Retrieve active tech tree milestone from current inventory
         inv_goal = get_current_progression_goal(inv_dict, state)
         inv_rank = get_stage_rank(inv_goal["stage"])
@@ -783,6 +868,50 @@ class AutonomousCoopBrain:
 
         missing_ingredients = resolve_missing_ingredients(goal["target"], inv_dict)
         missing_str = ", ".join(missing_ingredients) or "All materials ready for crafting!"
+
+        # Scenario Deliberation Framing
+        current_scenario = self.scenario_detector.detect_scenario(state, inv_dict, goal)
+        state["current_scenario"] = current_scenario.scenario_type.value
+
+        # Health drop tracking for interrupt guards
+        health = state.get("health", 20)
+        last_hp = getattr(self, "last_known_health", None)
+        health_dropped = (last_hp is not None and (last_hp - health) > 1.5)
+        self.last_known_health = health
+
+        # Macro Plan Execution Check
+        if self.active_macro_plan and not self.active_macro_plan.is_completed():
+            hostile_near = any(
+                any(f"({d}m away)" in h for d in ["1", "2", "3", "4", "5", "6"])
+                for h in nearby_hostiles
+            ) or (state.get("nearby_hostiles_count", 0) > 0 and state.get("nearest_hostile_distance", 999) < 6.0)
+
+            high_urgency = (current_scenario is not None and current_scenario.urgency >= 8)
+
+            if health_dropped or hostile_near or high_urgency:
+                logger.warning(
+                    f"⚠️ [Macro Plan Interrupted] Aborting plan for {self.active_macro_plan.target_item} "
+                    f"(health_dropped={health_dropped}, hostile_near={hostile_near}, high_urgency={high_urgency})."
+                )
+                self.active_macro_plan = None
+            else:
+                # Advance satisfied steps
+                while self.active_macro_plan.get_current_step() and self.active_macro_plan.get_current_step().is_satisfied(inv_dict):
+                    sat_step = self.active_macro_plan.get_current_step()
+                    logger.info(f"✅ [Macro Step Satisfied] '{sat_step.description}' achieved. Advancing...")
+                    self.active_macro_plan.advance_step()
+
+                if self.active_macro_plan.is_completed():
+                    logger.info(f"🏆 [Macro Plan Complete] Achieved {self.active_macro_plan.target_item}!")
+                    self.active_macro_plan = None
+                else:
+                    next_step = self.active_macro_plan.get_current_step()
+                    if next_step:
+                        logger.info(f"⚡ [Macro Step Execution] {next_step.description} -> {next_step.action}")
+                        return {
+                            "text": f"Executing plan step: {next_step.description}",
+                            "tool_calls": [{"name": next_step.action, "arguments": next_step.arguments}]
+                        }
 
         # Collect sensory alerts and opportunities (Cortex-First)
         edible_food_items = (
