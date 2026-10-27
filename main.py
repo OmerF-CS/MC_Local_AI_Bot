@@ -258,8 +258,6 @@ class MinecraftAIBot:
                         logger.warning(f"⚠️ Corpse recovery #{death_id} timed out or failed (elapsed={elapsed:.1f}s, success={success}, error={error})")
                         if self.db and task_id:
                             self.db.update_task_status(task_id, "failed")
-                            if death_id:
-                                self.db.mark_death_point_recovered(death_id)
                         self.active_player_task = None
                         self.active_recovery_task_id = None
                         self.active_recovery_death_id = None
@@ -558,7 +556,7 @@ class MinecraftAIBot:
 
                 if not tool_calls:
                     # No active action to execute (e.g. resting in bunker or waiting)
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(0.5)
                     continue
 
                 for tc in tool_calls:

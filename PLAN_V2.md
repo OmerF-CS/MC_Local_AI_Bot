@@ -1,6 +1,6 @@
 # MC Local AI Bot — V2 Progression & Architecture Matrix (1.20.4 Survival)
 
-> **Live Test & Verification Status:** **167 / 167 Python Tests + 42 / 42 Node.js Stability Tests Passing (100% OK)**  
+> **Live Test & Verification Status:** **172 / 172 Python Tests + 42 / 42 Node.js Stability Tests Passing (100% OK)**  
 > **Dedicated Live Server:** Tested against official Mojang 1.20.4 `server.jar` via OpenJDK (`tests/test_live_server_integration.py` passing in ~11.5s).  
 > **Target Environment:** Minecraft Java Edition 1.20.4, Local Qwen 2.5 3B (RTX 3060 6 GB GPU) + Node.js Mineflayer Worker + SQLite Memory.  
 > **Language & Code Purity:** 100% English across all codebases, docstrings, console logs, and datasets.
@@ -37,6 +37,7 @@ The bot operates on a strict separation of concerns:
 | **F2.7** | SecurityGuard, Affordances, Frontier Exploration & 4-Layer JSON Recovery | **Verified** | Injection/anti-troll shield (`SecurityGuard`), real-time craft/smelt affordances & TR/EN aliasing (`AffordanceEngine`), hazard-aware frontier exploration & death reflection (`ExplorationEngine`), and 4-layer inline JSON tool recovery. | `ai/security_and_affordance.py`, `ai/spatial_and_exploration.py`, `ai/ollama_client.py`, `tests/test_local_brain_integration.py` |
 | **F2.8** | Human Player Physical Reflexes, Opportunistic Radar & Player Styles | **Verified** | Staircase mining (`mineStaircase`), pillar jumping (`pillarJump`), hilltop scouting (`scoutHighGround`), water bucket descent (`waterBucketDescent`), opportunistic multitasking radar (`OpportunityScanner`), and 4 player styles (`PlayerStyle`). | `minecraft_bot/bot.js`, `ai/opportunistic_radar.py`, `ai/player_styles.py`, `tests/test_human_player_mechanics.py` |
 | **F2.9** | Cognitive Cortex & Fast Micro-CoT Autonomous Decision Engine | **Verified** | Cortex-First LLM decision loop (`CognitiveCortex`), zero-bloat sensory vector (~180 tokens), sub-500ms Micro-CoT `<think>` internal monologue & autonomous tool calling on RTX 3060, uninhibited player volition with offline progression fallback. | `ai/cortex.py`, `ai/planner.py`, `ai/prompts.py`, `tests/test_cognitive_cortex.py` |
+| **F2.10** | Cortex V4 Fast + Logical (Context Window Guard, Scout & Craft Guards, Idle Fidgeting) | **Verified** | Strict <160 word sensory prompt (<180 tokens), 180s scout cooldown guard, crafting precondition interceptor (missing materials auto-redirect), idle_look_around non-blocking fidgeting, 15s ore log throttle, and 8s mining timeout. | `ai/cortex.py`, `ai/prompts.py`, `ai/planner.py`, `minecraft_bot/bot.js`, `tests/test_cortex_optimization.py` |
 | **F3.1** | Weapon Cooldown & Criticals | **Verified** | 1.20.4 attack delay calculation (`getWeaponCooldownMs`); jump-critical downward strikes. | `minecraft_bot/bot.js:performChargedAttack` |
 | **F3.2** | Active Shield Blocking | **Verified** | Timed shield activation (`activateItem('off-hand')`) blocking arrows/explosions. | `minecraft_bot/bot.js:autoSelfDefenseCheck` |
 | **F3.3** | Mob Tactical Reflexes | **Verified** | Long-range Skeleton LOS cover break, Zombie swarm barrier funneling, Ghast fireball deflection. | `minecraft_bot/bot.js:autoSelfDefenseCheck` |
@@ -59,11 +60,11 @@ The bot operates on a strict separation of concerns:
 
 ## 3. Test & Verification Evidence
 
-### Full Test Suite Execution Output (167 Python + 42 Node.js Stability Tests)
+### Full Test Suite Execution Output (172 Python + 42 Node.js Stability Tests)
 ```text
 Python Suite (scripts/run_tests.py):
-  • Total Tests  : 167
-  • Passed       : 167 (100% OK)
+  • Total Tests  : 172
+  • Passed       : 172 (100% OK)
   • Duration     : ~36s
   - Cognitive Cortex Micro-CoT, Zero-Bloat Sensory Vector & Low Latency: PASS
   - SecurityGuard, Affordances, Frontier Exploration, 4-Layer JSON Recovery: PASS

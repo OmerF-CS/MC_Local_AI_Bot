@@ -72,8 +72,15 @@ class AutonomousCoopBrain:
         self.player_style = PlayerStyle.SPEEDRUNNER
 
         # Cognitive Cortex (The Mind - Phase 2 Cortex-First)
-        self.cortex = CognitiveCortex(ollama_brain=self.brain, bot_owner=self.bot_owner, db=self.db)
+        cortex_model = getattr(self.brain, "model", "mc-qwen:3b") if self.brain else "mc-qwen:3b"
+        self.cortex = CognitiveCortex(
+            ollama_brain=self.brain,
+            bot_owner=self.bot_owner,
+            db=self.db,
+            model=cortex_model
+        )
         self.last_thought_chat_time = 0.0
+        self.last_scout_time = 0.0
 
         # F0.5: Resume from recorded progression checkpoint if available
         if self.db:
@@ -834,6 +841,21 @@ class AutonomousCoopBrain:
                 state["learned_lessons_summary"] = "; ".join(lessons)
 
         try:
+            # Compute feasible actions for ultra-compact perception
+            feasible_actions = []
+            affordances = self.affordance_engine.get_affordances(inv_dict)
+            for c in affordances.get("craftable_now", [])[:3]:
+                feasible_actions.append(f"craft:{c}")
+            for s in affordances.get("smeltable_now", [])[:2]:
+                feasible_actions.append(f"smelt:{s}")
+            if milestone_action:
+                m_name = milestone_action.get("name")
+                if m_name == "collect_block":
+                    b = milestone_action.get("arguments", {}).get("block_name", "log")
+                    feasible_actions.append(f"collect:{b}")
+                elif m_name:
+                    feasible_actions.append(m_name)
+
             logger.info(f"🎯 Milestone: {goal['target']} | Evaluating tactical action via Cortex...")
             cortex_decision = await self.cortex.think_and_decide(
                 state=state,
@@ -843,7 +865,10 @@ class AutonomousCoopBrain:
                 opportunities=opportunities,
                 style=self.player_style.value,
                 recent_actions=recent_actions,
-                lessons=recent_lessons
+                lessons=recent_lessons,
+                goal=goal,
+                missing_ingredients=state.get("missing_ingredients"),
+                feasible_actions=feasible_actions
             )
 
             tool_calls = []
@@ -940,6 +965,28 @@ class AutonomousCoopBrain:
                             sanitized_calls.append({"name": "collect_block", "arguments": {"block_name": t_name, "count": 1}})
                             continue
 
+                    # Scout Obsession Guard (R3 fix): 180s cooldown
+                    if c_name == "scout_high_ground":
+                        now = time.time()
+                        last_scout = getattr(self, "last_scout_time", 0.0)
+                        if now - last_scout < 180.0:
+                            logger.warning(
+                                f"🛡️ [Scout Obsession Guard] scout_high_ground requested within 180s cooldown "
+                                f"({round(now - last_scout, 1)}s elapsed). Auto-diverting action."
+                            )
+                            if milestone_action and milestone_action.get("name") == "collect_block":
+                                sanitized_calls.append(milestone_action)
+                            else:
+                                cur_pos = state.get("position", {"x": 0, "y": 64, "z": 0})
+                                target_coord = self.exploration_engine.get_next_exploration_target(cur_pos)
+                                sanitized_calls.append({
+                                    "name": "go_to_coordinates",
+                                    "arguments": {"x": target_coord[0], "y": target_coord[1], "z": target_coord[2], "range": 3}
+                                })
+                            continue
+                        else:
+                            self.last_scout_time = now
+
                     # Stage 0 Priority Guard: Prevent aimless wandering at spawn without wood/tools
                     if c_name == "go_to_coordinates" and not state.get("active_player_task"):
                         has_pickaxe = any("pickaxe" in item for item in inv_dict.keys())
@@ -1003,9 +1050,31 @@ class AutonomousCoopBrain:
                             if missing_for_item:
                                 _, item_action = self.get_milestone_action({"target": target_craft}, inv_dict, state)
                                 sub_action = item_action if item_action else milestone_action
-                                logger.info(
-                                    f"ℹ️ Model requested craft_item('{target_craft}') but missing materials "
-                                    f"({', '.join(missing_for_item)}). Substituting prerequisite tactical action: {sub_action.get('name')}."
+                                if not sub_action or sub_action.get("name") == "craft_item":
+                                    first_missing = str(missing_for_item[0]).lower()
+                                    if any(w in first_missing for w in ("log", "wood", "plank", "stem")):
+                                        sub_action = {"name": "collect_block", "arguments": {"block_name": "log", "count": 3}}
+                                    elif any(s in first_missing for s in ("stone", "cobble")):
+                                        sub_action = {"name": "collect_block", "arguments": {"block_name": "stone", "count": 3}}
+                                    elif "iron" in first_missing:
+                                        if inv_dict.get("raw_iron", 0) > 0:
+                                            sub_action = {"name": "smelt_item", "arguments": {"input_item": "raw_iron", "count": 3}}
+                                        else:
+                                            sub_action = {"name": "collect_block", "arguments": {"block_name": "iron", "count": 3}}
+                                    elif "gold" in first_missing:
+                                        if inv_dict.get("raw_gold", 0) > 0:
+                                            sub_action = {"name": "smelt_item", "arguments": {"input_item": "raw_gold", "count": 3}}
+                                        else:
+                                            sub_action = {"name": "collect_block", "arguments": {"block_name": "gold_ore", "count": 3}}
+                                    elif "diamond" in first_missing:
+                                        sub_action = {"name": "collect_block", "arguments": {"block_name": "diamond_ore", "count": 3}}
+                                    else:
+                                        raw_target = first_missing.split()[-1].replace(" ", "_")
+                                        sub_action = {"name": "collect_block", "arguments": {"block_name": raw_target, "count": 1}}
+
+                                logger.warning(
+                                    f"⚠️ [Crafting Precondition Guard] Intercepted craft_item('{target_craft}') with missing ingredients "
+                                    f"({', '.join(missing_for_item)}). Rewriting action to {sub_action.get('name')}({sub_action.get('arguments')})."
                                 )
                                 sanitized_calls.append(sub_action)
                                 continue

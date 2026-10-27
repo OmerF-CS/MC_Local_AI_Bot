@@ -1,4 +1,5 @@
 """Minecraft AI System Prompt - Ultra-compact Qwen 2.5 3B optimized format."""
+import re
 from typing import Dict, Any, List, Optional
 
 MINECRAFT_SYSTEM_PROMPT = """You are {bot_name}, an autonomous Minecraft survival speedrunner.
@@ -37,7 +38,7 @@ def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic,
 
     health = state.get("health", 20)
     food = state.get("food", 20)
-    pos = state.get("position", {"x": 0, "y": 0, "z": 0})
+    pos = state.get("position", {})
     pos_str = f"({pos.get('x', 0):.0f}, {pos.get('y', 0):.0f}, {pos.get('z', 0):.0f})"
     dimension = state.get("dimension", "overworld")
 
@@ -102,6 +103,115 @@ def build_system_prompt_for_ollama(state, bot_name, bot_owner, goal, pro_tactic,
     return base_prompt
 
 
+def _truncate_entities_sensory(state: Dict[str, Any]) -> str:
+    """Extracts and truncates nearby entities to max 3 closest in compact format."""
+    # 1. Structured list of entity dicts
+    entities = state.get("nearby_entities")
+    if isinstance(entities, list) and entities:
+        def get_dist(e):
+            if isinstance(e, dict):
+                return e.get("distance", 999.0)
+            return 999.0
+        sorted_ents = sorted(entities, key=get_dist)
+        items = []
+        for e in sorted_ents[:3]:
+            if isinstance(e, dict):
+                name = e.get("name", "mob")
+                dist = e.get("distance")
+                if dist is not None:
+                    items.append(f"{name}({int(round(dist))}m)")
+                else:
+                    items.append(str(name))
+            else:
+                items.append(str(e))
+        return ", ".join(items) if items else "none"
+
+    # 2. String summary in state
+    summary = state.get("nearby_entities_summary")
+    if summary and isinstance(summary, str) and summary.strip():
+        parts = [p.strip() for p in summary.split(",") if p.strip()]
+        if len(parts) > 3:
+            return ", ".join(parts[:3])
+        return summary.strip()
+
+    # 3. Hostiles & passives list
+    hostiles = state.get("nearby_hostiles") or []
+    passives = state.get("nearby_passives") or []
+    combined = list(hostiles) + list(passives)
+    if combined:
+        items = []
+        for e in combined[:3]:
+            if isinstance(e, dict):
+                name = e.get("name", "mob")
+                dist = e.get("distance")
+                if dist is not None:
+                    items.append(f"{name}({int(round(dist))}m)")
+                else:
+                    items.append(str(name))
+            elif isinstance(e, str):
+                m = re.match(r"^([a-zA-Z0-9_]+)\s*\(([\d\.]+)m.*?\)", e.strip())
+                if m:
+                    items.append(f"{m.group(1)}({int(round(float(m.group(2))))}m)")
+                else:
+                    items.append(e.strip())
+            else:
+                items.append(str(e))
+        return ", ".join(items) if items else "none"
+
+    return "none"
+
+
+def _truncate_blocks_sensory(state: Dict[str, Any]) -> str:
+    """Extracts and truncates nearby relevant blocks to max 4 closest."""
+    # 1. Structured list of block dicts
+    blocks = state.get("nearby_blocks")
+    if isinstance(blocks, list) and blocks:
+        def get_dist(b):
+            if isinstance(b, dict):
+                return b.get("distance", 999.0)
+            return 999.0
+        sorted_blocks = sorted(blocks, key=get_dist)
+        items = []
+        for b in sorted_blocks[:4]:
+            if isinstance(b, dict):
+                name = b.get("name", "block")
+                dist = b.get("distance")
+                if dist is not None:
+                    items.append(f"{name}({int(round(dist))}m)")
+                else:
+                    items.append(str(name))
+            elif isinstance(b, str):
+                m = re.match(r"^([a-zA-Z0-9_]+)\s*\(([\d\.]+)m.*?\)", b.strip())
+                if m:
+                    items.append(f"{m.group(1)}({int(round(float(m.group(2))))}m)")
+                else:
+                    items.append(b.strip())
+            else:
+                items.append(str(b))
+        return ", ".join(items) if items else "none"
+
+    # 2. String summary in state
+    summary = state.get("nearby_blocks_summary")
+    if summary and isinstance(summary, str) and summary.strip():
+        parts = [p.strip() for p in summary.split(",") if p.strip()]
+        if len(parts) > 4:
+            return ", ".join(parts[:4])
+        return summary.strip()
+
+    # 3. Visible resources dict
+    vis = state.get("visible_resources")
+    if isinstance(vis, dict) and vis:
+        items = []
+        for k, v in list(vis.items())[:4]:
+            if isinstance(v, dict) and "closest_distance" in v:
+                items.append(f"{k}({int(round(v['closest_distance']))}m)")
+            else:
+                items.append(f"{k}:{v}")
+        return ", ".join(items) if items else "none"
+
+    return "none"
+
+
 def build_cortex_sensory_prompt(
     state: Optional[Dict[str, Any]] = None,
     inv_dict: Optional[Dict[str, int]] = None,
@@ -110,9 +220,12 @@ def build_cortex_sensory_prompt(
     opportunities: Optional[List[str]] = None,
     style: str = "speedrunner",
     recent_actions: str = "",
-    lessons: Optional[List[str]] = None
+    lessons: Optional[List[str]] = None,
+    goal: Optional[Dict[str, Any]] = None,
+    missing_ingredients: Optional[List[str]] = None,
+    feasible_actions: Optional[List[str]] = None
 ) -> str:
-    """Constructs high-density, concise (~150-200 token) sensory perception text for Cognitive Cortex.
+    """Constructs ultra-compact (<160 words, ~180 tokens) sensory perception text for Cognitive Cortex.
 
     Format:
     [STATE] HP:{hp}/20 | Food:{food}/20 | Light:{light} ({day_phase}) | Pos:({x},{y},{z}) | Biome:{biome}
@@ -121,6 +234,8 @@ def build_cortex_sensory_prompt(
     [PERCEPTION] Mobs: {mobs} | Blocks: {blocks}
     [ALERTS] {alerts_string}
     [OPPORTUNITIES] {opportunities_string}
+    [GOAL] Target: {target} | Need: {missing} (if goal provided)
+    [FEASIBLE] {feasible_actions} (if feasible_actions provided)
     [STYLE] {style}
     [RECENT] {recent_actions}
     [LESSONS] {lessons_string}
@@ -163,38 +278,49 @@ def build_cortex_sensory_prompt(
 
     biome = state.get("biome", "plains")
 
-    # Compact Inventory String
+    # Compact Inventory String (non-zero items only)
     if inv_dict:
-        inv_str = ", ".join(f"{k}:{v}" for k, v in inv_dict.items())
+        nonzero_items = [f"{k}:{v}" for k, v in inv_dict.items() if isinstance(v, (int, float)) and v > 0]
+        inv_str = ", ".join(nonzero_items) if nonzero_items else "empty"
     else:
         inv_str = "empty"
 
     # Affordances
     afford_str = affordances_summary.strip() if affordances_summary else "none"
 
-    # Perception: Mobs & Blocks
-    mobs = (
-        state.get("nearby_entities_summary") or
-        ", ".join(state.get("nearby_hostiles", [])) or
-        "none"
-    )
-    blocks = (
-        state.get("nearby_blocks_summary") or
-        ", ".join(state.get("nearby_blocks", [])) or
-        "none"
-    )
+    # Perception: Mobs (max 3) & Blocks (max 4)
+    mobs = _truncate_entities_sensory(state)
+    blocks = _truncate_blocks_sensory(state)
 
-    # Alerts & Opportunities
-    alerts_str = "; ".join(alerts) if alerts else "none"
-    opps_str = "; ".join(opportunities) if opportunities else "none"
+    # Alerts & Opportunities (bounded to avoid bloat)
+    alerts_str = "; ".join(alerts[:3]) if alerts else "none"
+    opps_str = "; ".join(opportunities[:2]) if opportunities else "none"
 
-    # Style, Recent actions, Lessons
+    # Sanitize lessons: filter out generic "unknown hazard" / "awareness" boilerplate
+    generic_lesson_patterns = (
+        "unknown hazard",
+        "exercise heightened situational awareness",
+        "heightened situational awareness"
+    )
+    sanitized_lessons = []
+    raw_lessons = lessons if isinstance(lessons, list) else ([str(lessons)] if lessons else [])
+    for l in raw_lessons:
+        l_str = str(l).strip()
+        if not l_str:
+            continue
+        l_lower = l_str.lower()
+        if any(pat in l_lower for pat in generic_lesson_patterns):
+            continue
+        if l_str not in sanitized_lessons:
+            sanitized_lessons.append(l_str)
+        if len(sanitized_lessons) >= 2:
+            break
+
+    lessons_str = "; ".join(sanitized_lessons) if sanitized_lessons else "none"
+
+    # Style & Recent actions
     style_str = style or "speedrunner"
     recent_str = recent_actions.strip() if recent_actions else "none"
-    if isinstance(lessons, list):
-        lessons_str = "; ".join(lessons) if lessons else "none"
-    else:
-        lessons_str = str(lessons) if lessons else "none"
 
     prompt_lines = [
         f"[STATE] HP:{hp}/20 | Food:{food}/20 | Light:{light} ({day_phase}) | Pos:({x},{y},{z}) | Biome:{biome}",
@@ -202,10 +328,42 @@ def build_cortex_sensory_prompt(
         f"[AFFORD] {afford_str}",
         f"[PERCEPTION] Mobs: {mobs} | Blocks: {blocks}",
         f"[ALERTS] {alerts_str}",
-        f"[OPPORTUNITIES] {opps_str}",
+        f"[OPPORTUNITIES] {opps_str}"
+    ]
+
+    # Goal line if goal present
+    if goal:
+        target_name = goal.get("target", "wooden_pickaxe") if isinstance(goal, dict) else str(goal)
+        if missing_ingredients is not None:
+            if isinstance(missing_ingredients, list):
+                missing_str = ", ".join(missing_ingredients) if missing_ingredients else "Ready to craft!"
+            else:
+                missing_str = str(missing_ingredients)
+        elif isinstance(goal, dict) and goal.get("missing"):
+            m = goal.get("missing")
+            missing_str = ", ".join(m) if isinstance(m, list) else str(m)
+        elif state and state.get("missing_ingredients"):
+            m = state.get("missing_ingredients")
+            missing_str = ", ".join(m) if isinstance(m, list) else str(m)
+        else:
+            missing_str = "Ready to craft!"
+        prompt_lines.append(f"[GOAL] Target: {target_name} | Need: {missing_str}")
+
+    # Feasible actions line if feasible_actions present
+    if feasible_actions:
+        prompt_lines.append(f"[FEASIBLE] {', '.join(feasible_actions)}")
+
+    prompt_lines.extend([
         f"[STYLE] {style_str}",
         f"[RECENT] {recent_str}",
         f"[LESSONS] {lessons_str}"
-    ]
-    return "\n".join(prompt_lines)
+    ])
 
+    result = "\n".join(prompt_lines)
+
+    # Hard safety bound: ensure strictly under 160 words
+    words = result.split()
+    if len(words) >= 160:
+        result = " ".join(words[:155])
+
+    return result

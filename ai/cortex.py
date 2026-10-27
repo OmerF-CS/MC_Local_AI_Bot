@@ -26,12 +26,44 @@ BLOCK_KEYWORDS = (
 )
 
 CORTEX_SYSTEM_INSTRUCTION = (
-    "You are an autonomous Minecraft survival player. Formulate a 1-sentence inner thought "
-    "evaluating trade-offs, then output JSON with keys 'thought', 'action', and 'arguments'. "
+    "You are an autonomous Minecraft survival player. Formulate a 1-sentence inner thought under 12 words. "
+    "Inner thought MUST be 1 short sentence under 12 words. "
+    "Then output JSON with keys 'thought' and either 'action' (with 'arguments') or 'plan' (list of 1-3 action dicts). "
     "Choose from available survival tools: collect_block, craft_item, smelt_item, attack_target, "
     "eat_food, sleep_in_bed, build_shelter, mine_staircase, pillar_jump, scout_high_ground, "
     "water_bucket_descent, go_to_coordinates, farm_crops, catch_fish, manage_chest, trade_with_villager."
 )
+
+
+class ParsedCortexResponse(tuple):
+    """Parsed result from CognitiveCortex supporting both 3-tuple unpacking and .plan property."""
+
+    def __new__(
+        cls,
+        thought: str,
+        action: str,
+        arguments: Dict[str, Any],
+        plan: Optional[List[Dict[str, Any]]] = None
+    ):
+        instance = super().__new__(cls, (thought, action, arguments))
+        instance._plan = plan or []
+        return instance
+
+    @property
+    def thought(self) -> str:
+        return self[0]
+
+    @property
+    def action(self) -> str:
+        return self[1]
+
+    @property
+    def arguments(self) -> Dict[str, Any]:
+        return self[2]
+
+    @property
+    def plan(self) -> List[Dict[str, Any]]:
+        return self._plan
 
 
 class CognitiveCortex:
@@ -42,16 +74,24 @@ class CognitiveCortex:
         ollama_brain=None,
         bot_owner: str = "Omer",
         db=None,
-        model: str = "qwen2.5:3b",
-        temperature: float = 0.35,
-        num_predict: int = 128,
+        model: Optional[str] = None,
+        temperature: float = 0.2,
+        num_predict: int = 64,
         num_ctx: int = 2048,
         keep_alive: str = "60m"
     ):
         self.brain = ollama_brain
         self.bot_owner = bot_owner
         self.db = db
-        self.model = model
+
+        # Resolve model: explicit parameter > ollama_brain.model > default "mc-qwen:3b"
+        if model:
+            self.model = model
+        elif ollama_brain and hasattr(ollama_brain, "model") and isinstance(ollama_brain.model, str):
+            self.model = ollama_brain.model
+        else:
+            self.model = "mc-qwen:3b"
+
         self.temperature = temperature
         self.num_predict = num_predict
         self.num_ctx = num_ctx
@@ -90,9 +130,12 @@ class CognitiveCortex:
         opportunities: Optional[List[str]] = None,
         style: str = "speedrunner",
         recent_actions: str = "",
-        lessons: Optional[List[str]] = None
+        lessons: Optional[List[str]] = None,
+        goal: Optional[Dict[str, Any]] = None,
+        missing_ingredients: Optional[List[str]] = None,
+        feasible_actions: Optional[List[str]] = None
     ) -> str:
-        """Constructs high-density, concise (~150-200 token) sensory perception text."""
+        """Constructs ultra-compact (<160 words, ~180 tokens) sensory perception text."""
         return build_cortex_sensory_prompt(
             state=state,
             inv_dict=inv_dict,
@@ -101,17 +144,40 @@ class CognitiveCortex:
             opportunities=opportunities or [],
             style=style,
             recent_actions=recent_actions,
-            lessons=lessons or []
+            lessons=lessons or [],
+            goal=goal,
+            missing_ingredients=missing_ingredients,
+            feasible_actions=feasible_actions
         )
+
+    def _normalize_single_action(self, action_name: str, args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """Validates and normalizes action name, resolves attack on blocks to collect_block, and cleans aliases."""
+        action = str(action_name).strip()
+        arguments = dict(args) if isinstance(args, dict) else {}
+
+        # Disambiguate attack on block
+        if action in ("attack", "attack_target"):
+            t_name = str(arguments.get("target_name", "")).lower()
+            if any(k in t_name for k in BLOCK_KEYWORDS):
+                action = "collect_block"
+                arguments = {"block_name": t_name, "count": 1}
+
+        # Normalize argument string aliases and sanitize CJK
+        for key in ("block_name", "item_name", "input_item", "target_name"):
+            if key in arguments and isinstance(arguments[key], str):
+                arguments[key] = normalize_item_alias(strip_cjk(arguments[key]))
+
+        return action, arguments
 
     def parse_response(
         self,
         raw_text: str,
         tool_calls_data: Optional[List[Dict[str, Any]]] = None
-    ) -> Optional[Tuple[str, str, Dict[str, Any]]]:
-        """Parses model response extracting thought, action, and arguments.
+    ) -> Optional[ParsedCortexResponse]:
+        """Parses model response extracting thought and either plan or action.
 
         Supports:
+        - {"thought": "...", "plan": [{"action": "...", "arguments": {...}}, ...]}
         - {"thought": "...", "action": "...", "arguments": {...}}
         - <think>thought</think> JSON or tool call
         - Markdown ```json ... ``` blocks
@@ -120,6 +186,7 @@ class CognitiveCortex:
         thought = ""
         action = ""
         arguments: Dict[str, Any] = {}
+        raw_plan: Optional[List[Dict[str, Any]]] = None
 
         text = raw_text.strip() if raw_text else ""
 
@@ -143,6 +210,11 @@ class CognitiveCortex:
                 if isinstance(data, dict):
                     if not thought and data.get("thought"):
                         thought = str(data["thought"]).strip()
+
+                    # Check for plan key (list of 1-3 action dicts)
+                    if isinstance(data.get("plan"), list) and data["plan"]:
+                        raw_plan = data["plan"]
+
                     if data.get("action"):
                         action = str(data["action"]).strip()
                     if "arguments" in data:
@@ -162,18 +234,31 @@ class CognitiveCortex:
                 pass
 
         # Native tool calls fallback / extraction
-        if not action and tool_calls_data and len(tool_calls_data) > 0:
-            first_tc = tool_calls_data[0]
-            func = first_tc.get("function", first_tc)
-            action = func.get("name", "")
-            tc_args = func.get("arguments", {})
-            if isinstance(tc_args, str):
-                try:
-                    arguments = json.loads(tc_args)
-                except Exception:
-                    arguments = {}
-            elif isinstance(tc_args, dict):
-                arguments = tc_args
+        if not action and not raw_plan and tool_calls_data and len(tool_calls_data) > 0:
+            if len(tool_calls_data) > 1:
+                raw_plan = []
+                for tc in tool_calls_data:
+                    func = tc.get("function", tc)
+                    tc_name = func.get("name", "")
+                    tc_args = func.get("arguments", {})
+                    if isinstance(tc_args, str):
+                        try:
+                            tc_args = json.loads(tc_args)
+                        except Exception:
+                            tc_args = {}
+                    raw_plan.append({"name": tc_name, "arguments": tc_args})
+            else:
+                first_tc = tool_calls_data[0]
+                func = first_tc.get("function", first_tc)
+                action = func.get("name", "")
+                tc_args = func.get("arguments", {})
+                if isinstance(tc_args, str):
+                    try:
+                        arguments = json.loads(tc_args)
+                    except Exception:
+                        arguments = {}
+                elif isinstance(tc_args, dict):
+                    arguments = tc_args
 
         # If thought is still empty, use remaining text or placeholder
         if not thought:
@@ -182,22 +267,39 @@ class CognitiveCortex:
             else:
                 thought = "Evaluating tactical survival trade-offs."
 
+        # If plan is present, normalize each step
+        normalized_plan: List[Dict[str, Any]] = []
+        if raw_plan and isinstance(raw_plan, list):
+            for step in raw_plan[:3]:
+                if not isinstance(step, dict):
+                    continue
+                step_action = step.get("action") or step.get("name") or ""
+                step_args = step.get("arguments") or {}
+                if isinstance(step_args, str):
+                    try:
+                        step_args = json.loads(step_args)
+                    except Exception:
+                        step_args = {}
+                norm_act, norm_args = self._normalize_single_action(step_action, step_args)
+                if norm_act:
+                    normalized_plan.append({
+                        "name": norm_act,
+                        "action": norm_act,
+                        "arguments": norm_args
+                    })
+
+        if normalized_plan:
+            first_action = normalized_plan[0]["name"]
+            first_args = normalized_plan[0]["arguments"]
+            return ParsedCortexResponse(thought, first_action, first_args, plan=normalized_plan)
+
         if not action:
             return None
 
-        # Disambiguate attack on block
-        if action in ("attack", "attack_target"):
-            t_name = str(arguments.get("target_name", "")).lower()
-            if any(k in t_name for k in BLOCK_KEYWORDS):
-                action = "collect_block"
-                arguments = {"block_name": t_name, "count": 1}
-
-        # Normalize argument string aliases and sanitize CJK
-        for key in ("block_name", "item_name", "input_item", "target_name"):
-            if key in arguments and isinstance(arguments[key], str):
-                arguments[key] = normalize_item_alias(strip_cjk(arguments[key]))
-
-        return thought, action, arguments
+        # Normalize single action
+        action, arguments = self._normalize_single_action(action, arguments)
+        single_plan = [{"name": action, "action": action, "arguments": arguments}]
+        return ParsedCortexResponse(thought, action, arguments, plan=single_plan)
 
     async def think_and_decide(
         self,
@@ -208,7 +310,10 @@ class CognitiveCortex:
         opportunities: Optional[List[str]] = None,
         style: str = "speedrunner",
         recent_actions: str = "",
-        lessons: Optional[List[str]] = None
+        lessons: Optional[List[str]] = None,
+        goal: Optional[Dict[str, Any]] = None,
+        missing_ingredients: Optional[List[str]] = None,
+        feasible_actions: Optional[List[str]] = None
     ) -> Optional[Dict[str, Any]]:
         """Compiles sensory vector, calls local LLM, and produces autonomous thought + action."""
         start_t = time.perf_counter()
@@ -220,7 +325,10 @@ class CognitiveCortex:
             opportunities=opportunities or [],
             style=style,
             recent_actions=recent_actions,
-            lessons=lessons or []
+            lessons=lessons or [],
+            goal=goal,
+            missing_ingredients=missing_ingredients,
+            feasible_actions=feasible_actions
         )
 
         response_text = ""
@@ -292,7 +400,11 @@ class CognitiveCortex:
                     "options": {
                         "temperature": self.temperature,
                         "num_predict": self.num_predict,
-                        "num_ctx": self.num_ctx
+                        "num_ctx": self.num_ctx,
+                        "num_gpu": 999,
+                        "num_thread": 8,
+                        "top_p": 0.8,
+                        "top_k": 40
                     }
                 }
 
@@ -322,10 +434,16 @@ class CognitiveCortex:
 
             thought, action, args = parsed
             logger.info(f"🧠 [Cortex Thought] ({latency_ms}ms): {thought}")
+
+            if parsed.plan and len(parsed.plan) > 1:
+                tool_calls = [{"name": p["name"], "arguments": p["arguments"]} for p in parsed.plan]
+            else:
+                tool_calls = [{"name": action, "arguments": args}]
+
             return {
                 "text": thought,
                 "thought": thought,
-                "tool_calls": [{"name": action, "arguments": args}],
+                "tool_calls": tool_calls,
                 "latency_ms": latency_ms
             }
 

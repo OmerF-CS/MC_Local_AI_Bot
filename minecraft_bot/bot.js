@@ -138,6 +138,7 @@ const RESOURCE_CATEGORIES = [
 ];
 const cachedVisibleResources = {};
 const reportedOreVeins = new Set();
+let lastOreRadarSummaryTime = 0;
 const SPECIAL_ORE_CATEGORIES = {
     precious_overworld: ['diamond_ore', 'deepslate_diamond_ore', 'emerald_ore', 'deepslate_emerald_ore'],
     conductive_mystic: ['gold_ore', 'deepslate_gold_ore', 'redstone_ore', 'deepslate_redstone_ore', 'lapis_ore', 'deepslate_lapis_ore'],
@@ -247,6 +248,16 @@ function tickResourceScanner() {
                 };
             } else {
                 delete cachedVisibleResources[bName];
+            }
+        }
+
+        const nowMs = Date.now();
+        if (nowMs - lastOreRadarSummaryTime >= 15000) {
+            const detectedOres = Object.keys(cachedVisibleResources).filter(k => ORE_INTEREST_NAMES.includes(k));
+            if (detectedOres.length > 0) {
+                lastOreRadarSummaryTime = nowMs;
+                const summary = detectedOres.map(k => `${k}:${cachedVisibleResources[k].total_found}`).join(', ');
+                console.log(`💎 [Ore Radar Summary] Detected visible ores: ${summary}`);
             }
         }
     } catch (_) {}
@@ -5205,7 +5216,7 @@ async function handleAction(action) {
     let actionError = null;
 
     // Guard against action overlap if bot is already performing a critical multi-step action
-    if (isBusy && command !== 'stop_actions' && command !== 'say_chat') {
+    if (isBusy && command !== 'stop_actions' && command !== 'say_chat' && command !== 'idle_look_around') {
         console.log(`⚠️ [Busy Guard] Bot currently busy with '${currentActionName}'. Postponing new action.`);
         sendToPython({
             type: 'action_completed',
@@ -5235,6 +5246,22 @@ async function handleAction(action) {
 
     try {
         switch (command) {
+            case 'idle_look_around': {
+                try {
+                    const deltaYaw = (Math.random() > 0.5 ? 1 : -1) * ((20 + Math.random() * 10) * (Math.PI / 180));
+                    const deltaPitch = ((Math.random() * 10 - 5) * (Math.PI / 180));
+                    const currentYaw = (bot.entity && bot.entity.yaw) ? bot.entity.yaw : 0;
+                    const currentPitch = (bot.entity && bot.entity.pitch) ? bot.entity.pitch : 0;
+                    const targetYaw = currentYaw + deltaYaw;
+                    const targetPitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, currentPitch + deltaPitch));
+                    if (typeof bot.look === 'function') {
+                        const p = bot.look(targetYaw, targetPitch, true);
+                        if (p && typeof p.catch === 'function') p.catch(() => {});
+                    }
+                } catch (_) {}
+                break;
+            }
+
             case 'say_chat': {
                 const text = args.message || '';
                 if (text) bot.chat(text);
@@ -5475,6 +5502,25 @@ async function handleAction(action) {
                     break;
                 }
 
+                // Allow digging 1 surface dirt block if candidate stone block is covered by dirt
+                if (categoryLabel.includes('stone') && targets.length > 0) {
+                    const candidatePos = targets[0];
+                    if (candidatePos && typeof candidatePos.offset === 'function') {
+                        const abovePos = candidatePos.offset(0, 1, 0);
+                        const aboveBlock = bot.blockAt(abovePos);
+                        if (aboveBlock && ['dirt', 'grass_block', 'coarse_dirt', 'sand'].includes(aboveBlock.name)) {
+                            console.log(`⛏️ [Stone Uncover] Candidate stone at (${candidatePos.x}, ${candidatePos.y}, ${candidatePos.z}) is covered by ${aboveBlock.name}. Digging 1 surface block...`);
+                            try {
+                                if (bot.canDigBlock(aboveBlock)) {
+                                    await bot.dig(aboveBlock);
+                                }
+                            } catch (digErr) {
+                                console.log(`[Stone Uncover] Dig note: ${digErr.message}`);
+                            }
+                        }
+                    }
+                }
+
                 const startTime = Date.now();
                 const invBefore = bot.inventory.items().map(i => ({ name: i.name, count: i.count }));
 
@@ -5486,8 +5532,8 @@ async function handleAction(action) {
                             if (bot && bot.pathfinder) {
                                 try { bot.pathfinder.stop(); } catch (_) {}
                             }
-                            reject(new Error(`Mining timed out after 20s (target: ${categoryLabel})`));
-                        }, 20000);
+                            reject(new Error(`Mining timed out after 8s (target: ${categoryLabel})`));
+                        }, 8000);
                     });
 
                     try {
@@ -5597,13 +5643,30 @@ async function handleAction(action) {
                 isBusy = true;
                 currentActionName = 'walking';
                 const { x, y, z } = args;
-                const range = (typeof args.range === 'number' && args.range > 0) ? args.range : 1;
+                let range = (typeof args.range === 'number' && args.range > 0) ? args.range : 1;
                 const { GoalNear, GoalNearXZ } = goals;
-                const targetGoal = (y === undefined || y === null || args.ignore_y)
-                    ? new GoalNearXZ(x, z, range)
-                    : new GoalNear(x, y, z, range);
+                const makeGoal = (r) => (y === undefined || y === null || args.ignore_y)
+                    ? new GoalNearXZ(x, z, r)
+                    : new GoalNear(x, y, z, r);
+
+                let pathErr = null;
                 try {
-                    await withTimeout(bot.pathfinder.goto(targetGoal), 30000, 'go_to_coordinates');
+                    await withTimeout(bot.pathfinder.goto(makeGoal(range)), 30000, 'go_to_coordinates');
+                } catch (err) {
+                    pathErr = err;
+                    if (err.message && err.message.toLowerCase().includes('took too long to decide path')) {
+                        console.log(`⚠️ [Pathfinder Retry] 'Took too long to decide path'. Retrying once with range + 2 (${range + 2}m)...`);
+                        range += 2;
+                        try {
+                            await withTimeout(bot.pathfinder.goto(makeGoal(range)), 30000, 'go_to_coordinates');
+                            pathErr = null;
+                        } catch (retryErr) {
+                            pathErr = retryErr;
+                        }
+                    }
+                }
+
+                if (!pathErr) {
                     // Strict arrival verification: verify physical distance is within range threshold
                     const currentPos = bot.entity ? bot.entity.position : null;
                     if (currentPos && typeof currentPos.distanceTo === 'function') {
@@ -5625,10 +5688,10 @@ async function handleAction(action) {
                         actionSuccess = false;
                         actionError = 'position_unknown';
                     }
-                } catch (err) {
+                } else {
                     actionSuccess = false;
                     try { bot.pathfinder.stop(); } catch (_) {}
-                    if (err.message && err.message.includes('timed out')) {
+                    if (pathErr.message && pathErr.message.includes('timed out')) {
                         actionError = 'timeout';
                     } else {
                         actionError = 'unreachable';
